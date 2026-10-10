@@ -1,0 +1,55 @@
+# 梵禾 Work 实验版数据库。
+#
+# 用容器提供，与网络版保持同构。镜像选 postgres:16-alpine，体积小、启动快。
+#
+# 数据落在命名卷而不是工作空间目录里，这是刻意的：PostgreSQL 的随机 IO 很重，
+# 而工作空间在闪存 U 盘上，既慢又有写入寿命限制。代价是换机后数据库不在，
+# 需要重新 up 一次或从备份恢复。这条取舍在 README 的「数据库」一节有说明。
+#
+# 端口绑定在 127.0.0.1 而非 0.0.0.0，与 api 仅监听回环的做法一致：开发期的
+# 服务不应该对局域网可达。
+#
+# 下面的账号密码是本地开发用的固定值，只在本机回环上可达。若要用于任何
+# 非本机场景，必须改成从环境变量注入。
+
+name: fanhe-work
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: fanhe-work-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: fanhe
+      POSTGRES_PASSWORD: fanhe
+      POSTGRES_DB: fanhe_work
+
+      # 排序规则在建库时定死，事后更改需要重建数据库，所以这一项现在就要选对。
+      #
+      # 用 ICU 的 zh-CN 而不是默认的 C：C 排序按 UTF-8 字节序比较，对中文相当于
+      # 按码位排，列表里的中文姓名不会按拼音顺序出现。zh-CN 给出拼音顺序。
+      # 代价是 btree 索引的比较比 C 略慢，对本项目的规模无影响。
+      #
+      # 注意索引比较与唯一约束的比较都受它影响。username 与各种 code 都是归一
+      # 后的小写 ASCII，不受影响；受影响的是 display_name、name 这类展示字段。
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale-provider=icu --icu-locale=zh-CN'
+
+    ports:
+      - '127.0.0.1:5432:5432'
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    # 健康检查让 `docker compose up -d --wait` 能真正等到可连接，而不是等到
+    # 容器进程起来。迁移脚本依赖这一点，否则会在 initdb 还没结束时就去连库。
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U fanhe -d fanhe_work']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  pgdata:
+    name: fanhe-work-pgdata

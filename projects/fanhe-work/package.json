@@ -18,6 +18,7 @@
     "db:validate": "pnpm --filter @fanhe/api db:validate",
     "db:migrate": "pnpm --filter @fanhe/api db:migrate",
     "db:deploy": "pnpm --filter @fanhe/api db:deploy",
+    "db:ping": "pnpm --filter @fanhe/api db:ping",
     "db:studio": "pnpm --filter @fanhe/api db:studio",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

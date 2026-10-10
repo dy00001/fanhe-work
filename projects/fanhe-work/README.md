@@ -60,7 +60,22 @@ infra\portable\ws-run.cmd cmd /c "cd /d projects\fanhe-work && pnpm install"
 pnpm install
 ```
 
-### 第三步：启动
+### 第三步：准备数据库
+
+后端在缺少 `DATABASE_URL` 时会直接抛错退出，所以这一步不能跳过。数据库的说明见后面的「数据库」一节。
+
+```powershell
+cd apps\api
+Copy-Item .env.example .env
+cd ..\..
+docker compose up -d --wait    # 启动 PostgreSQL 并等到健康
+pnpm db:deploy                 # 应用仓库里的迁移
+pnpm db:ping                   # 确认连得上、表都在
+```
+
+`db:ping` 会打印库中的表与各表行数。`roles` 为 0 是正常的，种子数据在 T1-02 才写入。
+
+### 第四步：启动
 
 ```powershell
 pnpm dev:all      # 前端与后端并行启动
@@ -73,7 +88,7 @@ VITE v8.3.4  ready in 4104 ms
 Server listening at http://127.0.0.1:8787
 ```
 
-### 第四步：访问
+### 第五步：访问
 
 浏览器打开 <http://127.0.0.1:5173>。
 
@@ -103,6 +118,7 @@ Server listening at http://127.0.0.1:8787
 
 | 命令 | 作用 |
 | --- | --- |
+| `pnpm db:ping` | 连接自检，列出库中的表与各表行数 |
 | `pnpm db:validate` | 只校验 schema 语法，不连库 |
 | `pnpm db:generate` | 由 schema 生成 Prisma 客户端到 `apps/api/src/generated/prisma` |
 | `pnpm db:migrate` | 开发期创建并应用迁移 |
@@ -142,6 +158,24 @@ projects/fanhe-work/
 
 需要注意一点：**数据库数据留在宿主机或容器卷上，不随 U 盘移动。** 这与工作空间「整体可移动」的前提是有张力的，属于已知取舍。换机后数据库需要单独准备，或从备份恢复。
 
+### 启动数据库
+
+数据库由项目根目录的 `docker-compose.yml` 定义，容器名 `fanhe-work-db`，镜像 `postgres:16-alpine`。
+
+```powershell
+docker compose up -d --wait    # 启动并等到健康检查通过
+docker compose down            # 停止，保留数据
+docker compose down -v         # 停止并删除数据卷，会清空数据库
+```
+
+`--wait` 会等到 `pg_isready` 通过再返回，而不是等到容器进程起来。迁移依赖这一点，否则会在 initdb 还没结束时就去连库。
+
+数据存在宿主机命名卷 `fanhe-work-pgdata`，不在工作空间目录里。**PostgreSQL 的随机 IO 很重，而工作空间在闪存 U 盘上，既慢又有写入寿命限制**，所以数据不落在介质上。代价就是换机后要重新 `up` 一次。
+
+端口绑定在 `127.0.0.1` 而非 `0.0.0.0`，与 api 仅监听回环的做法一致。
+
+**排序规则在建库时就固定为 ICU 的 `zh-CN`**，不是默认的 `C`。`C` 排序按 UTF-8 字节序比较，对中文相当于按码位排，列表里的中文姓名不会按拼音顺序出现。实测差别：ICU `zh-CN` 给出 `陈 < 李 < 王 < 张`，`C` 给出 `张 < 李 < 王 < 陈`。这一项事后更改需要重建数据库，所以放在建库时就定好。
+
 ### 连接串放在哪里
 
 `apps/api/.env`，已被忽略，不要提交。首次使用从模板复制：
@@ -173,8 +207,9 @@ Copy-Item .env.example .env
 首次拿到数据库时：
 
 ```powershell
-pnpm db:deploy     # 应用仓库里已有的迁移
-pnpm db:studio     # 确认表已建立
+docker compose up -d --wait   # 启动数据库并等到健康
+pnpm db:deploy                # 应用仓库里已有的迁移
+pnpm db:ping                  # 确认连得上、表都在
 ```
 
 改了 `apps/api/prisma/schema.prisma` 之后：
@@ -183,7 +218,14 @@ pnpm db:studio     # 确认表已建立
 pnpm db:migrate    # 生成新迁移并应用
 ```
 
-仓库里的首个迁移 `20261010150103_init` 建立六张账号权限表。它由 `prisma migrate diff --from-empty --to-schema` 离线推导得到，已在 PGlite（WASM 版 PostgreSQL）上实际执行并逐项验证过表、枚举、索引与外键，但**尚未应用到真实实例**。
+仓库里的首个迁移 `20261010150103_init` 建立六张账号权限表，已应用到 PostgreSQL 16.15，并用 `prisma migrate diff --from-config-datasource --to-schema` 确认无漂移（差异为空）。同一份 DDL 也曾在 PGlite 上执行过，那是数据库还不可达时的验证手段。
+
+判断库结构与 schema 是否一致，可以用这条命令，输出为空即一致：
+
+```powershell
+pnpm --filter @fanhe/api exec prisma migrate diff `
+  --from-config-datasource --to-schema prisma/schema.prisma --script
+```
 
 ## 三个已知的版本取舍
 
