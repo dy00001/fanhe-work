@@ -1,5 +1,4 @@
 import {
-  NAV_ITEMS,
   PERMISSION_CATALOG,
   ROLES,
   filterNavigation,
@@ -10,18 +9,21 @@ import {
 import { useMemo, useState } from 'react'
 
 import { useAuth } from '../auth/useAuth'
-import { NavRail } from '../components/NavRail'
+import { AppShell } from '../components/AppShell'
 
 /**
  * 已登录后的落地页。
  *
- * T1-11 把它从「只展示身份与权限」改成「带左侧导航的主界面」：菜单按当前账号的
- * 权限过滤，选中项的解析走共享包的 `resolveActiveNav`。阶段二 T2-02 会用完整的
- * 布局骨架（折叠、顶栏、面包屑、内容区最大宽度）替换这里的呈现，但过滤与守卫
- * 这两件事已经落在共享包里，届时只需换掉外壳。
+ * T2-02 把外壳换成了 `AppShell`（左侧导航、顶栏、内容区最大宽度），本页只负责
+ * 内容。三件事仍然沿用阶段一的实现，一行未改：菜单按当前权限过滤
+ * （`filterNavigation`）、选中项的解析与回退（`resolveActiveNav`）、角色名取自
+ * 共享包的常量。
  *
- * 权限在这里只决定**要不要画**。前端隐藏菜单与禁用按钮承担的是体验职责，任何人
- * 改一个请求就能绕过；强制校验始终在服务端的 `requirePermission`。
+ * 权限在这里只决定**要不要画**。前端隐藏菜单承担的是体验职责，任何人改一个请求
+ * 就能绕过；强制校验始终在服务端的 `requirePermission`。
+ *
+ * 选中项当前由组件状态驱动，不是路由。T2-03 会把「请求项从哪里来」从 state 换成
+ * URL，`resolveActiveNav` 的输入与判断不需要变。
  */
 export function HomePage() {
   const { user, permissions, logout } = useAuth()
@@ -47,98 +49,75 @@ export function HomePage() {
   const roleName = ROLES.find((role) => role.code === user.role)?.name ?? user.role
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
-        <div className="flex items-center gap-3">
-          <img src="/brand/logo.png" alt="" className="h-7 w-auto" />
-          <span className="text-sm font-medium text-foreground">梵禾 Work</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-muted-foreground">
-            {user.displayName}
-            <span className="ml-2 text-xs text-muted-foreground-weak">{roleName}</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              void logout()
-            }}
-            className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent"
-          >
-            退出登录
-          </button>
-        </div>
-      </header>
+    <AppShell
+      items={visibleItems}
+      activeCode={activeItem?.code ?? null}
+      activeTitle={activeItem?.label ?? null}
+      user={user}
+      roleName={roleName}
+      onSelect={setRequested}
+      onLogout={() => {
+        void logout()
+      }}
+    >
+      <div className="flex flex-col gap-4 pt-2">
+        <ActivePanel item={activeItem} />
 
-      <div className="flex flex-1">
-        <NavRail
-          items={visibleItems}
-          total={NAV_ITEMS.length}
-          activeCode={activeItem?.code ?? null}
-          onSelect={setRequested}
-        />
+        <section className="rounded-xl border border-border bg-card p-6">
+          <h2 className="text-base font-medium text-foreground">当前账号</h2>
+          <dl className="mt-4 divide-y divide-border-soft">
+            <div className="flex items-center justify-between py-2.5 text-sm">
+              <dt className="text-muted-foreground">账号</dt>
+              <dd className="text-foreground">{user.username}</dd>
+            </div>
+            <div className="flex items-center justify-between py-2.5 text-sm">
+              <dt className="text-muted-foreground">显示名</dt>
+              <dd className="text-foreground">{user.displayName}</dd>
+            </div>
+            <div className="flex items-center justify-between py-2.5 text-sm">
+              <dt className="text-muted-foreground">角色</dt>
+              <dd className="text-foreground">
+                {roleName}
+                <span className="ml-2 text-xs text-muted-foreground-weak">{user.role}</span>
+              </dd>
+            </div>
+          </dl>
+        </section>
 
-        <main className="flex-1 px-8 py-8">
-          <div className="mx-auto flex max-w-3xl flex-col gap-4">
-            <ActivePanel item={activeItem} />
+        <section className="rounded-xl border border-border bg-card p-6">
+          <h2 className="text-base font-medium text-foreground">
+            权限点
+            <span className="ml-2 text-xs font-normal text-muted-foreground-weak">
+              {permissions.length} 项
+            </span>
+          </h2>
+          {permissions.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">当前角色没有任何权限点。</p>
+          ) : (
+            <ul className="mt-3 flex flex-col gap-2">
+              {permissions.map((code) => {
+                const description =
+                  PERMISSION_CATALOG.find((entry) => entry.code === code)?.description ?? ''
+                return (
+                  <li key={code} className="flex items-baseline justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">{description}</span>
+                    <code className="shrink-0 font-mono text-xs text-muted-foreground-weak">
+                      {code}
+                    </code>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
 
-            <section className="rounded-xl border border-border bg-card p-6">
-              <h2 className="text-base font-medium text-foreground">当前账号</h2>
-              <dl className="mt-4 divide-y divide-border-soft">
-                <div className="flex items-center justify-between py-2.5 text-sm">
-                  <dt className="text-muted-foreground">账号</dt>
-                  <dd className="text-foreground">{user.username}</dd>
-                </div>
-                <div className="flex items-center justify-between py-2.5 text-sm">
-                  <dt className="text-muted-foreground">显示名</dt>
-                  <dd className="text-foreground">{user.displayName}</dd>
-                </div>
-                <div className="flex items-center justify-between py-2.5 text-sm">
-                  <dt className="text-muted-foreground">角色</dt>
-                  <dd className="text-foreground">
-                    {roleName}
-                    <span className="ml-2 text-xs text-muted-foreground-weak">{user.role}</span>
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            <section className="rounded-xl border border-border bg-card p-6">
-              <h2 className="text-base font-medium text-foreground">
-                权限点
-                <span className="ml-2 text-xs font-normal text-muted-foreground-weak">
-                  {permissions.length} 项
-                </span>
-              </h2>
-              {permissions.length === 0 ? (
-                <p className="mt-3 text-sm text-muted-foreground">当前角色没有任何权限点。</p>
-              ) : (
-                <ul className="mt-3 flex flex-col gap-2">
-                  {permissions.map((code) => {
-                    const description =
-                      PERMISSION_CATALOG.find((entry) => entry.code === code)?.description ?? ''
-                    return (
-                      <li key={code} className="flex items-baseline justify-between gap-4 text-sm">
-                        <span className="text-muted-foreground">{description}</span>
-                        <code className="shrink-0 font-mono text-xs text-muted-foreground-weak">
-                          {code}
-                        </code>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </section>
-
-            <p className="text-xs leading-relaxed text-muted-foreground-weak">
-              左侧导航已按当前账号的权限过滤，可见范围由共享包的导航清单决定。布局骨架、
-              导航折叠与三个占位模块的完整形态在阶段二实现，个人工作台三板块在阶段三实现。
-              本页是阶段一的落地页，用于验证登录、会话续期与权限可见范围。
-            </p>
-          </div>
-        </main>
+        <p className="text-xs leading-relaxed text-muted-foreground-weak">
+          主框架已按实施方案第五章的规格实现（侧栏 224px / 折叠 64px、顶栏 56px、内容区最大宽度）。
+          三个占位模块的独立页面与路由在 T2-03、T2-04 实现，个人工作台三板块在阶段三实现。
+          本页是阶段二的落地页，用于验证登录、会话续期、权限可见范围与主框架尺寸。
+        </p>
       </div>
-    </div>
+    </AppShell>
   )
 }
 

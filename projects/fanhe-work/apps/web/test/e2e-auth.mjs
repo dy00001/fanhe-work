@@ -188,15 +188,6 @@ function fillInput(selector, value) {
   })()`
 }
 
-function clickByText(text) {
-  return `(() => {
-    const button = [...document.querySelectorAll('button')].find((item) => item.textContent.includes(${JSON.stringify(text)}))
-    if (!button) throw new Error('找不到按钮 ' + ${JSON.stringify(text)})
-    button.click()
-    return true
-  })()`
-}
-
 function clickSelector(selector) {
   return `(() => {
     const element = document.querySelector(${JSON.stringify(selector)})
@@ -207,11 +198,50 @@ function clickSelector(selector) {
 }
 
 /**
+ * 用浏览器的真实鼠标事件点击一个元素，坐标取元素中心。
+ *
+ * 别处都用 `element.click()`，那里够用：原生按钮、复选框、提交按钮都监听 click。
+ * 但 Radix 的下拉菜单不是 —— 它在 `pointerdown` 上展开、在 `pointerup` 上选中，
+ * 合成事件只派发 `click`，两个动作都不会发生。失败表现还是「找不到菜单项」，
+ * 看起来像选择器写错了，实际是事件类型不对。所以这里走 CDP 的输入管线，
+ * 让浏览器自己生成 pointerdown / mousedown / pointerup / mouseup / click 全套。
+ *
+ * @param finder 返回目标元素或 undefined 的页面内表达式
+ * @param label  报错时用的名字
+ */
+async function mouseClick(client, finder, label) {
+  const point = JSON.parse(
+    await evaluate(
+      client,
+      `(() => {
+        const element = ${finder}
+        if (!element) throw new Error('找不到元素：' + ${JSON.stringify(label)})
+        const rect = element.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) {
+          throw new Error('元素没有尺寸，点了也白点：' + ${JSON.stringify(label)})
+        }
+        return JSON.stringify({
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        })
+      })()`,
+    ),
+  )
+  const base = { x: point.x, y: point.y, button: 'left', clickCount: 1 }
+  await client.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0 })
+  await client.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed', buttons: 1 })
+  await client.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0 })
+}
+
+/**
  * 点击左侧导航里的某一项。
  *
- * 不能用 clickByText：导航按钮的文本里还带一个「开发中」标签，`textContent`
- * 是「系统设置开发中」这样的拼接结果，精确相等匹配不到。这里用包含匹配，
- * 并限定在 `nav` 元素内，避免命中内容区里同名的标题。
+ * 按文本包含匹配，不用精确相等：导航按钮的文本里还带一个「开发中」标签，
+ * `textContent` 是「系统设置开发中」这样的拼接结果。范围限定在 `nav` 元素内，
+ * 避免命中内容区里同名的标题。
+ *
+ * 导航项是原生 `button`，`element.click()` 就能触发 React 的 onClick，
+ * 不需要 mouseClick 那套真实指针事件。
  */
 function clickNavByLabel(label) {
   return `(() => {
@@ -471,10 +501,85 @@ async function main() {
       navLabels.some((label) => label.includes('系统设置')),
       '',
     )
-    record(
-      '侧栏标注可见范围 5 / 5',
-      (await evaluate(client, 'document.body.innerText')).includes('可见 5 / 共 5 项'),
-      '',
+    // 5b-2. 主框架尺寸。实施方案第五章给的是三个硬数字：侧栏展开 224px、折叠 64px、
+    //       顶栏 56px。它们是布局基准，改错不会报错、不会白屏，只表现为界面比例不对，
+    //       所以这里逐条钉住。取整数比较是因为过渡动画期间会读到小数宽度。
+    const metrics = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          sidebar: document.querySelector('aside')?.getBoundingClientRect().width,
+          header: document.querySelector('header')?.getBoundingClientRect().height,
+        })`,
+      ),
+    )
+    record('侧栏展开宽度 224px', metrics.sidebar === 224, `实测 ${metrics.sidebar}px`)
+    record('顶栏高度 56px', metrics.header === 56, `实测 ${metrics.header}px`)
+
+    // 5b-3. 折叠。折叠态只留图标，导航项名称改由气泡提示承担 —— 这是折叠后唯一的
+    //       名称来源，所以顺带断言提示真的出来了，而不只是宽度变了。
+    await evaluate(
+      client,
+      `(() => {
+        const button = document.querySelector('aside button[aria-label="收起侧栏"]')
+        if (!button) throw new Error('找不到收起按钮')
+        button.click()
+        return true
+      })()`,
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 64`,
+        5000,
+        '侧栏折叠',
+      ),
+    )
+    record('点击收起后侧栏宽度 64px', true, '')
+
+    await evaluate(
+      client,
+      `(() => {
+        const item = document.querySelector('nav button')
+        if (!item) throw new Error('找不到导航项')
+        item.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+        item.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))
+        return true
+      })()`,
+    )
+    let tooltipShown = true
+    try {
+      await evaluate(
+        client,
+        waitFor(
+          `[...document.querySelectorAll('[data-slot="tooltip-content"]')].some((node) => node.offsetParent !== null)`,
+          5000,
+          '折叠态气泡提示',
+        ),
+      )
+    } catch {
+      tooltipShown = false
+    }
+    record('折叠态导航项有气泡提示', tooltipShown, '')
+    await screenshot(client, '4d-sidebar-collapsed')
+
+    // 展开回去。后续断言依赖导航项文字可见。
+    await evaluate(
+      client,
+      `(() => {
+        const button = document.querySelector('aside button[aria-label="展开侧栏"]')
+        if (!button) throw new Error('找不到展开按钮')
+        button.click()
+        return true
+      })()`,
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 224`,
+        5000,
+        '侧栏展开',
+      ),
     )
 
     // 5c. 切换导航项应切换内容区，占位项标注「功能开发中」。这一段走的是守卫的正常
@@ -559,7 +664,19 @@ async function main() {
     await screenshot(client, '5-after-renew')
 
     // 8. 登出应清掉本地令牌并回到登录页。
-    await evaluate(client, clickByText('退出登录'))
+    //    退出登录从顶栏的裸按钮移进了账号菜单（T2-02 的布局骨架），要多两步：
+    //    先点开菜单，等菜单项真的挂上 DOM，再点它。菜单的展开与选中都依赖真实
+    //    指针事件，所以这里用 mouseClick 而不是 clickByText。
+    await mouseClick(client, `document.querySelector('[aria-label="账号菜单"]')`, '账号菜单')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitem"]') !== null`, 5000, '账号菜单展开'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.includes('退出登录'))`,
+      '退出登录菜单项',
+    )
     await evaluate(
       client,
       waitFor(`document.querySelector('#login-username') !== null`, 15000, '登出后登录页'),
