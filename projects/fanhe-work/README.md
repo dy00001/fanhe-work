@@ -147,6 +147,9 @@ pnpm --filter @fanhe/web test:e2e
 projects/fanhe-work/
 ├── apps/
 │   ├── web/          React 前端，Vite 开发服务器在 5173
+│   │   ├── src/components/ 界面组件；ui/ 是官方组件源码，launch/ 是启动通道板块，StateView 收敛空、加载、错误三态
+│   │   ├── src/lib/  传输层、会话、本机偏好与主题、启动通道的数据层
+│   │   └── test/     浏览器级端到端验证，驱动本机 Chrome 走 DevTools 协议
 │   ├── api/          Fastify 后端，仅监听回环 8787
 │   │   ├── prisma/   数据模型与迁移；客户端生成到 src/generated/prisma
 │   │   ├── src/auth/ 密码哈希与会话令牌
