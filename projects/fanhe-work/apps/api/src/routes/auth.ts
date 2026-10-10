@@ -1,3 +1,4 @@
+import type { LoginResponse, LogoutResponse, MeResponse, RefreshResponse } from '@fanhe/shared'
 import type { FastifyInstance } from 'fastify'
 
 import { requireAuth } from '../auth/guard.js'
@@ -99,7 +100,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         })
       }
 
-      return reply.code(200).send(result.data)
+      // 用共享包里的响应类型标注。字段名改了而忘了同步前端时，这里会先在
+      // 编译期失败，而不是等到联调时表现为「界面拿不到数据」。
+      const body: LoginResponse = result.data
+      return reply.code(200).send(body)
     },
   )
 
@@ -131,7 +135,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         })
       }
 
-      return reply.code(200).send(result.data)
+      const body: RefreshResponse = result.data
+      return reply.code(200).send(body)
     },
   )
 
@@ -158,7 +163,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       })
-      return reply.code(200).send(result)
+      const body: LogoutResponse = result
+      return reply.code(200).send(body)
     },
   )
 
@@ -173,7 +179,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
     // 权限点一并返回。前端据此渲染菜单与按钮的可见性，服务端仍然独立校验，
     // 两边引用的是同一份常量。前端拿到的是「可以展示什么」，不是「可以做什么」。
-    return reply.code(200).send({
+    const body: MeResponse = {
       user: {
         id: auth.userId,
         username: auth.username,
@@ -181,6 +187,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
         role: auth.roleCode,
       },
       permissions: auth.permissions,
-    })
+    }
+    return reply.code(200).send(body)
   })
 }

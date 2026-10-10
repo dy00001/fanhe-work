@@ -30,6 +30,7 @@ if (databaseUrl !== null) {
 const { prisma } = await import('../src/db/prisma.js')
 const { env } = await import('../src/config/env.js')
 const { hashPassword } = await import('../src/auth/password.js')
+const { hashRefreshToken } = await import('../src/auth/tokens.js')
 const { login } = await import('../src/auth/login.js')
 const { buildApp } = await import('../src/app.js')
 
@@ -335,6 +336,109 @@ describe('登录限速', { skip: reachable ? false : '数据库不可达，跳�
       assert.equal(unknownUser.statusCode, 401)
       // 两条响应必须逐字节一致，否则状态码与正文的差异本身就是账号枚举接口。
       assert.equal(wrongPassword.body, unknownUser.body)
+    } finally {
+      await app.close()
+    }
+  })
+
+  /**
+   * schema 校验发生在进入处理器之前，因此这些请求不会写 login_attempts 与审计。
+   * 这也正是「被拒的请求不产生任何写入」这条规则的一部分。
+   */
+  test('路由层拒绝缺字段、多余字段与超长账号名的登录请求', async () => {
+    const ip = nextIp()
+    const app = buildApp({ logger: false })
+    try {
+      const missingPassword = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'someone' },
+        remoteAddress: ip,
+      })
+      assert.equal(missingPassword.statusCode, 400)
+
+      // 多余字段必须被拒绝，而不是被静默丢弃。Fastify 的 AJV 默认
+      // removeAdditional: true，那会让 additionalProperties: false 变成一次
+      // 删除，请求照常返回 200，调用方以为某个字段生效了而它从未被读取。
+      const extraField = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'someone', password: 'whatever', admin: true },
+        remoteAddress: ip,
+      })
+      assert.equal(extraField.statusCode, 400)
+
+      const tooLong = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'a'.repeat(65), password: 'whatever' },
+        remoteAddress: ip,
+      })
+      assert.equal(tooLong.statusCode, 400)
+
+      assert.equal(await prisma.loginAttempt.count({ where: { ip } }), 0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('登录成功后写入刷新令牌哈希并更新最后登录时间', async () => {
+    const ip = nextIp()
+    const user = await createUser()
+
+    const result = await login({ username: user.username, password: TEST_PASSWORD, ip })
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+
+    // 明文只在签发的那一刻出现在响应里，库里只有它的摘要。这条断言是「拖库者
+    // 拿不到可用凭证」这个保证的直接验证。
+    const stored = await prisma.refreshToken.findFirst({
+      where: { userId: user.id },
+      select: { tokenHash: true, expiresAt: true, revokedAt: true },
+    })
+    assert.ok(stored !== null)
+    if (stored === null) return
+    assert.equal(stored.tokenHash, hashRefreshToken(result.data.refreshToken))
+    // SHA-256 的十六进制表示固定 64 字符。长度不对说明存错了东西。
+    assert.equal(stored.tokenHash.length, 64)
+    assert.notEqual(stored.tokenHash, result.data.refreshToken)
+    assert.equal(stored.revokedAt, null)
+    assert.ok(stored.expiresAt.getTime() > Date.now())
+
+    const after = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { lastLoginAt: true, failedLoginAttempts: true, lockedUntil: true },
+    })
+    assert.ok(after !== null)
+    if (after === null) return
+    assert.ok(after.lastLoginAt !== null)
+    assert.equal(after.failedLoginAttempts, 0)
+    assert.equal(after.lockedUntil, null)
+  })
+
+  test('路由层登录成功返回双令牌与用户信息，且不泄露任何哈希', async () => {
+    const ip = nextIp()
+    const user = await createUser()
+    const app = buildApp({ logger: false })
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: user.username, password: TEST_PASSWORD },
+        remoteAddress: ip,
+      })
+
+      assert.equal(response.statusCode, 200)
+      const body = response.json()
+      assert.equal(typeof body.accessToken, 'string')
+      assert.equal(typeof body.refreshToken, 'string')
+      // 客户端靠这个值安排静默续期，必须与服务端配置一致。对不上会让续期
+      // 要么过早（多发请求）要么过晚（每个到期点先失败一次）。
+      assert.equal(body.expiresIn, env.jwt.accessTtlSeconds)
+      assert.equal(body.user.username, user.username)
+      assert.equal(body.user.role, 'member')
+      assert.equal(Object.hasOwn(body, 'passwordHash'), false)
+      assert.equal(Object.hasOwn(body.user, 'passwordHash'), false)
     } finally {
       await app.close()
     }

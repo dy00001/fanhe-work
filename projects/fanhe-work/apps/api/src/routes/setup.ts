@@ -4,6 +4,7 @@ import {
   PASSWORD_MIN_LENGTH,
   USERNAME_MAX_LENGTH,
 } from '@fanhe/shared'
+import type { InitializeOwnerResponse, SetupStatusResponse } from '@fanhe/shared'
 import type { FastifyInstance } from 'fastify'
 
 import { initializeOwner, isInitialized } from '../auth/setup.js'
@@ -25,7 +26,10 @@ type InitializeBody = {
 }
 
 export function registerSetupRoutes(app: FastifyInstance): void {
-  app.get('/api/setup/status', async () => ({ initialized: await isInitialized() }))
+  app.get('/api/setup/status', async () => {
+    const body: SetupStatusResponse = { initialized: await isInitialized() }
+    return body
+  })
 
   app.post<{ Body: InitializeBody }>(
     '/api/setup/initialize',
@@ -76,7 +80,8 @@ export function registerSetupRoutes(app: FastifyInstance): void {
 
       // 不自动签发令牌。初始化与登录是两件事，合成一条路径会多出一条需要单独验证
       // 的令牌签发入口，而客户端紧接着调用登录接口的成本几乎为零。
-      return reply.code(201).send(result.data)
+      const body: InitializeOwnerResponse = result.data
+      return reply.code(201).send(body)
     },
   )
 }

@@ -11,6 +11,7 @@
 
 export * from './account.js'
 export * from './audit.js'
+export * from './auth.js'
 export * from './permissions.js'
 
 export const APP_NAME = '梵禾 Work'
