@@ -1,9 +1,9 @@
 // 梵禾 Work 数据模型 —— 阶段一：账号与权限
 //
 // 迁移范围说明
-//   本文件在阶段一只落地账号与权限相关的七张表。业务表（launch_profiles、
-//   launch_history、notes、events、event_logs）在阶段三随对应模块一起加入，
-//   通过追加迁移演进，不预先建空表。
+//   账号与权限的七张表在阶段一落地。业务表（launch_profiles、launch_history、
+//   notes、events、event_logs）在阶段三随各自模块逐个加入，通过追加迁移演进，
+//   不预先建空表 —— 一次迁移只做一件事，出问题时能整条回退。
 //
 // 命名约定
 //   模型名用单数大驼峰，物理表名用复数小写下划线（@@map）。
@@ -104,9 +104,10 @@ model User {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  role          Role           @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  refreshTokens RefreshToken[]
-  auditLogs     AuditLog[]
+  role           Role            @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  refreshTokens  RefreshToken[]
+  auditLogs      AuditLog[]
+  launchProfiles LaunchProfile[]
 
   @@index([roleId])
   @@index([status])
@@ -117,12 +118,12 @@ model User {
 /// rank 用于比较层级高低：数值大的可以管理数值小的。仅靠 code 做字符串比较
 /// 无法表达层级，所以显式存一个整数。
 model Role {
-  id          String   @id @default(uuid(7)) @db.Uuid
-  code        String   @unique @db.VarChar(32)
-  name        String   @db.VarChar(64)
-  description String?  @db.VarChar(255)
-  isSystem    Boolean  @default(false) @map("is_system")
-  rank        Int      @default(0)
+  id          String  @id @default(uuid(7)) @db.Uuid
+  code        String  @unique @db.VarChar(32)
+  name        String  @db.VarChar(64)
+  description String? @db.VarChar(255)
+  isSystem    Boolean @default(false) @map("is_system")
+  rank        Int     @default(0)
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -139,12 +140,12 @@ model Role {
 /// 三段同时落成独立列，是为了在管理界面按模块分组展示时不必解析字符串。
 /// 本表由种子脚本维护，不接受用户直接增删。
 model Permission {
-  id          String   @id @default(uuid(7)) @db.Uuid
-  code        String   @unique @db.VarChar(128)
-  module      String   @db.VarChar(32)
-  object      String   @db.VarChar(64)
-  action      String   @db.VarChar(32)
-  description String?  @db.VarChar(255)
+  id          String  @id @default(uuid(7)) @db.Uuid
+  code        String  @unique @db.VarChar(128)
+  module      String  @db.VarChar(32)
+  object      String  @db.VarChar(64)
+  action      String  @db.VarChar(32)
+  description String? @db.VarChar(255)
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -190,7 +191,7 @@ model RolePermission {
 model LoginAttempt {
   id String @id @default(uuid(7)) @db.Uuid
 
-  ip String @db.VarChar(64)
+  ip       String @db.VarChar(64)
   /// 提交时输入的用户名原样记录。账号不存在时也要留下线索，这是 IP 维度限速
   /// 能发现「有人在扫用户名」的前提。
   username String @db.VarChar(64)
@@ -210,10 +211,10 @@ model LoginAttempt {
 /// familyId 把一次登录衍生出的整条轮换链归为一组：检测到已用令牌被重放时，
 /// 按 familyId 整链撤销，而不是只撤当前这一条。
 model RefreshToken {
-  id          String @id @default(uuid(7)) @db.Uuid
-  userId      String @map("user_id") @db.Uuid
-  tokenHash   String @unique @map("token_hash") @db.VarChar(255)
-  familyId    String @default(uuid(7)) @map("family_id") @db.Uuid
+  id        String @id @default(uuid(7)) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  tokenHash String @unique @map("token_hash") @db.VarChar(255)
+  familyId  String @default(uuid(7)) @map("family_id") @db.Uuid
 
   deviceId   String? @map("device_id") @db.VarChar(128)
   deviceName String? @map("device_name") @db.VarChar(128)
@@ -257,4 +258,63 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([targetType, targetId])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// 业务表（阶段三起随模块逐个加入）
+// ---------------------------------------------------------------------------
+
+/// 一键登录启动配置。一条配置对应「点一下就拉起某个客户端实例」。
+///
+/// **本表存的是本机绝对路径，是全库唯一一处与「受版本控制的文件不出现盘符」这条
+/// 约定相冲突的地方。** 处理方式是它压根不进版本控制：路径只存在于运行时数据库，
+/// 而数据库的数据目录在忽略规则里。代价是换机后路径可能失效，那由 T3-04 的失效
+/// 提示处理，而不是靠不存路径来回避 —— 不存路径这个板块就没有功能。
+///
+/// 表里没有任何第三方账号的密码。免密登录若要做，只能走操作系统凭据接口
+/// （Windows DPAPI 或 Electron safeStorage），属阶段四之后的事，见实施方案 6.1。
+///
+/// **同用户下不设 name 唯一约束。** 软删除与唯一索引天然冲突：Prisma 的 @@unique
+/// 无法附加「deletedAt IS NULL」条件，删掉一条再建同名的会撞约束，而报错信息里
+/// 看不出「是因为那条已删除的记录」，用户只会觉得「这个名字明明没人用」。重名检查
+/// 放在 service 层，按未删除的行判断。
+model LaunchProfile {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// 软件标识。取值域是共享包的 LAUNCH_SOFTWARES，**故意不做成数据库枚举** ——
+  /// 新增一个软件不该需要一次迁移。代价是库侧没有约束，由 service 层强制校验，
+  /// 少了那一步会攒下前端认不出的标识，表现为列表里某几行图标空白且不报错。
+  software String @db.VarChar(32)
+
+  /// 显示名。同一软件配置多条时靠它区分（多账号场景）。
+  name String @db.VarChar(64)
+
+  /// 本机可执行文件绝对路径。列宽与共享包的 EXECUTABLE_PATH_MAX 一致。
+  executablePath String @map("executable_path") @db.VarChar(1024)
+
+  /// 启动参数。用 text[] 而不是拼接后的字符串：Windows 与 POSIX 的分词规则不同
+  /// （双引号成对、反斜杠不作转义、空串的写法都不一样），自己实现一套必然在某个
+  /// 边界上与客户端实际行为不一致，而那种不一致只在特定参数上暴露。存数组把
+  /// 「哪些算一个参数」交还给用户，启动时直接传给子进程，中间不再有解析环节。
+  args String[] @default([])
+
+  /// 图标标识。为空时前端按 software 取默认图标。
+  icon String? @db.VarChar(64)
+
+  /// 列表排序序号，升序。重排时整体写成一串连续整数，不留空洞。
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  /// 用户被物理清理时连带删除。正常流程下 users 走软删除，级联只在种子重建时触发，
+  /// 与 refresh_tokens 的处理一致。
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 列表查询恒带 userId 与 deletedAt 两个条件并按 sortOrder 排序，这个复合索引
+  /// 正好覆盖，不必再为单列建索引。
+  @@index([userId, deletedAt, sortOrder])
+  @@map("launch_profiles")
 }
