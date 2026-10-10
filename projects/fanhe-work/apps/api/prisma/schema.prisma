@@ -1,7 +1,7 @@
 // 梵禾 Work 数据模型 —— 阶段一：账号与权限
 //
 // 迁移范围说明
-//   本文件在阶段一只落地账号与权限相关的六张表。业务表（launch_profiles、
+//   本文件在阶段一只落地账号与权限相关的七张表。业务表（launch_profiles、
 //   launch_history、notes、events、event_logs）在阶段三随对应模块一起加入，
 //   通过追加迁移演进，不预先建空表。
 //
@@ -18,9 +18,10 @@
 //      软删除保证引用过该实体的历史记录不断裂。
 //   2. 关联表（role_permissions）：只带 createdAt。取消授权即物理删除该行，
 //      授权本身没有需要保留的历史。
-//   3. 流水表（refresh_tokens、audit_logs）：只带 createdAt，不做软删除。
-//      凭证用 revokedAt 表达失效，审计日志是追加写、不可改不可删。
+//   3. 流水表（login_attempts、refresh_tokens、audit_logs）：只带 createdAt，
+//      不做软删除。凭证用 revokedAt 表达失效，审计日志是追加写、不可改不可删。
 //      给审计日志加 updatedAt 反而会给出「这行被改过」的错误暗示。
+//      login_attempts 同样只增不改，它的失效方式是整行清理，不是标记。
 //
 // 大小写
 //   PostgreSQL 的 text 等值比较区分大小写。username 在写入前由应用层统一
@@ -56,6 +57,26 @@ enum AuditResult {
   failure
 
   @@map("audit_result")
+}
+
+/// 登录尝试的结果。
+///
+/// 比「成功 / 失败」多一层，因为失败原因决定后续动作：密码错误要计入账号锁定
+/// 计数，账号不存在则没有任何账号可更新，只能计入 IP 维度的计数。合并成单一的
+/// failure 会让这两类尝试无法分开统计，而「有人在扫不存在的用户名」与「有人在
+/// 猜某个账号的密码」需要不同的应对。
+enum LoginOutcome {
+  success
+  /// 用户名查不到对应账号。
+  unknown_user
+  /// 账号存在但密码不对。
+  wrong_password
+  /// 账号被停用。
+  account_unavailable
+  /// 账号处于锁定期内。
+  account_locked
+
+  @@map("login_outcome")
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +180,31 @@ model RolePermission {
 // ---------------------------------------------------------------------------
 // 流水表
 // ---------------------------------------------------------------------------
+
+/// 登录尝试记录。既是 IP 维度限速的计数来源，也是登录行为的原始流水。
+///
+/// 单独一张表，不复用 audit_logs，原因是两者的保留策略相反。审计日志要长期
+/// 保留且不可删，而限速计数只需要覆盖一个时间窗口，超期记录必须清掉，否则一张
+/// 会被反复写入的表迟早涨到影响查询。把保留策略相反的两类数据放进同一张表，
+/// 清理与保留两边都做不成。
+model LoginAttempt {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  ip String @db.VarChar(64)
+  /// 提交时输入的用户名原样记录。账号不存在时也要留下线索，这是 IP 维度限速
+  /// 能发现「有人在扫用户名」的前提。
+  username String @db.VarChar(64)
+
+  outcome LoginOutcome
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// IP 维度的限速查询走这个索引：限定 ip 与时间范围后计数。
+  @@index([ip, createdAt])
+  /// 超期记录的清理走这个索引。
+  @@index([createdAt])
+  @@map("login_attempts")
+}
 
 /// 刷新令牌。只存哈希，明文仅在签发响应的那一刻出现一次。
 /// familyId 把一次登录衍生出的整条轮换链归为一组：检测到已用令牌被重放时，

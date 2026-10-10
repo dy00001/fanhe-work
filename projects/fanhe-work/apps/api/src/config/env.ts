@@ -119,4 +119,39 @@ export const env = {
      */
     rotationGraceSeconds: readInt('REFRESH_ROTATION_GRACE_SECONDS', 10, 0, 300),
   },
+
+  /**
+   * 登录限速。
+   *
+   * 两个维度同时生效，各自解决不同的问题。账号维度防的是针对某个账号猜密码，
+   * 连续失败若干次后锁定该账号。IP 维度防的是从一个来源批量扫账号，在一个
+   * 时间窗口内失败次数超限后拒绝该 IP 的登录请求，不论它提交的用户名是否存在。
+   *
+   * 只做账号维度挡不住用户名枚举。攻击者用一批不存在的用户名试密码，每个账号
+   * 的失败计数都停在 0，永远不会触发锁定。只做 IP 维度挡不住换 IP 的分布式
+   * 爆破。两者都要有，缺任何一边都留下一整类攻击。
+   */
+  login: {
+    /** 账号维度：连续失败多少次后锁定。 */
+    maxFailedAttempts: readInt('LOGIN_MAX_FAILED_ATTEMPTS', 5, 1, 1000),
+    /** 账号维度：锁定时长，单位分钟。 */
+    lockMinutes: readInt('LOGIN_LOCK_MINUTES', 15, 1, 1440),
+    /** IP 维度：统计窗口长度，单位分钟。窗口是滑动的，不按固定区间分桶。 */
+    ipWindowMinutes: readInt('LOGIN_IP_WINDOW_MINUTES', 15, 1, 1440),
+    /**
+     * IP 维度：窗口内失败多少次后拒绝该 IP。
+     *
+     * 默认值明显高于账号维度的 5 次，因为一个 IP 后面可能有多个人（NAT、办公网
+     * 出口、共用宽带），阈值定得太低会把正常用户一起挡在外面。个人工作台的场景
+     * 下这个值很少被触及。
+     */
+    ipMaxFailedAttempts: readInt('LOGIN_IP_MAX_FAILED_ATTEMPTS', 20, 1, 100000),
+    /**
+     * 登录尝试记录的保留期，单位小时。超期记录在写入时顺带清理。
+     *
+     * 保留期必须显著长于 IP 窗口，否则窗口还没滑完记录就被删了，计数会偏小，
+     * 限速会提前失效。两者之间存在约束关系，调参时要一起看。
+     */
+    attemptRetentionHours: readInt('LOGIN_ATTEMPT_RETENTION_HOURS', 168, 1, 8760),
+  },
 } as const

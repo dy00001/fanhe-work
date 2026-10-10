@@ -5,10 +5,13 @@ import { registerAuthRoutes } from './routes/auth.js'
 /**
  * Build the API instance without starting it. Keeping construction separate
  * from listening lets tests drive the server in process later on.
+ *
+ * 日志默认开启。测试里用 inject 驱动时传 `{ logger: false }`，否则每个用例
+ * 都会把请求日志刷到测试输出里，真正的失败信息被淹没。
  */
-export function buildApp(): FastifyInstance {
+export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   const app = Fastify({
-    logger: true,
+    logger: options.logger ?? true,
     ajv: {
       customOptions: {
         // Fastify 默认把 removeAdditional 设为 true，即静默丢掉 schema 未声明的

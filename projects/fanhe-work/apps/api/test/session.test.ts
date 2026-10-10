@@ -34,6 +34,14 @@ const { hashRefreshToken, verifyAccessToken } = await import('../src/auth/tokens
 const { logout, rotateRefreshToken } = await import('../src/auth/session.js')
 
 const TEST_PASSWORD = 'integration-test-password'
+/**
+ * 本文件所有登录共用一个来源地址，取自 RFC 5737 的 TEST-NET-2 段。
+ *
+ * 共用一个地址是安全的，这里只发生成功登录，而 IP 维度的限速只统计失败。
+ * 用独立的地址段是为了清理时能精确圈定本文件产生的记录，不会误删另一个
+ * 测试文件正在使用的数据。
+ */
+const SESSION_TEST_IP = '198.51.100.10'
 
 async function databaseReachable(): Promise<boolean> {
   if (databaseUrl === null) {
@@ -79,6 +87,8 @@ describe('刷新令牌轮换与撤销', { skip: reachable ? false : '数据库�
       // 删除用户会级联删掉它的刷新令牌，不必单独清令牌表。
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }
+    // 登录会顺带写入 login_attempts，按来源地址精确清掉本文件的那些。
+    await prisma.loginAttempt.deleteMany({ where: { ip: SESSION_TEST_IP } })
     await prisma.$disconnect()
   })
 
@@ -107,6 +117,7 @@ describe('刷新令牌轮换与撤销', { skip: reachable ? false : '数据库�
       password: TEST_PASSWORD,
       deviceId: device?.id,
       deviceName: device?.name,
+      ip: SESSION_TEST_IP,
     })
     if (!result.ok) {
       throw new Error(`测试账号登录失败：${result.reason}`)

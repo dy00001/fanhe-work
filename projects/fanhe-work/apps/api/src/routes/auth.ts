@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 
 import { login } from '../auth/login.js'
 import { logout, rotateRefreshToken, type LogoutScope } from '../auth/session.js'
+import { env } from '../config/env.js'
 
 /**
  * 认证路由。
@@ -9,6 +10,10 @@ import { logout, rotateRefreshToken, type LogoutScope } from '../auth/session.js
  * 三条路径共用一种失败语义：**不区分失败原因**。登录失败不说是账号不存在还是
  * 密码错误，刷新失败不说是令牌不存在、已过期还是已被撤销。原因分开看起来更
  * 友好，但每一条差异都是一个可用的探测接口。原因只进日志。
+ *
+ * 唯一的例外是 IP 维度限速，它返回 429。它不涉及任何账号信息，只说明这个来源
+ * 短时间内失败太多次。让客户端知道要等多久是必要的，伪装成 401 只会让正常用户
+ * 以为密码错了而反复重试。
  */
 
 type LoginBody = {
@@ -71,8 +76,22 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       })
 
       if (!result.ok) {
-        // 原因只进日志。响应体对四种失败完全一致，调用方无从区分。
         request.log.info({ reason: result.reason, username }, 'login failed')
+
+        // 限速单独返回 429，并在 Retry-After 里给出窗口长度。这是唯一一种对外
+        // 可见的失败原因，它不泄露任何账号信息，而让客户端知道「要等一会儿」
+        // 而不是「密码错了」，可以避免用户在窗口内反复重试，把窗口越拖越长。
+        if (result.reason === 'ip_rate_limited') {
+          return reply
+            .code(429)
+            .header('retry-after', String(env.login.ipWindowMinutes * 60))
+            .send({
+              error: 'too_many_requests',
+              message: '登录尝试过于频繁，请稍后再试',
+            })
+        }
+
+        // 其余原因共用同一个响应，调用方无从区分账号是否存在、是否被停用或锁定。
         return reply.code(401).send({
           error: 'invalid_credentials',
           message: '用户名或密码不正确',
