@@ -46,6 +46,24 @@ function readInt(name: string, fallback: number, min: number, max: number): numb
   return value
 }
 
+/**
+ * 读取一个密钥类环境变量，并强制最小长度。
+ *
+ * 不给默认值。默认密钥是最容易一路带到生产环境的东西，而签名密钥一旦泄露，
+ * 等于任何人都能伪造登录态 —— 这类事故不会在开发期暴露，只在出事时暴露。
+ *
+ * 长度按字节算而不是按字符算：密钥里出现中文或其它多字节字符时，按字符数判断
+ * 会把一个远短于要求的密钥放过去。
+ */
+function requireSecret(name: string, minBytes: number): string {
+  const value = requireEnv(name)
+  const actual = Buffer.byteLength(value, 'utf8')
+  if (actual < minBytes) {
+    throw new Error(`${name} 至少需要 ${minBytes} 字节，当前为 ${actual} 字节。`)
+  }
+  return value
+}
+
 export const env = {
   /** PostgreSQL 连接串。数据库不随 U 盘移动，换一台机器就要改这一项。 */
   databaseUrl: requireEnv('DATABASE_URL'),
@@ -69,5 +87,25 @@ export const env = {
     memoryCost: readInt('ARGON2_MEMORY_KIB', 19456, 8, 4 * 1024 * 1024),
     timeCost: readInt('ARGON2_TIME_COST', 2, 1, 100),
     parallelism: readInt('ARGON2_PARALLELISM', 1, 1, 64),
+  },
+
+  /**
+   * 会话令牌。
+   *
+   * 访问令牌是 JWT，短期、无状态，服务端不存；刷新令牌是不透明随机串，只存
+   * 哈希、可撤销。两者分工的理由见 auth/tokens.ts。
+   */
+  jwt: {
+    /**
+     * 访问令牌的签名密钥，必填。32 字节下限来自 HS256 的密钥长度要求 ——
+     * 密钥短于摘要长度时，攻击者可以暴力搜索密钥空间而不是伪造签名。
+     *
+     * 生成方式：`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`。
+     */
+    secret: requireSecret('JWT_SECRET', 32),
+    /** 访问令牌有效期，默认 15 分钟。短到即使泄露也很快失效。 */
+    accessTtlSeconds: readInt('ACCESS_TOKEN_TTL_SECONDS', 900, 60, 24 * 3600),
+    /** 刷新令牌有效期，默认 30 天。决定「多久不用就要重新登录」。 */
+    refreshTtlDays: readInt('REFRESH_TOKEN_TTL_DAYS', 30, 1, 365),
   },
 } as const

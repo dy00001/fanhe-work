@@ -1,24 +1,19 @@
 /**
  * 密码哈希的测试。
  *
- * 先固定环境变量再动态 import 被测模块。env.ts 在模块加载期就求值，静态 import
- * 会被提升到赋值之前；dotenv 又不覆盖已存在的变量，所以这里设的值不会被本机
- * .env 改写，测试结果与开发者的本地配置无关。
- *
  * 用 tsx 跑源码而不是像 shared 那样跑 dist：api 的构建要先过 prisma generate，
  * 为一个测试付十几秒不划算，而 tsx 本来就是这个包的开发期运行方式。
  */
+
+import './test-env.js'
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { hash as argon2Hash } from '@node-rs/argon2'
 
-process.env.DATABASE_URL ??= 'postgresql://unused/unused'
-process.env.ARGON2_MEMORY_KIB = '19456'
-process.env.ARGON2_TIME_COST = '2'
-process.env.ARGON2_PARALLELISM = '1'
-
+// 动态导入，确保 test-env.js 已经执行完。env.ts 在加载期求值，静态 import
+// 之间的顺序虽然由声明决定，但这里多一层保障，代价只是可读性略降。
 const { hashPassword, verifyPassword, needsRehash } = await import('../src/auth/password.js')
 
 /** 低于当前配置的参数，用来构造「该重算」的样本。 */
