@@ -45,12 +45,14 @@ cd projects\fanhe-work
 
 `ws-env.ps1` 是点源执行（开头的 `.` 不能省），环境变量会注入当前会话。
 
-也可以用命令行一次性执行，但要注意入口脚本会把当前目录切回工作空间根，所以传入的命令必须自带 `cd`。
+也可以用命令行一次性执行。入口会**保留调用者所在目录**，只有从工作空间外部调用时才回退到根，所以先 `cd` 到项目目录再执行即可。
 
 ```cmd
-cd /d <工作空间根>
-infra\portable\ws-run.cmd cmd /c "cd /d projects\fanhe-work && pnpm install"
+cd /d <工作空间根>\projects\fanhe-work
+..\..\infra\portable\ws-run.cmd pnpm install
 ```
+
+历史上入口曾无条件切到工作空间根。项目移入 `projects/<名称>/` 之后这个行为不再无害：根目录没有 `package.json`，`pnpm install` 之类的命令会在错误目录执行，而且不打印任何提示。该行为已修正，见 `DEVELOPMENT-PLAN.md` 9.9。
 
 **不要写 `pnpm -C <目录>`。** `ws-run.ps1` 带 `[CmdletBinding()]`，PowerShell 会把以连字符开头的参数当成它自己的参数解析，`-C` 会被吞成 `-Command` 的缩写并报「找不到接受实际参数」。
 
@@ -225,7 +227,18 @@ pnpm db:migrate    # 生成新迁移并应用，随后自动跑一次种子
 
 `db:migrate` 走的是 `prisma migrate dev`，而 `prisma.config.ts` 里的 `migrations.seed` 指向种子脚本，所以迁移完成后会自动执行它。
 
-仓库里的首个迁移 `20261010150103_init` 建立六张账号权限表，已应用到 PostgreSQL 16.15，并用 `prisma migrate diff --from-config-datasource --to-schema` 确认无漂移（差异为空）。同一份 DDL 也曾在 PGlite 上执行过，那是数据库还不可达时的验证手段。
+仓库里目前有两个迁移：
+
+| 迁移 | 内容 |
+| --- | --- |
+| `20261010150103_init` | users、roles、permissions、role_permissions、refresh_tokens、audit_logs 六张账号权限表 |
+| `20261010082118_login_rate_limit` | `login_attempts` 表与 `login_outcome` 枚举（T1-06 加入） |
+
+两者互相独立，不引用对方的任何对象，所以按目录名的字典序应用没有问题——**注意字典序与实际创建顺序是相反的**（`login_rate_limit` 的目录名排在 `init` 之前）。这一点已在一个临时空库上实测：`migrate deploy` 按字典序依次应用，七张业务表齐全，`migrate status` 报 up to date，`db:seed` 写入 11 / 4 / 29，结果与主库一致。
+
+已应用到 PostgreSQL 16.15，并用 `prisma migrate diff --from-config-datasource --to-schema` 确认无漂移（差异为空）。首个迁移的同一份 DDL 也曾在 PGlite 上执行过，那是数据库还不可达时的验证手段。
+
+**将来新增迁移时要注意**：若新迁移引用了时间上更晚创建的对象，同样会出现「字典序与依赖顺序不一致」的情形，那时要检查的不是 Prisma 的排序，而是迁移之间是否真的独立。
 
 判断库结构与 schema 是否一致，可以用这条命令，输出为空即一致：
 
