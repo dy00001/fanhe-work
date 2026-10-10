@@ -7,8 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "typecheck": "prisma generate && tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json",
-    "test": "pnpm --filter @fanhe/shared build && tsx --test \"test/**/*.test.ts\"",
+    "typecheck": "pnpm --filter @fanhe/shared build && prisma generate && tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "pnpm --filter @fanhe/shared build && tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:format": "prisma format",
@@ -16,6 +16,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx src/db/seed.ts",
     "db:ping": "tsx src/tools/ping-db.ts",
+    "db:create-owner": "tsx src/tools/create-owner.ts",
     "db:studio": "prisma studio"
   },
   "dependencies": {

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { registerAuthSupport } from './auth/guard.js'
 import { registerAuthRoutes } from './routes/auth.js'
+import { registerSetupRoutes } from './routes/setup.js'
 
 /**
  * Build the API instance without starting it. Keeping construction separate
@@ -34,6 +35,7 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   }))
 
   registerAuthRoutes(app)
+  registerSetupRoutes(app)
 
   return app
 }

@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 
+import { normalizeUsername } from '@fanhe/shared'
+
 import { env } from '../config/env.js'
 import { prisma } from '../db/prisma.js'
 import type { LoginOutcome } from '../generated/prisma/client.js'
@@ -127,7 +129,11 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // 没有来源地址时归到一个统一的桶里。Fastify 的 request.ip 取自 socket，正常
   // 路径下一定有值；测试与内部调用可能不传。
   const ip = input.ip ?? 'unknown'
-  const { username } = input
+  // 提交的原值用于记录，归一后的值用于查询，两者不能合并。库里存的是归一形式，
+  // 拿原值去比会漏掉大小写与首尾空白的差异，用户输入 Admin 就登不上 admin 这个
+  // 账号。而尝试记录要忠实反映提交了什么，归一之后就看不出有人在试大小写变体。
+  const submittedUsername = input.username
+  const username = normalizeUsername(submittedUsername)
 
   // IP 维度先判。被限速的请求直接返回，连哈希校验都不做。限速的目的就是阻止
   // 攻击者消耗资源，如果这里还照常算一次 Argon2，限速本身就成了 CPU 放大器：
@@ -148,7 +154,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 
   if (user === null) {
     await burnTime(input.password)
-    await recordAttempt(ip, username, 'unknown_user')
+    await recordAttempt(ip, submittedUsername, 'unknown_user')
     return { ok: false, reason: 'invalid_credentials' }
   }
 
@@ -156,20 +162,20 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // 会比「密码错误」快得多，这个时间差本身就是一种可用的枚举信号。
   if (user.status !== 'active') {
     await burnTime(input.password)
-    await recordAttempt(ip, username, 'account_unavailable')
+    await recordAttempt(ip, submittedUsername, 'account_unavailable')
     return { ok: false, reason: 'account_unavailable' }
   }
 
   if (user.lockedUntil !== null && user.lockedUntil.getTime() > Date.now()) {
     await burnTime(input.password)
-    await recordAttempt(ip, username, 'account_locked')
+    await recordAttempt(ip, submittedUsername, 'account_locked')
     return { ok: false, reason: 'account_locked' }
   }
 
   const passwordMatches = await verifyPassword(user.passwordHash, input.password)
   if (!passwordMatches) {
     await recordFailedAttempt(user.id, user.failedLoginAttempts)
-    await recordAttempt(ip, username, 'wrong_password')
+    await recordAttempt(ip, submittedUsername, 'wrong_password')
     return { ok: false, reason: 'invalid_credentials' }
   }
 

@@ -9,6 +9,7 @@
  * 类型留在 apps/api，一旦从这里导出，web 的构建就会被拖上数据库依赖。
  */
 
+export * from './account.js'
 export * from './permissions.js'
 
 export const APP_NAME = '梵禾 Work'
