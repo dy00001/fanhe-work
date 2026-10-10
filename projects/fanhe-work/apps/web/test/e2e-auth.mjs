@@ -232,7 +232,7 @@ function clickNavByLabel(label) {
  */
 const INSTALL_PROBE = `(() => {
   if (window.__e2e) return true
-  const state = { authCalls: [], refreshCalls: 0, refreshAt: null, loginExpiresIn: null }
+  const state = { authCalls: [], refreshCalls: 0, refreshAt: null, loginExpiresIn: null, loginAt: null }
   window.__e2e = state
   const original = window.fetch.bind(window)
   window.fetch = async (input, init) => {
@@ -245,7 +245,14 @@ const INSTALL_PROBE = `(() => {
         if (state.refreshAt === null) state.refreshAt = Date.now()
       }
       if (url.includes('/api/auth/login') && response.ok) {
-        try { state.loginExpiresIn = (await response.clone().json()).expiresIn } catch {}
+        try {
+          const body = await response.clone().json()
+          state.loginExpiresIn = body.expiresIn
+          // 登录成功的时刻必须记在探针里，不能由脚本在几步之后取当前时间：脚本那侧
+          // 的取值点被中间的截图与断言推后了若干秒，算出来的「登录后多久续期」会偏小，
+          // 甚至变成负数。
+          state.loginAt = Date.now()
+        } catch {}
       }
     }
     return response
@@ -478,13 +485,15 @@ async function main() {
 
     // 7. 静默续期。判据是刷新请求真的发出去了，而不是「界面还在」——
     //    后者在令牌尚未过期时必然成立，说明不了任何问题。
-    const loginAt = Date.now()
     let renewDetail = ''
     let renewed = true
     try {
       await evaluate(client, waitFor(`window.__e2e.refreshCalls >= 1`, 45000, '静默续期'))
       const probe = JSON.parse(await evaluate(client, 'JSON.stringify(window.__e2e)'))
-      renewDetail = `${probe.refreshCalls} 次刷新，登录后 ${((probe.refreshAt - loginAt) / 1000).toFixed(1)}s 触发`
+      const elapsed = probe.loginAt === null ? null : (probe.refreshAt - probe.loginAt) / 1000
+      renewDetail =
+        `${probe.refreshCalls} 次刷新` +
+        (elapsed === null ? '' : `，登录后 ${elapsed.toFixed(1)}s 触发`)
     } catch {
       renewed = false
       const ttl = await evaluate(client, 'window.__e2e.loginExpiresIn')

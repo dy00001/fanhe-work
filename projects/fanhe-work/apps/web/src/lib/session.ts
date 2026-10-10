@@ -37,6 +37,18 @@ const MIN_REFRESH_DELAY_MS = 5_000
 let accessToken: string | null = null
 let accessTokenExpiresAt = 0
 
+/**
+ * 会话代数。每次清空会话递增一次，用来识别「这次续期属于哪一代会话」。
+ *
+ * 存在的理由是登出与在飞的续期之间存在竞态：用户点登出时，一次续期可能正好在
+ * 路上。请求已经发出，无法取消，它返回后会执行 `applyTokens`，把刚被登出清掉的
+ * 刷新令牌又写回 localStorage。表现是「点了登出，刷新页面却又进去了」——登出没有
+ * 真正生效，而界面上看不出任何异常。
+ *
+ * 因此改为在写回之前比对代数：代数变了说明会话已经被清空，这次结果直接丢弃。
+ */
+let sessionEpoch = 0
+
 function readRefreshToken(): string | null {
   try {
     return window.localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)
@@ -102,6 +114,9 @@ export function applyTokens(tokens: {
 
 /** 清空会话。登出、续期失败、令牌被撤销都走这里。 */
 export function clearSession(): void {
+  // 先递增代数，再清令牌。顺序反过来的话，在飞的续期可能恰好在这两步之间完成
+  // 写回，把刚删掉的令牌放回来。
+  sessionEpoch += 1
   accessToken = null
   accessTokenExpiresAt = 0
   removeRefreshToken()
@@ -125,12 +140,20 @@ export function refreshSession(): Promise<string> {
     return inFlightRefresh
   }
 
+  const epoch = sessionEpoch
   const promise = (async (): Promise<string> => {
     const refreshToken = readRefreshToken()
     if (refreshToken === null) {
       throw new ApiError(401, 'no_refresh_token', '登录状态已失效，请重新登录', null)
     }
     const tokens = await refreshRequest(refreshToken)
+    // 请求期间会话被清空了（用户登出，或续期失败后回登录页）。服务端那边可能已经
+    // 完成轮换，但本机不该再持有这个凭证：写回去等于把刚登出的会话又放回
+    // localStorage。抛错而不是静默返回，是为了让调用方走「续期失败」这条既有路径，
+    // 而不是拿着一个已被丢弃的令牌继续请求。
+    if (epoch !== sessionEpoch) {
+      throw new ApiError(401, 'session_cleared', '登录状态已失效，请重新登录', null)
+    }
     applyTokens(tokens)
     // 返回访问令牌而不是完整响应：调用方需要的只是「用哪个令牌重试」。
     return tokens.accessToken
