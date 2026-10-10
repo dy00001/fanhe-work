@@ -21,6 +21,10 @@ apps/api/src/generated/
 .env.local
 .env.*.local
 
+# 浏览器级端到端验证的截图与临时浏览器 profile。每次运行重新生成，
+# profile 里还带着上一次的登录态，都不该进版本控制。
+e2e-shots/
+
 # 编辑器与系统噪声
 .DS_Store
 Thumbs.db

@@ -69,4 +69,15 @@ export default [
       globals: { ...globals.node },
     },
   },
+
+  // 浏览器级端到端验证脚本。跑在 Node 里，但操作对象是浏览器，所以两边全局都要
+  // 认。WebSocket 与 fetch 在这里用的是 Node 22 自带的实现，不引第三方包。
+  {
+    files: ['apps/web/test/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
 ]
