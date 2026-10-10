@@ -1,4 +1,4 @@
-import type { NavCode, NavItem } from '@fanhe/shared'
+import { navPath, type NavItem } from '@fanhe/shared'
 import {
   ChartPie,
   ChevronLeft,
@@ -9,6 +9,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react'
+import { NavLink, type NavLinkRenderProps } from 'react-router'
 
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
@@ -22,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
  * 而不是 `Partial<...>`，是为了让新增导航项时**编译期**就报错 —— 漏配图标的表现
  * 是那一项没有图标而其他项都有，属于看得见但很容易被忽略的那类不一致。
  */
-const NAV_ICONS: Record<NavCode, LucideIcon> = {
+const NAV_ICONS: Record<NavItem['code'], LucideIcon> = {
   workbench: LayoutGrid,
   customer: Users,
   ops: TrendingUp,
@@ -33,9 +34,7 @@ const NAV_ICONS: Record<NavCode, LucideIcon> = {
 type SidebarProps = {
   /** 已按当前权限过滤后的导航项，顺序即界面顺序。 */
   items: readonly NavItem[]
-  activeCode: NavCode | null
   collapsed: boolean
-  onSelect: (code: NavCode) => void
   onToggleCollapsed: () => void
 }
 
@@ -45,21 +44,21 @@ type SidebarProps = {
  * 宽度取实施方案第五章的规格：展开 224px、折叠 64px。这两个值是布局的基准，
  * 顶栏与内容区都相对它对齐，所以写在这里而不是做成可配置项。
  *
+ * **导航项用 `NavLink` 而不是受控按钮。** 激活态由 URL 判定，不再由上层传一个
+ * `activeCode` 下来：受控写法要求「点按钮改状态」与「地址变化」两条路径都去同步
+ * 那个状态，而其中一条（浏览器前进后退、直接输入地址）很容易被漏掉，表现为
+ * 「地址变了但高亮没变」。`NavLink` 顺带写入 `aria-current="page"`，无障碍与
+ * 测试都省了一件事。
+ *
  * 折叠态下只留图标，导航项名称改由气泡提示给出。这不是可选的装饰：文字一没，
  * 图标就成了唯一的信息载体，而图标本身表意模糊（「数据看板」与「运营信息平台」
  * 的图标都是趋势类），少了提示等于让用户靠记忆点菜单。
  *
  * 「可见 N / 共 M 项」那行调试文字在 T2-02 被去掉了。它原本的作用是让阶段一的
- * 可见范围验收有可观察的落点（见 9.19），而那是开发者视角的信息，不该出现在
- * 正式界面上；可见范围的断言改由端到端脚本数导航项数承担。
+ * 可见范围验收有可观察的落点（见 DEVELOPMENT-PLAN 9.19），而那是开发者视角的
+ * 信息，不该出现在正式界面上；可见范围的断言改由端到端脚本数导航项数承担。
  */
-export function Sidebar({
-  items,
-  activeCode,
-  collapsed,
-  onSelect,
-  onToggleCollapsed,
-}: SidebarProps) {
+export function Sidebar({ items, collapsed, onToggleCollapsed }: SidebarProps) {
   return (
     <aside
       className={cn(
@@ -89,20 +88,19 @@ export function Sidebar({
         >
           {items.map((item) => {
             const Icon = NAV_ICONS[item.code]
-            const active = item.code === activeCode
 
-            const trigger = (
-              <button
-                type="button"
-                onClick={() => onSelect(item.code)}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex h-9 w-full items-center gap-2.5 rounded-md text-sm transition-colors',
-                  collapsed ? 'justify-center' : 'px-2.5',
-                  active
-                    ? 'bg-accent font-medium text-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                )}
+            const link = (
+              <NavLink
+                to={navPath(item.code)}
+                className={({ isActive }: NavLinkRenderProps) =>
+                  cn(
+                    'flex h-9 w-full items-center gap-2.5 rounded-md text-sm transition-colors',
+                    collapsed ? 'justify-center' : 'px-2.5',
+                    isActive
+                      ? 'bg-accent font-medium text-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                  )
+                }
               >
                 <Icon className="size-4 shrink-0" />
                 {!collapsed && (
@@ -115,19 +113,19 @@ export function Sidebar({
                     )}
                   </>
                 )}
-              </button>
+              </NavLink>
             )
 
-            // 展开态下名称就在按钮上，再加气泡是重复；折叠态下它是唯一的名称来源。
+            // 展开态下名称就在链接上，再加气泡是重复；折叠态下它是唯一的名称来源。
             return collapsed ? (
               <Tooltip key={item.code}>
-                <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+                <TooltipTrigger asChild>{link}</TooltipTrigger>
                 <TooltipContent side="right">
                   {item.planned ? `${item.label}（开发中）` : item.label}
                 </TooltipContent>
               </Tooltip>
             ) : (
-              <div key={item.code}>{trigger}</div>
+              <div key={item.code}>{link}</div>
             )
           })}
         </nav>

@@ -1,15 +1,26 @@
+import { BrowserRouter } from 'react-router'
+
 import { AuthProvider } from './auth/AuthProvider'
 import { useAuth } from './auth/useAuth'
-import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
+import { AppRoutes } from './routes'
 
 /**
- * 按认证状态选择界面。
+ * 认证门禁与路由的分工。
  *
- * 用状态机而不是路由：阶段一只有「初始化 / 登录 / 已登录」三个界面，且它们
- * 互斥，一个 status 就够表达。真正的路由体系（一级导航与嵌套路由）属阶段二
- * 的 T2-03，那时这里会换成路由表加守卫，但守卫的判断依据仍然是这一份 status。
+ * **门禁在路由之外，路由只管已登录的那一半。** 初始化页与登录页是状态驱动的：
+ * 它们的出现与否取决于「库里有没有 owner」「本地有没有有效会话」，与地址无关。
+ * 若把它们也做成路由（`/login`、`/setup`），就会出现「已登录状态下直接访问
+ * `/login`」这类地址与状态互相矛盾的情形，而处理它又要再加一层重定向。把它们
+ * 留在路由之外，`BrowserRouter` 只承接五个模块，地址与内容始终一一对应。
+ *
+ * 代价是登录页与初始化页的地址栏会显示进入前的路径。可以接受：那两个界面是
+ * 全屏的，用户不会去复制地址。
+ *
+ * `BrowserRouter` 放在门禁之外而不是之内，是为了让路由实例在整个会话里保持
+ * 稳定：登录成功时只是门禁换了一支，地址栏里原有的深链接（例如登录前打开的
+ * `/system-settings`）会被原样保留并直接落到那个模块。
  */
 function AuthGate() {
   const { status } = useAuth()
@@ -26,13 +37,15 @@ function AuthGate() {
 
   if (status === 'uninitialized') return <SetupPage />
   if (status === 'unauthenticated') return <LoginPage />
-  return <HomePage />
+  return <AppRoutes />
 }
 
 export default function App() {
   return (
     <AuthProvider>
-      <AuthGate />
+      <BrowserRouter>
+        <AuthGate />
+      </BrowserRouter>
     </AuthProvider>
   )
 }

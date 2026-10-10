@@ -1,6 +1,7 @@
 /**
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
- * 静默续期 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
+ * 切换模块 → 静默续期 → 直接访问子路由 → 登出 → 重新打开后凭据自动带出 →
+ * 取消勾选后凭据被清除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -240,14 +241,15 @@ async function mouseClick(client, finder, label) {
  * `textContent` 是「系统设置开发中」这样的拼接结果。范围限定在 `nav` 元素内，
  * 避免命中内容区里同名的标题。
  *
- * 导航项是原生 `button`，`element.click()` 就能触发 React 的 onClick，
- * 不需要 mouseClick 那套真实指针事件。
+ * 导航项在 T2-03 由 `button` 换成了 `NavLink`（渲染为 `a`）。`element.click()`
+ * 仍然够用：react-router 的链接监听的是普通 `click`，与 Radix 那种依赖
+ * `pointerdown` / `pointerup` 的组件不同，不需要 mouseClick 那套真实指针事件。
  */
 function clickNavByLabel(label) {
   return `(() => {
-    const button = [...document.querySelectorAll('nav button')].find((item) => item.textContent.includes(${JSON.stringify(label)}))
-    if (!button) throw new Error('找不到导航项 ' + ${JSON.stringify(label)})
-    button.click()
+    const link = [...document.querySelectorAll('nav a')].find((item) => item.textContent.includes(${JSON.stringify(label)}))
+    if (!link) throw new Error('找不到导航项 ' + ${JSON.stringify(label)})
+    link.click()
     return true
   })()`
 }
@@ -492,7 +494,7 @@ async function main() {
     const navLabels = JSON.parse(
       await evaluate(
         client,
-        `JSON.stringify([...document.querySelectorAll('nav button')].map((item) => item.textContent.trim()))`,
+        `JSON.stringify([...document.querySelectorAll('nav a')].map((item) => item.textContent.trim()))`,
       ),
     )
     record('owner 可见全部五个导航项', navLabels.length === 5, navLabels.join(' / '))
@@ -540,7 +542,7 @@ async function main() {
     await evaluate(
       client,
       `(() => {
-        const item = document.querySelector('nav button')
+        const item = document.querySelector('nav a')
         if (!item) throw new Error('找不到导航项')
         item.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
         item.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))
@@ -663,6 +665,34 @@ async function main() {
     console.log(`     期间发出的鉴权请求：${authCalls.join(' → ')}`)
     await screenshot(client, '5-after-renew')
 
+    // 7b. 子路由可直接访问。这是 T2-03 的验收点：在地址栏直接打开某个模块的路径，
+    //     应落到该模块，而不是被重定向回落地页。
+    //
+    //     必须放在续期断言之后：这一步会整页重新加载，挂在 window 上的请求探针随之
+    //     消失，而续期正是靠它计数。放在前面会让续期那一步读不到数据。
+    //
+    //     重载后会话由 localStorage 里的刷新令牌静默恢复，不需要重新登录 —— 这本身
+    //     也顺带验证了深链接与会话恢复能同时成立。
+    const deepLoaded = client.once('Page.loadEventFired')
+    await client.send('Page.navigate', { url: `${APP_URL}/system-settings` })
+    await deepLoaded
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '系统设置'`,
+        20000,
+        '直接访问子路由',
+      ),
+    )
+    const deepPath = await evaluate(client, 'location.pathname')
+    const deepText = await evaluate(client, "document.querySelector('main').innerText")
+    record(
+      '直接访问 /system-settings 落到该模块且地址栏未被改写',
+      deepPath === '/system-settings' && deepText.includes('功能开发中'),
+      `路径 ${deepPath}`,
+    )
+    await screenshot(client, '5b-deep-link')
+
     // 8. 登出应清掉本地令牌并回到登录页。
     //    退出登录从顶栏的裸按钮移进了账号菜单（T2-02 的布局骨架），要多两步：
     //    先点开菜单，等菜单项真的挂上 DOM，再点它。菜单的展开与选中都依赖真实
@@ -724,9 +754,18 @@ async function main() {
     // 8b. 取消勾选后登录，已保存的凭据应被清除。
     //     账号密码这时已经带出在输入框里，直接提交即可。清除发生在登录成功之后，
     //     所以要等它完成再断言。
+    //
+    //     判据是「已登录外壳挂上」而不是某段正文：登出不会改写地址栏，而上一节的
+    //     深链接验证把地址留在了 `/system-settings`，再次登录会**原样落到系统设置
+    //     模块**（这正是 App.tsx 里刻意保留深链接的行为）。系统设置是占位模块，
+    //     内容区没有个人工作台才有的「权限点」段落，等那段文案必然超时。等账号
+    //     菜单这种只存在于已登录外壳里的元素，与落地在哪个模块无关。
     await evaluate(client, clickSelector('#login-remember'))
     await evaluate(client, clickSelector('button[type="submit"]'))
-    await evaluate(client, waitFor(`document.body.innerText.includes('权限点')`, 25000, '再次登录'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[aria-label="账号菜单"]') !== null`, 25000, '再次登录'),
+    )
     let cleared = true
     try {
       await evaluate(

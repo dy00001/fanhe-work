@@ -31,6 +31,8 @@ import {
   canAccessModule,
   canSeeNavItem,
   filterNavigation,
+  navCodeFromPath,
+  navPath,
   resolveActiveNav,
 } from '../dist/index.js'
 
@@ -136,4 +138,31 @@ test('激活项解析：尚未选择时取第一项作为落地页', () => {
 
 test('激活项解析：可见清单为空时返回 null，交给调用方兜底', () => {
   assert.equal(resolveActiveNav([], NAV_CODES.WORKBENCH), null)
+})
+
+test('路由路径由编号派生，五项与清单一一对应', () => {
+  assert.deepEqual(
+    NAV_ITEMS.map((item) => navPath(item.code)),
+    ['/workbench', '/customer', '/ops', '/dashboard', '/system-settings'],
+  )
+})
+
+test('路径解析：首段命中编号时返回它，更深的段被忽略', () => {
+  assert.equal(navCodeFromPath('/workbench'), NAV_CODES.WORKBENCH)
+  assert.equal(navCodeFromPath('/workbench/notes'), NAV_CODES.WORKBENCH)
+  assert.equal(navCodeFromPath('/system-settings/users/1'), NAV_CODES.SYSTEM_SETTINGS)
+})
+
+test('路径解析：不认识的路径与空路径都返回 null，不擅自兜底', () => {
+  assert.equal(navCodeFromPath('/'), null)
+  assert.equal(navCodeFromPath(''), null)
+  assert.equal(navCodeFromPath('/nonsense'), null)
+  // 只认整段相等，`workbenchX` 不能命中 `workbench`。
+  assert.equal(navCodeFromPath('/workbenchX'), null)
+})
+
+test('navPath 与 navCodeFromPath 互为逆运算', () => {
+  for (const item of NAV_ITEMS) {
+    assert.equal(navCodeFromPath(navPath(item.code)), item.code)
+  }
 })

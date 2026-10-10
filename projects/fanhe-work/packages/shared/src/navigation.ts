@@ -169,3 +169,35 @@ export function resolveActiveNav(
   if (requestedItem !== undefined) return requestedItem
   return visible[0] ?? null
 }
+
+/**
+ * 导航项对应的路由路径。
+ *
+ * 编号本身就是路由段，这正是 `NAV_CODES` 当初用英文标识而不是序号的原因 ——
+ * 注释里写的「编号要写进路由路径」在这里兑现。
+ *
+ * 路径由这一个函数生成，不在各处拼字符串。侧栏链接、落地页重定向、守卫回退
+ * 三处各拼一次的话，改动路径规则时漏掉一处，表现是「菜单点得进去、刷新后却
+ * 落到别处」，而这类偏差不会报错。
+ */
+export function navPath(code: NavCode): string {
+  return `/${code}`
+}
+
+/**
+ * 从路径解析一级导航编号。
+ *
+ * 只认第一段：一级导航是路径的首段，更深的部分属于模块内部（二级页面），不参与
+ * 一级激活项的判定。因此 `/workbench/notes` 与 `/workbench` 解析出同一个编号。
+ *
+ * 认不出来时返回 `null`，不在这里兜底。原因是「路径不认识」与「路径认得但当前
+ * 角色无权限」是两回事：前者应由调用方导向落地页，后者应由守卫回退到第一个可见项。
+ * 若这里也回退到第一项，调用方就再也分不清自己面对的是哪一种，守卫的回退逻辑
+ * 会连带失去意义。
+ */
+export function navCodeFromPath(pathname: string): NavCode | null {
+  const segment = pathname.split('/').find((part) => part.length > 0)
+  if (segment === undefined) return null
+  const matched = NAV_ITEMS.find((item) => item.code === segment)
+  return matched?.code ?? null
+}
