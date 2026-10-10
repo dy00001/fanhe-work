@@ -199,3 +199,88 @@ export type RunLaunchProfileResponse = {
    */
   deduplicated: boolean
 }
+
+/**
+ * 一条配置的可执行文件路径现在能不能用。
+ *
+ * 两态而不是三态：**「文件不在」与「那台机器没应答」合并成 `missing`**。后者指的是
+ * 指向网络共享（UNC）的配置在共享离线时的情形 —— 检查会在超时后落到这里。分开表达
+ * 看起来更精确，但两者给用户的动作完全一样（去确认那个路径，必要时重新指定），而
+ * 多一个状态就要在界面上多一种渲染分支，那个分支的文案很难与「路径失效」区分开。
+ *
+ * **这个值只描述「此刻」，不是配置的属性。** U 盘重新插上、共享恢复、软件装回来之后
+ * 同一条配置就会变回 `ok`，因此它既不入库也不进缓存，每次检查都是一次新的 stat。
+ * 把它固化进配置（T3-01 明确不做）等于给出一个会过期的结论。
+ */
+export const LAUNCH_PATH_STATES = ['ok', 'missing'] as const
+
+export type LaunchPathState = (typeof LAUNCH_PATH_STATES)[number]
+
+/**
+ * 一次启动的结果码。
+ *
+ * 与 api 侧 `agent.ts` 的 `LaunchRunFailureReason` 是同一套取值的两种用法：那里回答
+ * 「这次调用为什么没成功」，这里回答「这条记录是什么结果」，所以多一个 `success`。
+ * 放在共享包，是因为它要落库、要经接口回传、还要被界面读，三处必须用同一份清单。
+ */
+export const LAUNCH_RUN_OUTCOMES = ['success', 'executable_missing', 'spawn_failed'] as const
+
+export type LaunchRunOutcomeCode = (typeof LAUNCH_RUN_OUTCOMES)[number]
+
+/**
+ * 收窄库里的结果码。
+ *
+ * 库侧没有约束（与 `software` 同一条判断：做成枚举意味着每加一种失败原因都要一次
+ * 迁移），所以读出来的永远是字符串。**认不出的取值按失败处理**：它只可能来自手工
+ * 改库或回滚到旧版本，而把它显示成「成功」是最坏的结果。
+ */
+export function isLaunchRunOutcome(value: string): value is LaunchRunOutcomeCode {
+  return (LAUNCH_RUN_OUTCOMES as readonly string[]).includes(value)
+}
+
+/**
+ * 一条启动记录。
+ *
+ * **命中去重窗口的请求不产生记录。** 那次没有创建进程，记下来会让「这条配置多久没
+ * 成功启动过了」这句话失真 —— 连点五下会得到五条一模一样的成功记录，而这五条指向
+ * 同一个 pid。因此没有「是否去重」字段：这里只记真实启动尝试，成功与失败都包括。
+ *
+ * 配置名与路径的快照留在库里（见 `schema.prisma` 该模型的注释），不进这个结构 ——
+ * 用它的地方都是「在某一行的旁边显示摘要」，而配置名本来就在手上。
+ */
+export type LaunchRunRecord = {
+  id: string
+  profileId: string
+  outcome: LaunchRunOutcomeCode
+  /** 子进程 id。未成功时为 null —— 那两种失败下进程根本没被创建。 */
+  pid: number | null
+  /** 结果确认时刻，ISO 8601；成功时为进程创建时刻，失败时为失败判定时刻。 */
+  startedAt: string
+}
+
+/**
+ * 一条配置的当前状态：路径还能不能用，以及它最近一次启动是什么结果。
+ *
+ * 与 `LaunchProfile` 分开取，是因为它**不是配置的一部分**。路径状态取决于这台机器的
+ * 文件系统，每查一次都可能不同；启动记录则随每次点击增长。混进列表响应会让「刷新
+ * 列表」这个动作凭空多出 N 次文件系统调用与两次分组查询，而列表本身只是想显示
+ * 用户存了什么。
+ */
+export type LaunchProfileStatus = {
+  profileId: string
+  pathState: LaunchPathState
+  /** 保留窗口内最近一次启动记录；窗口内无记录时为 null。 */
+  lastRun: LaunchRunRecord | null
+  /**
+   * 保留窗口内最近一次成功时刻；窗口内无成功记录时为 null。
+   *
+   * 与 `lastRun` 分开给：最近一次失败时，用户真正想知道的是「上一次成功是什么时候」，
+   * 而那一次可能已经是很久以前了 —— 这正是「这条配置多久没成功启动过了」这句话
+   * 需要的那一列。
+   */
+  lastSuccessAt: string | null
+}
+
+export type LaunchProfileStatusListResponse = {
+  statuses: readonly LaunchProfileStatus[]
+}

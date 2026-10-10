@@ -108,6 +108,7 @@ model User {
   refreshTokens  RefreshToken[]
   auditLogs      AuditLog[]
   launchProfiles LaunchProfile[]
+  launchHistory  LaunchHistory[]
 
   @@index([roleId])
   @@index([status])
@@ -313,8 +314,56 @@ model LaunchProfile {
   /// 与 refresh_tokens 的处理一致。
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  /// 这条配置的启动记录。配置走软删除，因此删掉配置不会带走历史 —— 那正是历史
+  /// 该有的行为：删掉一条总是启动失败的配置之后，「它当时到底失败了多少次」还在。
+  history LaunchHistory[]
+
   /// 列表查询恒带 userId 与 deletedAt 两个条件并按 sortOrder 排序，这个复合索引
   /// 正好覆盖，不必再为单列建索引。
   @@index([userId, deletedAt, sortOrder])
   @@map("launch_profiles")
+}
+
+/// 启动记录。真实启动尝试成功与失败都写一行，命中去重窗口的请求不写：
+/// 去重复用旧结果，重复记会把连点误读为多次成功。
+///
+/// 这张表**不参与审计**，与启动配置的增删改同一条判断：它是用户自己的使用痕迹，
+/// 影响范围不超出他本人，而写进 `audit_logs` 会把真正需要追责的事件淹掉。它要回答
+/// 的问题是「这条配置多久没成功启动过了」，服务于界面上的提示，不是追责。
+///
+/// **保留策略与 `audit_logs` 相反**：这张表会被反复写入且只服务于最近的情况，因此
+/// 按用户保留最近若干条，写入时顺带清理（见 `src/launch/history.ts`）。审计日志则
+/// 长期保留且不可删。两者的取舍标准是「出事时这条记录还有没有用」。
+model LaunchHistory {
+  id        String @id @default(uuid(7)) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  profileId String @map("profile_id") @db.Uuid
+
+  /// 配置名与路径的**快照**。历史记的是「当时发生了什么」，而配置随后可能被改名、
+  /// 改路径甚至被删掉 —— 排查时最需要的恰恰是当时那一行。冗余在这里是有意的，
+  /// 与 `audit_logs` 同时记 actorId 与 actorName 是同一条理由。
+  profileName    String @map("profile_name") @db.VarChar(64)
+  executablePath String @map("executable_path") @db.VarChar(1024)
+
+  /// 结果码。取值域是共享包的 LAUNCH_RUN_OUTCOMES，与 software 同样**不做成数据库
+  /// 枚举**：新增一种失败原因不该需要一次迁移。代价是库侧没有约束，读出来由
+  /// `isLaunchRunOutcome` 收窄，认不出的取值按失败处理。
+  outcome String @db.VarChar(32)
+
+  /// 子进程 id。失败时为 null —— 那两种失败下进程根本没被创建。
+  pid Int?
+
+  /// 结果确认时刻：成功沿用代理的进程创建时间，失败取失败判定时间。
+  /// 不可变流水不设 updated_at；只服务近期摘要，不另存 created_at 写入时间。
+  startedAt DateTime @default(now()) @map("started_at") @db.Timestamptz(3)
+
+  /// 物理清理用户或配置时连带删除。正常流程下两者都走软删除，级联只在种子重建时触发。
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile LaunchProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// 保留策略的清理按用户与时间倒序取超出部分。
+  @@index([userId, startedAt])
+  /// 「这条配置最近一次启动」的查询走这个索引。
+  @@index([userId, profileId, startedAt])
+  @@map("launch_history")
 }

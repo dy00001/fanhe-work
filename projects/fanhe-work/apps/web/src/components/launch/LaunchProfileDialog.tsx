@@ -42,6 +42,14 @@ type LaunchProfileDialogProps = {
   /** 传 null 表示新增，传一条配置表示编辑。两种模式共用同一个表单。 */
   profile: LaunchProfile | null
   /**
+   * 打开后把光标落在路径字段上并选中原值。
+   *
+   * 用于「重新指定路径」这个入口：那条路径已经失效了，用户要做的事就是把整段换掉，
+   * 而对话框里第一个可聚焦的元素是软件选择按钮 —— 不指定的话他会先落在那里，
+   * 还得自己找到路径字段。
+   */
+  focusPath?: boolean | undefined
+  /**
    * 提交。由外层负责真正发请求 —— 新增与编辑走的是不同的接口，而失败后要不要刷新
    * 列表也只有外层知道。这里只把校验通过的值交出去，并等它一个结果。
    *
@@ -106,13 +114,36 @@ export function LaunchProfileDialog({
   open,
   onOpenChange,
   profile,
+  focusPath,
   onSubmit,
 }: LaunchProfileDialogProps) {
   const editing = profile !== null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        /**
+         * 把初始焦点改到路径字段上。
+         *
+         * 走 `onOpenAutoFocus` 而不是在表单里挂一个 effect 去 focus：Radix 的默认行为
+         * 是聚焦第一个可聚焦元素（这里是软件选择按钮），而它的执行时机与子组件 effect
+         * 的先后取决于内部实现 —— 谁最后跑谁说了算。这里 `preventDefault()` 把默认
+         * 行为关掉再自己聚焦，结果与顺序无关。
+         */
+        onOpenAutoFocus={(event) => {
+          if (focusPath !== true) return
+          event.preventDefault()
+          // 按 id 取而不是用 `event.currentTarget`：Radix 给这个回调传的是原生 Event，
+          // 它的 currentTarget 类型是 EventTarget，没有 querySelector。同时开着的
+          // 对话框只有一个，id 在页面里是唯一的。
+          const input = document.getElementById('launch-path')
+          if (!(input instanceof HTMLInputElement)) return
+          input.focus()
+          // 一并选中原值：用户点的是「重新指定路径」，要做的事就是把整段换掉。
+          input.select()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{editing ? '编辑启动配置' : '新增启动配置'}</DialogTitle>
           <DialogDescription>

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import type { LaunchProfile, RunLaunchProfileResponse } from '@fanhe/shared'
+import type { LaunchPathState, LaunchProfile, RunLaunchProfileResponse } from '@fanhe/shared'
 
 /**
  * 本机代理的核心：把一条启动配置变成一个真实运行的进程。
@@ -19,8 +19,9 @@ import type { LaunchProfile, RunLaunchProfileResponse } from '@fanhe/shared'
  * 数据库里用户自己存下的那一行。反过来做（接受路径与参数）就等于对外提供一个本机
  * 任意命令执行入口，任何拿到会话的人都能运行任意程序 —— 那不是功能，那是漏洞。
  *
- * 本模块不做审计、不写启动记录。启动历史属 T3-04 的 `launch_history`，届时由调用方
- * 在拿到结果之后自行落库：进程创建这件事本身不应该依赖数据库可用。
+ * 本模块不做审计、不写启动记录。启动历史由调用方在拿到结果之后自行落库（见
+ * `src/launch/history.ts`）：进程创建这件事本身不应该依赖数据库可用，把它塞进这里
+ * 会让「数据库抖一下」变成「客户端起不来」。
  */
 
 /**
@@ -65,6 +66,53 @@ export type LaunchCommand = {
   command: string
   args: string[]
   cwd: string
+}
+
+/**
+ * 检查一条路径时的等待上限，单位毫秒。
+ *
+ * 存在的理由是**网络共享**：路径可以是 `\\server\share\...`（共享包里明确支持这种
+ * 写法），而那台机器关机或掉线时，`stat` 不会立刻失败，而是要等 SMB 的超时 —— 在
+ * 某些环境里那是几十秒。没有这一层，一次列表状态检查就会被一条死掉的共享拖住，
+ * 界面上的表现是「路径状态一直不出来」，而原因在另一个进程之外。
+ *
+ * 取 5 秒而不是更短：它要区分的是「慢但活着的共享」与「已经不可达的共享」。冷启动
+ * 的网络共享首次访问确实可能花上一两秒，判成失效会让用户去改一条本来正确的配置。
+ * 多条路径并发检查，不把等待上限逐条累加；数据库查询与事件循环调度仍会增加总耗时。
+ * 超时只结束等待，不取消底层 stat：Node 的文件状态查询没有取消接口。
+ */
+export const PATH_INSPECT_TIMEOUT_MS = 5000
+
+/**
+ * 检查一条可执行文件路径现在能不能用。
+ *
+ * **这是「路径是否失效」的唯一判断点。** 启动前的复核与列表上的状态标记都走它，
+ * 两者用同一条规则（存在且是文件）才有意义 —— 各写一份的话迟早出现「列表说没问题，
+ * 点启动说找不到」这种自相矛盾的界面。
+ *
+ * 超时按 `missing` 处理。合并的理由见共享包 `LaunchPathState` 的注释：两者给用户的
+ * 动作完全一样，而分开表达要在界面上多一种渲染分支，那个分支的文案与「路径失效」
+ * 几乎无法区分。
+ *
+ * 用 `stat` 而不是 `access`：只有 `stat` 能区分「不存在」与「存在但是个目录」，而
+ * 用户复制路径时选到文件夹是很常见的错误。
+ */
+export async function inspectExecutablePath(executablePath: string): Promise<LaunchPathState> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), PATH_INSPECT_TIMEOUT_MS)
+  })
+
+  try {
+    // 两种落空都归到 null：stat 抛错（不存在、权限不足）与等待超时。
+    const info = await Promise.race([stat(executablePath).catch(() => null), timeout])
+    if (info === null || !info.isFile()) return 'missing'
+    return 'ok'
+  } finally {
+    // 必须清掉。留着它会让一个已经返回的检查继续占着一个定时器，而进程退出前
+    // 每个未清理的定时器都会让事件循环多转一圈。
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /**
@@ -142,12 +190,10 @@ async function startProcess(
   profile: LaunchProfile,
   logger: LaunchLogger,
 ): Promise<LaunchRunOutcome> {
-  // stat 而不是 access：只有 stat 能区分「不存在」与「存在但是个目录」。用户复制
-  // 路径时选到文件夹是很常见的错误，两者的提示应当不同。权限不足导致的失败在这里
-  // 也会落到 executable_missing，可接受 —— 那种情况在本机自用的场景里几乎不出现，
-  // 而把它单独分成一类会让失败原因表多出一项长期没人命中的分支。
-  const info = await stat(profile.executablePath).catch(() => null)
-  if (info === null || !info.isFile()) {
+  // 复核走的是与列表状态标记同一个函数，见 `inspectExecutablePath` 的注释。权限不足
+  // 导致的失败在这里也会落到 executable_missing，可接受 —— 那种情况在本机自用的
+  // 场景里几乎不出现，而把它单独分成一类会让失败原因表多出一项长期没人命中的分支。
+  if ((await inspectExecutablePath(profile.executablePath)) === 'missing') {
     return { ok: false, reason: 'executable_missing' }
   }
 

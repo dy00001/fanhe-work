@@ -2,7 +2,8 @@
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
  * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 折叠偏好跨刷新保持 →
  * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除 →
- * 启动通道的新增、编辑、排序、启动与删除。
+ * 启动通道的新增、编辑、排序、启动与删除，以及路径失效的提示、重新指定入口与
+ * 启动记录的摘要。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -20,9 +21,10 @@
  *   1. 数据库处于「未初始化」状态，即 users 表为空。否则首次初始化页不会出现，
  *      第 1 项必然失败。重置方法：
  *        docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \
- *          "delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
+ *          "delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
  *      启动配置要一起清掉：删除是软删除，跑完之后 `launch_profiles` 里会留下几行
- *      `deletedAt` 非空的记录，不清的话下一次跑会带着这些行进来。
+ *      `deletedAt` 非空的记录，不清的话下一次跑会带着这些行进来。启动记录跟着配置
+ *      走（外键级联），显式写出来是因为它才是那张会不断增长的表。
  *   2. 启动 API 时把访问令牌有效期压短，否则续期要等 15 分钟才发生，观察窗口
  *      内什么也看不到：
  *        ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api
@@ -54,6 +56,18 @@ const MAX_OBSERVABLE_TTL_SECONDS = 65
 /** 本次验证创建的启动配置。名字带 zz_ 前缀，与真实配置区分。 */
 const LAUNCH_PROFILE_A = { name: 'zz_e2e_微信', renamed: 'zz_e2e_微信改名' }
 const LAUNCH_PROFILE_B = { name: 'zz_e2e_自定义' }
+
+/**
+ * 一条形态合法但**一定不存在**的路径，用来验证「路径失效」的提示与重新指定入口。
+ *
+ * 用盘符写法而不是临时目录：客户端的形态校验只认盘符、UNC 与 `/` 开头的路径，而它
+ * 不查文件是否存在（存在性只有服务端能查，且只有真正要启动的那一刻才有意义）。
+ * 这样写在任何平台上都能通过表单校验，随后被服务端判为失效。
+ */
+const LAUNCH_PROFILE_MISSING = {
+  name: 'zz_e2e_路径失效',
+  path: 'C:\\zz_e2e_missing\\client.exe',
+}
 
 /**
  * 启动通道里被拉起的程序：当前这个 Node。
@@ -336,6 +350,44 @@ function rowMenuFinder(rowName) {
     const button = [...row.querySelectorAll('button')].find((item) => (item.getAttribute('aria-label') ?? '').startsWith('更多操作'))
     if (!button) throw new Error('这一行没有更多操作按钮')
     return button
+  })()`
+}
+
+/** 取某一行（按名称匹配）的整段文本。行不存在时返回空串，便于直接放进 `waitFor`。 */
+function rowTextFinder(rowName) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(rowName)}))
+    return row ? row.textContent : ''
+  })()`
+}
+
+/**
+ * 某一行里**有没有**指定文案的按钮。
+ *
+ * 与 `clickRowButton` 的区别是它只回答「在不在」，用来断言入口本身 —— 比如路径失效
+ * 时「重新指定路径」出现了、而「启动」不再出现。后者点不了，也就没法用点击去证明。
+ */
+function rowHasButtonFinder(rowName, buttonText) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(rowName)}))
+    if (!row) return false
+    return [...row.querySelectorAll('button')].some((item) => item.textContent.trim() === ${JSON.stringify(buttonText)})
+  })()`
+}
+
+/**
+ * 某一行里有没有一个文字恰好是 `text` 的徽标。
+ *
+ * **不能用「行文本包含某几个字」来代替这个判断。** 这里要断言的徽标文字是「路径失效」，
+ * 而配置名完全可以带着同样的字（本次验证用的那条名字就叫 `zz_e2e_路径失效`），于是
+ * 「文本包含」在徽标消失之后依然为真 —— 断言永远通过，等于没测。按元素与精确文字判断
+ * 才是这里真正想表达的意思。
+ */
+function rowBadgeFinder(rowName, text) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(rowName)}))
+    if (!row) return false
+    return [...row.querySelectorAll('[data-slot="badge"]')].some((item) => item.textContent.trim() === ${JSON.stringify(text)})
   })()`
 }
 
@@ -1555,6 +1607,126 @@ async function main() {
     )
     record('删掉最后一条后回到空态', true, '')
     await screenshot(client, '8d-launch-cleared')
+
+    // 8e. 路径失效与启动记录。T3-04 的验收点：路径不存在时给出提示与重新指定入口。
+    //
+    //     位置放在清空之后：这一段会新建一条路径失效的配置、把它改好、启动一次再删掉，
+    //     结束时回到空态。放进中间会改变行数，让上面那些按行数断言的用例一起失败，
+    //     而真正的失败原因会被埋在一堆连锁失败里。
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '新增配置')`,
+      '空态的新增配置按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '新增对话框'),
+    )
+    await evaluate(client, fillInput('#launch-name', LAUNCH_PROFILE_MISSING.name))
+    await evaluate(client, fillInput('#launch-path', LAUNCH_PROFILE_MISSING.path))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelectorAll('main ul li').length === 1`, 8000, '失效配置入列'),
+    )
+
+    // 路径状态由服务端查出来（前端不碰文件系统），所以这里等的是「标记出现」而不是
+    // 「等一会儿」—— 后者在慢机器上会假通过。
+    await evaluate(
+      client,
+      waitFor(`${rowBadgeFinder(LAUNCH_PROFILE_MISSING.name, '路径失效')}`, 15000, '路径失效标记'),
+    )
+    record('路径不存在时行内给出失效标记', true, '')
+
+    const relocateEntry = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          hasRelocate: ${rowHasButtonFinder(LAUNCH_PROFILE_MISSING.name, '重新指定路径')},
+          hasLaunch: ${rowHasButtonFinder(LAUNCH_PROFILE_MISSING.name, '启动')},
+        })`,
+      ),
+    )
+    // 失效时「启动」被换成了「重新指定路径」：留一个必然失败的按钮只会让用户点一次、
+    // 收到同一条错误，而它本来就指向唯一有意义的动作。
+    record(
+      '失效的行给出重新指定路径入口，且不再显示启动',
+      relocateEntry.hasRelocate === true && relocateEntry.hasLaunch === false,
+      JSON.stringify(relocateEntry),
+    )
+    await screenshot(client, '8e-launch-path-missing')
+
+    // 点进去。光标应当落在路径字段上 —— 用户要做的事就是把整段换掉，不落在那儿的话
+    // 他会先落在软件选择按钮上，还得自己找到路径。
+    await evaluate(client, clickRowButton(LAUNCH_PROFILE_MISSING.name, '重新指定路径'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '重新指定对话框'),
+    )
+    const focusedField = await evaluate(client, `document.activeElement?.id ?? ''`)
+    record('重新指定路径打开对话框并聚焦路径字段', focusedField === 'launch-path', focusedField)
+
+    // 换成一条真实存在的路径（跑测试的这个 Node），保存后标记应当消失。
+    await evaluate(client, fillInput('#launch-path', LAUNCH_TARGET_PATH))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') === null`, 8000, '编辑对话框关闭'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `${rowBadgeFinder(LAUNCH_PROFILE_MISSING.name, '路径失效')} === false`,
+        15000,
+        '失效标记消失',
+      ),
+    )
+    const launchButtonBack = await evaluate(
+      client,
+      rowHasButtonFinder(LAUNCH_PROFILE_MISSING.name, '启动'),
+    )
+    record('改成有效路径后失效标记消失、启动按钮回来', launchButtonBack === true, '')
+
+    // 启动一次。记录落库之后界面会重拉状态，行内出现「上次启动」—— 这一行既是启动
+    // 记录真的写进去了的证据，也是「启动后摘要会刷新」这条行为的证据。
+    await evaluate(client, clickRowButton(LAUNCH_PROFILE_MISSING.name, '启动'))
+    await evaluate(
+      client,
+      waitFor(
+        `${rowTextFinder(LAUNCH_PROFILE_MISSING.name)}.includes('上次启动')`,
+        15000,
+        '启动摘要',
+      ),
+    )
+    const runSummary = await evaluate(client, rowTextFinder(LAUNCH_PROFILE_MISSING.name))
+    record(
+      '启动后行内出现上次启动的摘要',
+      runSummary.includes('上次启动'),
+      runSummary.replace(/\s+/g, ' ').slice(-32),
+    )
+    await screenshot(client, '8f-launch-history')
+
+    // 清掉，让数据库回到基线。
+    await openRowMenu(client, LAUNCH_PROFILE_MISSING.name)
+    await mouseClick(client, menuItemFinder('删除'), '删除菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认对话框'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent.trim() === '删除')`,
+      '确认删除按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('还没有启动配置')`,
+        8000,
+        '删空后回到空态',
+      ),
+    )
+    record('失效配置删除后回到空态', true, '')
 
     // 9. 渲染层无错误。这是本脚本存在的理由。
     record(

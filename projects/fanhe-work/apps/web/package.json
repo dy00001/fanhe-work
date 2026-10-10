@@ -8,6 +8,7 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test test/relative-time.test.mjs",
     "test:e2e": "node test/e2e-auth.mjs"
   },
   "dependencies": {

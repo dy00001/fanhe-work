@@ -187,6 +187,23 @@ export async function getProfile(userId: string, id: string): Promise<LaunchProf
   return row === null ? null : toProfile(row)
 }
 
+/**
+ * 取全部未删除配置的 id 与可执行文件路径。
+ *
+ * 只给状态汇总用（`status.ts`）：路径要拿去查文件系统，id 用来把结果对回去。走
+ * `listProfiles` 也能拿到这两列，但那会把参数、图标、时间戳一起读出来，而这份数据
+ * 一个字段都不会用到。排序与列表保持一致，好让两边对不上时能直接对比。
+ */
+export async function listProfilePaths(
+  userId: string,
+): Promise<{ id: string; executablePath: string }[]> {
+  return await prisma.launchProfile.findMany({
+    where: { userId, deletedAt: null },
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    select: { id: true, executablePath: true },
+  })
+}
+
 export async function createProfile(
   userId: string,
   input: CreateLaunchProfileRequest,

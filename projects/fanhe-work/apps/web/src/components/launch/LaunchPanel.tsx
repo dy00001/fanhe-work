@@ -1,5 +1,5 @@
-import { PERMISSIONS, type LaunchProfile } from '@fanhe/shared'
-import { Rocket, X } from 'lucide-react'
+import { PERMISSIONS, type LaunchProfile, type LaunchProfileStatus } from '@fanhe/shared'
+import { RefreshCw, Rocket, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { useAuth } from '../../auth/useAuth'
@@ -8,6 +8,7 @@ import {
   createLaunchProfile,
   launchRunRecovery,
   loadLaunchProfiles,
+  loadLaunchStatuses,
   removeLaunchProfile,
   reorderLaunchProfiles,
   runLaunchProfile,
@@ -38,6 +39,11 @@ import { LaunchProfileRow } from './LaunchProfileRow'
  * **只读访客（`personal.*.read`）看得到列表，看不到任何改动入口。** 这一层只是
  * 体验职责：能不能改由服务端判定，前端藏起按钮挡不住直接发请求。把新增/编辑/删除
  * 的入口一并收起而不是置灰，是因为一个常年不可点的按钮只会让人反复尝试。
+ *
+ * **路径状态与启动摘要是另一次请求，且它的失败不算加载失败。** 它要查文件系统
+ * （最坏等满超时），而列表本身只是想显示用户存了什么 —— 并在一起会让一条不可达的
+ * 网络共享把整个板块拖成错误页，而用户想看的那几条配置其实好好地在那儿。因此状态
+ * 有自己的加载计数，拿不到时只是不显示标记与摘要，列表照常可用。
  *
  * 操作结果用板块顶部的一条提示呈现（成功与失败共用一处）。没有引入 toast 组件：
  * 这个板块的动作都很短（启动一个进程、保存一条配置），结果紧跟操作出现即可，
@@ -77,6 +83,28 @@ async function fetchLaunchProfiles(): Promise<FetchProfilesResult> {
 }
 
 /**
+ * 拉取每条配置的状态（路径能不能用、上次启动是什么结果）。
+ *
+ * **失败返回 null，不抛也不设错误态。** 这是它与列表加载刻意不同的一处：路径状态是
+ * 附加信息，拿不到时列表照常可用，只是不显示失效标记与启动摘要。把它并进列表的
+ * 加载失败里，会让「一次状态查询超时」表现为「整个板块打不开」—— 而用户想看的
+ * 那几条配置其实好好地在那儿。
+ *
+ * 返回一个以 id 为键的普通对象而不是数组：渲染时每一行都要按 id 查一次，用数组就得
+ * 每行扫一遍（行数不多，但这是白白多出来的一层），而 `statuses[id]` 在
+ * `noUncheckedIndexedAccess` 下天然是 `LaunchProfileStatus | undefined` —— 正好表达
+ * 「这一条的状态还没拿到」。
+ */
+async function fetchLaunchStatuses(): Promise<Record<string, LaunchProfileStatus> | null> {
+  try {
+    const list = await loadLaunchStatuses()
+    return Object.fromEntries(list.map((item) => [item.profileId, item]))
+  } catch {
+    return null
+  }
+}
+
+/**
  * 判断编辑提交的内容是否真的与原来不同。
  *
  * 没有任何变化时不发请求：服务端的修改接口要求至少一个字段（`minProperties: 1`），
@@ -103,6 +131,24 @@ export function LaunchPanel() {
   const [loadError, setLoadError] = useState<string | null>(null)
 
   /**
+   * 每条配置的状态，以 id 为键。
+   *
+   * 空对象表示还没拿到。它与列表分两次请求（见 `lib/launch.ts` 的注释），因此
+   * 「列表已经在屏幕上、状态还在路上」是一个正常存在的中间态 —— 那时不显示失效
+   * 标记，也不显示启动摘要，而不是显示一个「尚未启动过」的错误结论。
+   */
+  const [statuses, setStatuses] = useState<Record<string, LaunchProfileStatus>>({})
+
+  /**
+   * 状态的重拉计数。
+   *
+   * 与列表的 `reloadToken` 分开，因为列表只在首次或重试时加载，增删改成功后直接
+   * 更新本地列表；状态则在首次、增删改、启动后及手动「重新检查路径」时独立重查。
+   * 分开之后，一次状态查询失败不会把已经显示出来的列表换成一个错误页。
+   */
+  const [statusToken, setStatusToken] = useState(0)
+
+  /**
    * 「正在加载」不单独存一个布尔量，而是由「还没有数据」与「还没有错误」推出来。
    *
    * 单独存的话就有两个真相：重试成功时忘了把它改回来，界面会一直停在加载态；
@@ -118,6 +164,14 @@ export function LaunchPanel() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<LaunchProfile | null>(null)
   const [deleting, setDeleting] = useState<LaunchProfile | null>(null)
+
+  /**
+   * 打开对话框时是否把光标落到路径字段。
+   *
+   * 与 `editing` 分开存而不是从调用点推出来：同一个编辑对话框有两个入口（更多菜单
+   * 里的「编辑」与行内的「重新指定路径」），它们的区别只有这一件事。
+   */
+  const [focusPath, setFocusPath] = useState(false)
 
   /**
    * 重载计数。
@@ -157,6 +211,29 @@ export function LaunchPanel() {
   }, [reloadToken])
 
   /**
+   * 加载每条配置的状态。
+   *
+   * 与列表分开成一个 effect，因为列表只在首次或重试时加载，增删改成功后更新本地
+   * 列表；状态则按 `statusToken` 独立重查。合并的话，一次只想重查路径或启动摘要的
+   * 动作也会重拉列表，失败时把已有内容换成错误页 —— 附加状态查询不该影响列表可用性。
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    void (async () => {
+      const next = await fetchLaunchStatuses()
+      // null 表示这次没拿到。保留上一次的结果而不是清空：清空会让已经显示出来的
+      // 失效标记与启动摘要在一次偶发失败后一起消失，而它们刚才还是对的。
+      if (cancelled || next === null) return
+      setStatuses(next)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [statusToken])
+
+  /**
    * 重新加载。
    *
    * 先清掉错误 —— `loading` 是从「没有数据且没有错误」推出来的，清掉它界面立刻回到
@@ -169,6 +246,17 @@ export function LaunchPanel() {
 
   function describeError(error: unknown, fallback: string): string {
     return error instanceof ApiError ? error.message : fallback
+  }
+
+  /**
+   * 重新检查路径。
+   *
+   * 存在的理由是**状态是快照**：U 盘重新插上、网络共享恢复、软件装回来之后，同一条
+   * 配置就会变回可用，而界面上还挂着「路径失效」。这是唯一一处让用户主动刷新它、
+   * 而不必改动配置的地方。
+   */
+  function handleRecheck(): void {
+    setStatusToken((token) => token + 1)
   }
 
   async function handleLaunch(profile: LaunchProfile): Promise<void> {
@@ -190,6 +278,9 @@ export function LaunchPanel() {
       })
     } finally {
       setLaunchingId(null)
+      // 启动成功与失败都会落一条记录（失败也是一种记录），因此这一次都要重拉状态。
+      // 请求根本没到服务端时这次重拉是白做的，但那比「刚点过启动、摘要却没变」要好。
+      setStatusToken((token) => token + 1)
     }
   }
 
@@ -198,6 +289,8 @@ export function LaunchPanel() {
       const created = await createLaunchProfile(values)
       setProfiles((current) => [...(current ?? []), created])
       setNotice({ kind: 'ok', text: `已新增「${created.name}」` })
+      // 新条目还没有状态，重拉一次让它立刻显示出来，而不是空着一行。
+      setStatusToken((token) => token + 1)
       return
     }
 
@@ -208,6 +301,9 @@ export function LaunchPanel() {
       (current ?? []).map((profile) => (profile.id === updated.id ? updated : profile)),
     )
     setNotice({ kind: 'ok', text: `已保存「${updated.name}」` })
+    // 编辑改的可能正是路径，而路径状态只有服务端查得到 —— 不重拉的话，刚改好的
+    // 那一条会继续带着「路径失效」的标记。
+    setStatusToken((token) => token + 1)
   }
 
   /**
@@ -256,6 +352,9 @@ export function LaunchPanel() {
       setProfiles((current) => (current ?? []).filter((profile) => profile.id !== target.id))
       setNotice({ kind: 'ok', text: `已删除「${target.name}」` })
       setDeleting(null)
+      // 状态列表按 id 组织，删掉的那一条不会自己消失；重拉一次让状态与列表对齐。
+      // 它的历史记录仍在库里（软删除不带走历史），只是不再出现在这个接口的返回里。
+      setStatusToken((token) => token + 1)
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error, '删除失败，请稍后重试') })
     } finally {
@@ -265,11 +364,20 @@ export function LaunchPanel() {
 
   function openCreate(): void {
     setEditing(null)
+    setFocusPath(false)
     setDialogOpen(true)
   }
 
   function openEdit(profile: LaunchProfile): void {
     setEditing(profile)
+    setFocusPath(false)
+    setDialogOpen(true)
+  }
+
+  /** 「重新指定路径」：同一个编辑对话框，只是把光标落在路径字段上。 */
+  function openRelocate(profile: LaunchProfile): void {
+    setEditing(profile)
+    setFocusPath(true)
     setDialogOpen(true)
   }
 
@@ -308,12 +416,15 @@ export function LaunchPanel() {
           <LaunchProfileRow
             key={profile.id}
             profile={profile}
+            status={statuses[profile.id]}
+            canWrite={canWrite}
             launching={launchingId === profile.id}
             busy={busy}
             canMoveUp={index > 0}
             canMoveDown={index < profiles.length - 1}
             onLaunch={() => void handleLaunch(profile)}
             onEdit={() => openEdit(profile)}
+            onRelocate={() => openRelocate(profile)}
             onMove={(offset) => void handleMove(profile, offset)}
             onDelete={() => setDeleting(profile)}
           />
@@ -341,10 +452,21 @@ export function LaunchPanel() {
               配置本机客户端的启动路径与参数，在这里一键唤起。配置只保存在本机。
             </p>
           </div>
-          {canWrite && profiles !== null && profiles.length > 0 && (
-            <Button type="button" size="sm" className="shrink-0" onClick={openCreate}>
-              新增
-            </Button>
+          {profiles !== null && profiles.length > 0 && (
+            <div className="flex shrink-0 items-center gap-1">
+              {/* 「重新检查路径」对只读访客也开放：这是一次读操作，而「路径失效」这条
+                  信息对他同样有用。它放在表头而不是行内，因为它是针对整个列表的动作 ——
+                  一条路径失效往往意味着一批（换机、卸载软件、共享掉线都是成批发生的）。 */}
+              <Button type="button" variant="ghost" size="sm" onClick={handleRecheck}>
+                <RefreshCw />
+                重新检查路径
+              </Button>
+              {canWrite && (
+                <Button type="button" size="sm" onClick={openCreate}>
+                  新增
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
@@ -377,6 +499,7 @@ export function LaunchPanel() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         profile={editing}
+        focusPath={focusPath}
         onSubmit={handleSubmit}
       />
 

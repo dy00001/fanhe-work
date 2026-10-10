@@ -5,6 +5,7 @@ import type {
   InitializeOwnerResponse,
   LaunchProfileListResponse,
   LaunchProfileResponse,
+  LaunchProfileStatusListResponse,
   LoginResponse,
   LogoutResponse,
   MeResponse,
@@ -198,6 +199,21 @@ export function initializeOwnerRequest(input: {
 
 export function launchProfilesRequest(accessToken: string): Promise<LaunchProfileListResponse> {
   return request<LaunchProfileListResponse>('/api/launch/profiles', { method: 'GET', accessToken })
+}
+
+/**
+ * 每条配置的路径状态与最近一次启动。
+ *
+ * 与列表分成两条请求，理由在服务端那一条路由的注释里：这一条要查文件系统，最坏会
+ * 等满超时，而列表本身不该被它拖住。
+ */
+export function launchProfileStatusRequest(
+  accessToken: string,
+): Promise<LaunchProfileStatusListResponse> {
+  return request<LaunchProfileStatusListResponse>('/api/launch/profiles/status', {
+    method: 'GET',
+    accessToken,
+  })
 }
 
 export function createLaunchProfileRequest(

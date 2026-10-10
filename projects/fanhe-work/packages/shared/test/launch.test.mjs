@@ -4,16 +4,22 @@
  * 直接跑构建产物 dist，不跑源码，与 permissions.test.mjs 的理由一致：服务端校验
  * 用的是 dist 里的那份代码，测它才是测真实生效的那份。
  *
- * 这两个函数值得单独测，是因为它们的判断结果不会在界面上直接显现。`isLaunchSoftware`
+ * 这几个函数值得单独测，是因为它们的判断结果不会在界面上直接显现。`isLaunchSoftware`
  * 判错的表现是「列表里某几行图标空白」，`isAbsoluteExecutablePath` 判松了则要等到
  * 用户点击启动、子进程报「找不到文件」时才暴露 —— 那时已经看不出是当初存进去的路径
- * 就有问题。
+ * 就有问题。`isLaunchRunOutcome` 判松的后果更隐蔽：一条手工改出来的脏记录会被显示成
+ * 「启动成功」。
  */
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { LAUNCH_SOFTWARES, isAbsoluteExecutablePath, isLaunchSoftware } from '../dist/index.js'
+import {
+  LAUNCH_SOFTWARES,
+  isAbsoluteExecutablePath,
+  isLaunchRunOutcome,
+  isLaunchSoftware,
+} from '../dist/index.js'
 
 test('盘符路径被认作绝对路径', () => {
   assert.equal(isAbsoluteExecutablePath('C:\\Program Files\\App\\app.exe'), true)
@@ -55,5 +61,20 @@ test('软件标识严格匹配，不做大小写归一', () => {
   // 归一反而会掩盖「清单改过名、库里的旧值没跟着迁」这类问题。
   for (const value of ['WeChat', 'WECHAT', 'custom ', ' custom', 'telegram', '']) {
     assert.equal(isLaunchSoftware(value), false, `应被拒绝：${JSON.stringify(value)}`)
+  }
+})
+
+test('启动结果码只认清单内的取值', () => {
+  assert.equal(isLaunchRunOutcome('success'), true)
+  assert.equal(isLaunchRunOutcome('executable_missing'), true)
+  assert.equal(isLaunchRunOutcome('spawn_failed'), true)
+})
+
+test('认不出的结果码一律判否，不因为「看着像」就放过', () => {
+  // 这条判断的用途是把库里的字符串收窄成联合类型，而**认不出的取值必须落到
+  // 「失败」那一侧** —— 它只可能来自手工改库或回滚到旧版本，把那种行显示成
+  // 「启动成功」是最坏的结果。因此大小写、前后空格、旧版本用过的名字都要判否。
+  for (const value of ['SUCCESS', 'Success', 'success ', ' success', 'ok', 'failed', '']) {
+    assert.equal(isLaunchRunOutcome(value), false, `应被拒绝：${JSON.stringify(value)}`)
   }
 })

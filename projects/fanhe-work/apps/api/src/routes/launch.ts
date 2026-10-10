@@ -5,6 +5,7 @@ import {
   type DeleteLaunchProfileResponse,
   type LaunchProfileListResponse,
   type LaunchProfileResponse,
+  type LaunchProfileStatusListResponse,
   type ReorderLaunchProfilesRequest,
   type RunLaunchProfileResponse,
   type UpdateLaunchProfileRequest,
@@ -13,6 +14,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { requirePermission } from '../auth/guard.js'
 import { runLaunchProfile, type LaunchRunFailureReason } from '../launch/agent.js'
+import { recordLaunchRun } from '../launch/history.js'
 import { isLoopbackAddress } from '../launch/loopback.js'
 import {
   createProfile,
@@ -23,6 +25,7 @@ import {
   updateProfile,
   type LaunchFailureReason,
 } from '../launch/profiles.js'
+import { listProfileStatuses } from '../launch/status.js'
 
 /**
  * 一键登录启动配置的接口。
@@ -180,6 +183,32 @@ export function registerLaunchRoutes(app: FastifyInstance): void {
     },
   )
 
+  /**
+   * 每条配置的当前状态：路径还能不能用、最近一次启动是什么结果。
+   *
+   * **单独一条接口，不并进列表响应。** 列表是「用户存了什么」，这里是「这台机器
+   * 此刻的情况」—— 前者只在用户改动时变化，后者每查一次都可能不同，而且它要查文件
+   * 系统（最坏要等满 `PATH_INSPECT_TIMEOUT_MS`）。并在一起会让列表首屏被一条不可达
+   * 的网络共享拖住，而列表本身完全不需要等它。
+   *
+   * 挂 `read` 而不是 `write`：只读访客也需要看到「这条配置的路径已经失效了」，
+   * 那是关于他自己那份列表的事实，不含任何改动。
+   *
+   * 路径段 `status` 与下面的 `:id` 不会冲突：Fastify 的路由树里静态段优先于参数段，
+   * 与 `order` 是同一条规则。
+   */
+  app.get(
+    '/api/launch/profiles/status',
+    { preHandler: requirePermission(PERMISSIONS.PERSONAL_LAUNCH_READ) },
+    async (request, reply) => {
+      const userId = currentUserId(request)
+      if (userId === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+
+      const body: LaunchProfileStatusListResponse = { statuses: await listProfileStatuses(userId) }
+      return reply.code(200).send(body)
+    },
+  )
+
   app.post<{ Body: CreateLaunchProfileRequest }>(
     '/api/launch/profiles',
     {
@@ -310,7 +339,48 @@ export function registerLaunchRoutes(app: FastifyInstance): void {
       if (profile === null) return sendFailure(reply, 'not_found')
 
       const result = await runLaunchProfile(profile, request.log)
-      if (!result.ok) return sendFailure(reply, result.reason)
+
+      /**
+       * 落启动记录。两条规则。
+       *
+       * **真实启动尝试成功与失败都记，去重请求不记。** 去重复用旧结果，没有新的
+       * 启动尝试；重复记会让连点被误读为多次成功。判断留在拿到代理结果的路由层。
+       *
+       * **等它写完再回响应。** 界面收到结果后会立刻重拉一次状态（为了刷新「上次
+       * 启动」那一行），不等的话那次重拉可能读不到刚写的这一条，摘要会停在上一次 ——
+       * 而用户刚点过启动，那个显示看起来就是错的。写入本身吞异常（见 `history.ts`），
+       * 所以「等」不会把一次成功的启动变成失败。
+       */
+      if (!result.ok) {
+        await recordLaunchRun(
+          {
+            userId,
+            profileId: profile.id,
+            profileName: profile.name,
+            executablePath: profile.executablePath,
+            outcome: result.reason,
+            pid: null,
+            startedAt: new Date().toISOString(),
+          },
+          { logger: request.log },
+        )
+        return sendFailure(reply, result.reason)
+      }
+
+      if (!result.data.deduplicated) {
+        await recordLaunchRun(
+          {
+            userId,
+            profileId: profile.id,
+            profileName: profile.name,
+            executablePath: profile.executablePath,
+            outcome: 'success',
+            pid: result.data.pid,
+            startedAt: result.data.startedAt,
+          },
+          { logger: request.log },
+        )
+      }
 
       const body: RunLaunchProfileResponse = result.data
       return reply.code(200).send(body)

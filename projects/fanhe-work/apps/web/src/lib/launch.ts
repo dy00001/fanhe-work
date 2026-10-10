@@ -1,6 +1,7 @@
 import type {
   CreateLaunchProfileRequest,
   LaunchProfile,
+  LaunchProfileStatus,
   RunLaunchProfileResponse,
   UpdateLaunchProfileRequest,
 } from '@fanhe/shared'
@@ -9,6 +10,7 @@ import { ApiError } from './api'
 import {
   createLaunchProfileRequest,
   deleteLaunchProfileRequest,
+  launchProfileStatusRequest,
   launchProfilesRequest,
   reorderLaunchProfilesRequest,
   runLaunchProfileRequest,
@@ -35,6 +37,17 @@ import { withAccessToken } from './session'
 /** 返回值是只读数组 —— 与共享包里该字段的声明一致，界面不该就地改这份列表。 */
 export function loadLaunchProfiles(): Promise<readonly LaunchProfile[]> {
   return withAccessToken(async (token) => (await launchProfilesRequest(token)).profiles)
+}
+
+/**
+ * 每条配置的路径状态与最近一次启动。
+ *
+ * 与 `loadLaunchProfiles` 分开调用，且**它的失败不算加载失败**：路径状态是附加信息，
+ * 拿不到时列表照常可用（只是不显示失效标记与启动摘要）。把它并进列表那一次请求，
+ * 会让一条不可达的网络共享把整个板块拖成「加载失败」。
+ */
+export function loadLaunchStatuses(): Promise<readonly LaunchProfileStatus[]> {
+  return withAccessToken(async (token) => (await launchProfileStatusRequest(token)).statuses)
 }
 
 export function createLaunchProfile(input: CreateLaunchProfileRequest): Promise<LaunchProfile> {
