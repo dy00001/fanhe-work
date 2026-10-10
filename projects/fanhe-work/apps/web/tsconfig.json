@@ -9,7 +9,16 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // shadcn/ui 的组件源码统一用 `@/...` 引用项目内的模块。别名只在
+    // compilerOptions 里声明，构建侧由 vite.config.ts 的 resolve.alias 对应，
+    // 两处必须同时存在，否则类型检查能过而构建会失败。
+    //
+    // 不写 baseUrl：TypeScript 6 已把它标记为弃用（7.0 起失效），而 paths 在没有
+    // baseUrl 时本来就相对于本文件所在目录解析，写上是多余的一层。
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src"]
 }

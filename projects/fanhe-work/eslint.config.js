@@ -62,6 +62,17 @@ export default [
     },
   },
 
+  // shadcn/ui 的组件源码按官方版本原样搬入，不随项目风格改写。其中 button 与 badge
+  // 既导出组件、又导出 cva 生成的变体常量，触发了 fast refresh 的「只导出组件」
+  // 规则。这条规则约束的是 HMR 边界，代价仅限于这两个文件在编辑时可能整页刷新
+  // 一次，而保持源码能逐行对照官方版本的收益更大，所以在这一层关掉而不是拆文件。
+  {
+    files: ['apps/web/src/components/ui/**/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+
   // Server and shared code, plus the tool configuration files.
   {
     files: ['apps/api/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}', '**/*.config.{js,mjs,ts}'],

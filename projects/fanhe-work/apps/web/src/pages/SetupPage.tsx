@@ -12,6 +12,7 @@ import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth/useAuth'
 import { AuthLayout } from '../components/AuthLayout'
 import { TextField } from '../components/TextField'
+import { Button } from '../components/ui/button'
 import { ApiError, initializeOwnerRequest } from '../lib/api'
 
 /**
@@ -96,7 +97,7 @@ export function SetupPage() {
   return (
     <AuthLayout subtitle="创建超级管理员">
       <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
-        <p className="text-sm leading-relaxed text-ink-soft">
+        <p className="text-sm leading-relaxed text-muted-foreground">
           这是系统的首次初始化。创建的账号拥有全部权限，完成后初始化入口将自动关闭。
         </p>
 
@@ -145,19 +146,15 @@ export function SetupPage() {
         {error !== null && (
           <p
             role="alert"
-            className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700"
+            className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             {error}
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="mt-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" disabled={submitting} className="mt-1">
           {submitting ? '创建中…' : '创建账号'}
-        </button>
+        </Button>
       </form>
     </AuthLayout>
   )

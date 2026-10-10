@@ -1,33 +1,138 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
 
-/* Design tokens for the 方案 B direction, neutral grayscale with a near black
-   accent. Defined once here so every component inherits the same values. */
-@theme {
-  --color-surface: #fafafa;
-  --color-card: #ffffff;
-  --color-line: #e4e4e7;
-  --color-line-soft: #f1f1f3;
-  --color-ink: #09090b;
-  --color-ink-soft: #52525b;
-  --color-ink-faint: #a1a1aa;
-  --color-accent: #18181b;
-  --color-accent-soft: #f4f4f5;
+/* =============================================================================
+   设计令牌：方案 B「现代极简」
+   =============================================================================
+
+   分两层，职责不同，不能合并。
+
+   第一层是 `:root` 里的原始值。它存在的唯一理由是**可以被覆盖**：T2-07 要做的
+   亮暗两套令牌，就是在这里加一个 `.dark` 块覆盖同名变量，组件侧一行都不用动。
+   如果直接把颜色写在 `@theme` 里，Tailwind 会把它们烘进 `:root` 的一次性定义，
+   没有第二个作用域可以插进来。
+
+   第二层是 `@theme inline` 的映射。Tailwind 只认这一层，它据此生成 `bg-background`
+   这类工具类。`inline` 关键字是关键：不加它，Tailwind 会先在 `:root` 生成一份
+   `--color-background: var(--background)`，工具类再引用那份中间变量，多绕一层，
+   而且 `.dark` 覆盖时要同时保证两份都跟着变。加了 `inline`，工具类直接编译成
+   `var(--background)`，覆盖原始值即刻全局生效。
+
+   令牌命名沿用 shadcn/ui 的语义名，不用项目自定义名。原因是组件源码是**原样搬入**
+   的（见 components.json 与 src/components/ui/），它内部引用的就是这套名字。改成
+   自定义名意味着每搬一个组件都要改一遍 import 之外的样式类，此后官方每更新一次
+   组件，diff 里都会混进这些改写，无法判断哪些是官方变更、哪些是我们的本地修改。
+   代价是迁移时要把旧名换成新名，那次迁移只发生一次。
+
+   一处语义反转必须记住：旧令牌里的 `--color-accent` 是**近黑主色**（#18181b），
+   而在 shadcn 体系里主色叫 `primary`，`accent` 指的是**浅灰悬停底色**（#f4f4f5）。
+   同名不同义，看名字猜不出方向，只能对照这张表。旧名到新名的完整映射见
+   docs/DEVELOPMENT-PLAN.md 第 9.21 节。
+   ============================================================================= */
+
+:root {
+  /* 圆角基数。下面的刻度直接从它推，但推不出方案 B 要的三个值，所以刻度是
+     离散写死的，这里只作为需要 `rounded-[var(--radius)]` 时的取值。 */
+  --radius: 8px;
+
+  /* 基础面。背景比卡片略深一档，卡片靠这一档差异从背景里浮起来，不靠阴影。 */
+  --background: #fafafa;
+  --foreground: #09090b;
+
+  /* 卡片与浮层 */
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+
+  /* 主色：方案 B 用近黑而非彩色作为强调色，这是它与常见管理后台最大的差别。 */
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+
+  /* 次级面与静默面。三级文字全部在这里定：正文 foreground、次要 muted-foreground、
+     最弱 muted-foreground-weak。第三级在 shadcn 默认集里没有，是本项目的扩展，
+     用于「可见 N / 共 M 项」这类注释性文字。 */
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #52525b;
+  --muted-foreground-weak: #a1a1aa;
+
+  /* 悬停与选中底色。侧栏选中项用的是这一档，而不是高亮色。 */
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+
+  /* 危险操作。方案 B 几乎不用彩色，这是唯一的例外，且只用于确认删除这类场景。 */
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  /* 描边。border 用于卡片与控件，border-soft 更浅，用于侧栏右边框、面板头分隔这类
+     不需要被看见、只需要被感觉到的线。 */
+  --border: #e4e4e7;
+  --border-soft: #f1f1f3;
+  --input: #e4e4e7;
+  --ring: #18181b;
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@theme inline {
+  /* 圆角。方案 B 的实际规格是「小控件 7–8px、大容器 12px」。Tailwind 默认刻度里
+     rounded-xl 正好是 12px，可以直接用；rounded-md 默认 6px，比规格窄 2px，所以
+     只覆盖这一档到 8px。不覆盖整套刻度是有意的：项目里已有的 rounded-lg 是 8px，
+     重定义整个序列会让它无声地变成别的值，而这类变化在界面上只表现为「圆角看着
+     有点怪」，很难反查回这里。shadcn 的 Button 与 Input 用的正是 rounded-md。 */
+  --radius-md: 8px;
+
+  /* 阴影。方案 B 明确「无阴影」，卡片与控件靠描边和留白分层。shadcn 的组件源码里
+     带 shadow-xs / shadow-sm，与其逐个改组件源码，不如在这里把这两档归零，让源码
+     保持原样。浮层（下拉菜单、气泡）需要一层极浅阴影才能从页面上浮起来，保留
+     md 与 lg，但比 Tailwind 默认值淡得多。 */
+  --shadow-xs: 0 0 #0000;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 8px 24px rgb(0 0 0 / 0.08);
+
+  /* 字体栈。放令牌里是为了让 `font-sans` 与 body 用同一份定义，改一处两边都变。 */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* 语义色映射。左边是 Tailwind 生成工具类用的名字，右边指向上面的原始值。 */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted-foreground-weak: var(--muted-foreground-weak);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
 }
 
-body {
-  margin: 0;
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    'PingFang SC',
-    'Microsoft YaHei',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
+@layer base {
+  /* Tailwind 4 的 `border` 工具类默认取 currentColor，shadcn 的组件源码假设默认边框色
+     是 border 令牌。不补这一条，所有只写 `border` 不写颜色的地方都会跟着文字色走。 */
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    margin: 0;
+  }
 }

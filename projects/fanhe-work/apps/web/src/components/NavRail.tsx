@@ -27,7 +27,7 @@ type NavRailProps = {
  */
 export function NavRail({ items, total, activeCode, onSelect }: NavRailProps) {
   return (
-    <nav className="w-56 shrink-0 border-r border-line bg-card px-3 py-4">
+    <nav className="w-56 shrink-0 border-r border-border bg-card px-3 py-4">
       <ul className="flex flex-col gap-1">
         {items.map((item) => {
           const active = item.code === activeCode
@@ -39,19 +39,21 @@ export function NavRail({ items, total, activeCode, onSelect }: NavRailProps) {
                 aria-current={active ? 'page' : undefined}
                 className={
                   active
-                    ? 'flex w-full items-center justify-between gap-2 rounded-lg bg-accent-soft px-3 py-2 text-left text-sm font-medium text-ink'
-                    : 'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-soft transition-colors hover:bg-surface'
+                    ? 'flex w-full items-center justify-between gap-2 rounded-lg bg-accent px-3 py-2 text-left text-sm font-medium text-foreground'
+                    : 'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent'
                 }
               >
                 <span>{item.label}</span>
-                {item.planned && <span className="shrink-0 text-xs text-ink-faint">开发中</span>}
+                {item.planned && (
+                  <span className="shrink-0 text-xs text-muted-foreground-weak">开发中</span>
+                )}
               </button>
             </li>
           )
         })}
       </ul>
 
-      <p className="mt-4 px-3 text-xs text-ink-faint">
+      <p className="mt-4 px-3 text-xs text-muted-foreground-weak">
         可见 {items.length} / 共 {total} 项
       </p>
     </nav>

@@ -3,6 +3,9 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth/useAuth'
 import { AuthLayout } from '../components/AuthLayout'
 import { TextField } from '../components/TextField'
+import { Button } from '../components/ui/button'
+import { Checkbox } from '../components/ui/checkbox'
+import { Label } from '../components/ui/label'
 import { ApiError } from '../lib/api'
 import {
   clearCredential,
@@ -125,38 +128,34 @@ export function LoginPage() {
         />
 
         <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm text-ink-soft">
-            <input
+          <div className="flex items-center gap-2">
+            <Checkbox
               id="login-remember"
-              type="checkbox"
               checked={remember}
-              onChange={(event) => setRemember(event.target.checked)}
+              onCheckedChange={(checked) => setRemember(checked === true)}
               disabled={submitting}
-              className="h-4 w-4 accent-accent"
             />
-            记住账号密码
-          </label>
+            <Label htmlFor="login-remember" className="text-sm font-normal text-muted-foreground">
+              记住账号密码
+            </Label>
+          </div>
           {/* 把凭据的去向直接写在界面上。用户勾选时有权知道它去了哪里，
               而这件事在实现里看得到、在界面上看不到。 */}
-          <p className="text-xs text-ink-faint">加密后只保存在本机，不会上传到服务器</p>
+          <p className="text-xs text-muted-foreground-weak">加密后只保存在本机，不会上传到服务器</p>
         </div>
 
         {error !== null && (
           <p
             role="alert"
-            className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700"
+            className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             {error}
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="mt-1 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
+        <Button type="submit" disabled={submitting} className="mt-1">
           {submitting ? '登录中…' : '登录'}
-        </button>
+        </Button>
       </form>
     </AuthLayout>
   )

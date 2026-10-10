@@ -1,9 +1,18 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    // Mirrors the `@/*` path mapping in tsconfig.json. shadcn/ui component
+    // sources import through this alias, so both ends have to agree: the
+    // compiler needs it to typecheck, the bundler needs it to resolve.
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   server: {
     // Bind the IPv4 loopback explicitly. Vite defaults to the `localhost`
     // hostname, which on Windows resolves to the IPv6 loopback ::1 only, so

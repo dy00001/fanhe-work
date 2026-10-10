@@ -18,8 +18,8 @@ function AuthGate() {
     // 启动时先问初始化状态、再决定是否静默续期，这中间有一个往返。不做这个
     // 过渡态的话，有会话的用户每次刷新都会先看到登录页闪一下。
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface">
-        <p className="text-sm text-ink-faint">正在检查登录状态…</p>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground-weak">正在检查登录状态…</p>
       </div>
     )
   }

@@ -592,7 +592,7 @@ async function main() {
         `JSON.stringify({
           username: document.querySelector('#login-username').value,
           password: document.querySelector('#login-password').value,
-          remember: document.querySelector('#login-remember').checked,
+          remember: document.querySelector('#login-remember')?.getAttribute('data-state') === 'checked',
         })`,
       ),
     )
