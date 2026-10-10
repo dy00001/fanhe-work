@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.14 |
+| 版本 | v1.15 |
 | 日期 | 2026-10-10 |
 | 上游文档 | `projects/fanhe-work/docs/IMPLEMENTATION-PLAN.md` |
 | 交接文档 | `projects/fanhe-work/docs/HANDOFF-2026-10-10.md` |
 | 选定界面方案 | 方案 B 现代极简，`projects/fanhe-work/docs/mockups/option-b-minimal.html` |
 | 方案对比入口 | `projects/fanhe-work/docs/mockups/index.html` |
 | 载体 | `projects/fanhe-work/` |
-| 当前状态 | 阶段一任务已全部完成（T1-01 至 T1-12），阶段二前三项 T2-01（shadcn/ui 与设计令牌）、T2-02（布局骨架）、T2-03（路由体系）已完成，下一项为 T2-04 占位页。验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选 |
+| 当前状态 | 阶段一任务已全部完成（T1-01 至 T1-12），阶段二前四项 T2-01（shadcn/ui 与设计令牌）、T2-02（布局骨架）、T2-03（路由体系）、T2-04（占位页）已完成，下一项为 T2-05 错误与空状态。验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选 |
 
 ---
 
@@ -340,7 +340,7 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 交付物为左侧导航、路由体系、主题令牌、三个占位页、错误与空状态页。
 
 - [ ] 导航折叠状态可记忆
-- [ ] 占位页正确显示「功能开发中」
+- [x] 占位页正确显示「功能开发中」
 - [x] 界面与方案 B 的设计令牌一致
 - [x] 子路由可直接访问
 
@@ -432,11 +432,12 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | 交接文档 | 已完成 | `docs/HANDOFF-2026-10-10.md`，含当日成果、关键决策、未解决问题、后续待办、逐文件清单与换机步骤。见 9.16 |
 | T2-01 shadcn/ui 与设计令牌 | 已完成 | 新增 `apps/web/components.json`、`src/lib/utils.ts` 与 `src/components/ui/` 下 14 个官方组件源码；`index.css` 改为两层令牌结构并统一到 shadcn 语义命名，现有界面 60 余处类名同步迁移；`TextField` 内部改用 `Input` 与 `Label`，登录与初始化按钮改用 `Button`，记住账号密码改用 `Checkbox`。接入路线与四处源码修正见 9.21 |
 | T2-02 布局骨架 | 已完成 | 新增 `components/Sidebar.tsx`（224px / 折叠 64px，折叠态用气泡提示补名称）、`components/TopBar.tsx`（56px，含面包屑、禁用态全局搜索、账号下拉菜单）与 `components/AppShell.tsx`（`h-screen` 应用式外壳，内容区独立滚动、最大宽度 1080px）；`NavRail.tsx` 删除，`HomePage` 改为使用骨架。规格取舍与端到端脚本的一处必要改造见 9.22 |
-| T2-03 路由体系 | 已完成 | 新增 `apps/web/src/routes.tsx`（路由表由 `NAV_ITEMS` 派生：无路径布局路由承载外壳，五个模块为子路由，落地页与未匹配路径重定向，模块守卫复用 `resolveActiveNav`）、`pages/ModulePage.tsx`（统一模块头部）、`pages/WorkbenchPage.tsx`（个人工作台落地内容）、`pages/NoAccessPage.tsx`（可见清单为空的兜底）、`auth/useVisibleNavItems.ts`（三个调用点共用一份可见清单）；共享包 `navigation.ts` 新增 `navPath` 与 `navCodeFromPath`（含 4 项回归测试）；依赖加 `react-router@8.4.0`，`HomePage.tsx` 删除。判断与一处测试断言修正见 9.23 |
+| T2-03 路由体系 | 已完成 | 新增 `apps/web/src/routes.tsx`（路由表由 `NAV_ITEMS` 派生：无路径布局路由承载外壳，五个模块为子路由，落地页与未匹配路径重定向，模块守卫复用 `resolveActiveNav`）、`pages/ModulePage.tsx`（统一模块头部，T2-04 改名为 `components/ModuleHeader.tsx`）、`pages/WorkbenchPage.tsx`（个人工作台落地内容）、`pages/NoAccessPage.tsx`（可见清单为空的兜底）、`auth/useVisibleNavItems.ts`（三个调用点共用一份可见清单）；共享包 `navigation.ts` 新增 `navPath` 与 `navCodeFromPath`（含 4 项回归测试）；依赖加 `react-router@8.4.0`，`HomePage.tsx` 删除。判断与一处测试断言修正见 9.23 |
+| T2-04 占位页 | 已完成 | 新增 `apps/web/src/pages/PlaceholderPage.tsx`（统一「功能开发中」页：模块图标、标题、占位标记、规划范围与返回落地模块的入口）与 `apps/web/src/lib/nav-icons.ts`（导航图标表抽出，侧栏与占位页共用，避免两处各写一份）；`routes.tsx` 改为按 `planned` 分派（占位项走 PlaceholderPage，已落地项走各自页面）；`pages/ModulePage.tsx` 收敛为 `components/ModuleHeader.tsx`（只剩页头职责，`WorkbenchPage` 改用）；端到端占位断言从 1 项扩到 3 项。判断与「三个占位页」的口径澄清见 9.24 |
 
 ### 9.2 待办
 
-1. 阶段一的任务与阶段二前三项 T2-01、T2-02、T2-03 均已完成，下一项是 **T2-04 占位页**：把当前 `ModulePage` 里内联的「功能开发中」标注换成统一的独立页面（含规划范围说明与操作入口），规格见实施方案第五章「占位项的处理」。**T2-03 已把阶段一留下的两处临时形态换掉**：选中项从 `HomePage` 的 `useState` 换成 URL（`NavLink` 由地址判定激活），顶栏面包屑的标题改为从 URL 解析；两者共用同一个 `resolveActiveNav`，判断本身一字未动。组件清单与令牌规格已在 T2-01 落定，T2-04 起是在这套令牌与路由之上加页面，不再涉及体系本身。
+1. 阶段一的任务与阶段二前四项 T2-01、T2-02、T2-03、T2-04 均已完成，下一项是 **T2-05 错误与空状态**（P1）：404、500 与空列表的统一呈现，各状态要有明确文案与操作入口，依赖 T2-01 的组件体系（`components/ui/` 里已有 `empty` 与 `skeleton` 可用）。**T2-04 已把 T2-03 留下的 `ModulePage` 收敛为页头**（`components/ModuleHeader.tsx`），占位渲染移交 `pages/PlaceholderPage.tsx`，路由表按 `planned` 分派。阶段二还剩 T2-05、T2-06 折叠偏好记忆、T2-07 主题令牌三项。
 2. 组件清单与令牌规格已在 T2-01 落定，见 9.21。**新增界面一律从 `apps/web/src/components/ui/` 取组件，不要再手写等价元素**：同一件东西两种实现时，差异只会在改令牌或换主题时才暴露，而那时已经很难判断是哪一处漏改。T2-02 已把 `NavRail` 换掉，剩余的 `AuthLayout` 与 `HomePage` 内容区手写元素随 T2-03 一并处理。
 3. `users.passwordChangedAt` 已在 T1-01 建表时留下，schema 注释写的是「改密后旧令牌立即失效」，但 T1-04 签发访问令牌时并未把它写进载荷，因此目前改密不会让已签发的访问令牌失效。补齐需要在访问令牌里加 `pwd` 声明并在校验时比对，属于改密流程的一部分，等该功能排期时一并处理。
 4. username 的大小写归一已在 T1-08 落地，`packages/shared/src/account.ts` 是唯一实现，账号创建与登录查询两侧都走它。尚未覆盖的是**改名**：账号管理功能排期后，改名必须复用同一个 `normalizeUsername`，并在改名前用归一后的值查一次冲突，否则会出现「改成一个只差大小写的名字」而库侧唯一约束恰好拦不住的情形。目前用得上唯一约束冲突检测的入口只有首次初始化。
@@ -904,5 +905,23 @@ bash ../../infra/portable/ws-run.sh pnpm install
 **本次验证结果。** 门禁 `format` / `lint` / `typecheck` / `test` / `format:check` 全绿，shared 31 项加 api 85 项合计 116 项，0 跳过。前端生产构建通过（JS 421.94 kB，gzip 137.51 kB；CSS 37.67 kB，gzip 7.35 kB），JS 较 T2-02 增加约 38.5 kB，来自 react-router。浏览器级端到端验证从 25 项增至 **26 项**，新增「直接访问 `/system-settings` 落到该模块且地址栏未被改写」，全部通过。数据库在验证后回到基线：四张流水表 0 行，种子 11 / 4 / 29 完好。
 
 **边界：阶段二还剩三项。** 「导航折叠状态可记忆」的折叠状态目前仍是 `AppShell` 内的 `useState`，刷新即回到展开态，属 T2-06；「占位页正确显示功能开发中」目前由 `ModulePage` 的统一头部内联渲染，带规划范围与操作入口的独立页面属 T2-04；顶栏面包屑仍只有一级，二级导航随阶段三模块落地后再加，结构已留成 `BreadcrumbList` 加单个 `BreadcrumbItem`，届时只加元素、不改外层。
+
+### 9.24 T2-04 实施中的几处判断
+
+**占位页的判据是 `planned`，不是 `module === null`。** 两者正交：系统设置已绑 `system` 段权限，可见性条件不是 `null`，但它仍是占位项。若按 `module === null` 分派，系统设置在将来定义权限点的那一刻会漏掉占位页，直接渲染出一个空模块。这条在 9.19 已经写下，T2-04 是它的第一次实际兑现。
+
+**「三个占位页」的口径需要澄清。** 任务表与阶段交付物写的是「三个占位页」，而共享包里 `planned` 为真的实际是四项：客户信息平台、运营信息平台、数据看板、系统设置。文档里的「三个占位项」指的是 `module` 为 `null` 的那三项（见 9.2 待办第 5 项与 9.19），系统设置因为已绑 `system` 段权限，在同一段文字里被单独计数，于是形成了「三个」与「四项」两种说法。T2-04 按 `planned` 实现，覆盖全部四项，验收点「三个占位模块进入后均显示该页」自然成立。此后描述占位页数量时以 `planned` 为真为准。
+
+**`ModulePage` 收敛为页头，并改名为 `ModuleHeader`。** T2-03 时 `ModulePage` 同时承担两件事：已排期模块的页头，以及占位模块的「功能开发中」标注。占位渲染移交 `PlaceholderPage` 之后，它只剩页头一件事，名字里的 `Page` 就成了误导。改为 `components/ModuleHeader.tsx`（从 `pages/` 移到 `components/`，因为它现在是表现组件而非页面），去掉占位标注分支，`WorkbenchPage` 改用。不把这两行标记摊进各页面，是因为标题与规划说明的排版在已落地模块页上一致，各写一份改一次要改多处。
+
+**导航图标表抽到 `lib/nav-icons.ts`。** 占位页的页头需要一个模块图标，而图标表原本在 `Sidebar.tsx` 内部。两处各写一份的话，新增模块时漏改一处，表现是「侧栏有图标而占位页没有」或两处图标不一致。抽到 `lib` 之后两个消费方共用一份，`Record<NavCode, LucideIcon>` 的类型约束保证新增模块时编译期报错。
+
+**操作入口指向落地模块，不指向浏览器历史。** `navigate(-1)` 在直接输入地址进来时无历史可回，会把人留在原地或弹回站外。指向第一个可见模块（即登录后的落地页）与历史无关，刷新或深链接进来都能用。落地项恰好是本模块时（某角色只可见一个占位模块）不渲染按钮，避免出现点了不动的链接。
+
+**占位页的内容取舍。** 页面给出四样东西：模块图标、标题加「功能开发中」标记、规划范围、返回入口。规划范围直接取自共享包的 `NavItem.summary`，将来模块落地时改共享包一处即可，不必回来改页面。没有给「预计上线时间」这类信息，因为它没有依据，写上去只会变成一句没人维护的文案。
+
+**本次验证结果。** 门禁 `format` / `lint` / `typecheck` / `test` / `format:check` 全绿，shared 31 项加 api 85 项合计 116 项，0 跳过。前端生产构建通过（JS 423.96 kB，gzip 138.03 kB；CSS 37.92 kB，gzip 7.39 kB），JS 较 T2-03 增加约 2 kB，来自新的占位页与图标表抽出后的重组。浏览器级端到端验证从 26 项增至 **28 项**，新增「占位页注明规划范围」与「占位页提供返回落地模块的入口」，并把原先只看「功能开发中」四个字的那一项细化为「进入统一占位页」；点返回入口回落地页的路径一并覆盖。全部通过。数据库在验证后回到基线：四张流水表 0 行，种子 11 / 4 / 29 完好。
+
+**边界：阶段二还剩三项。** 折叠偏好记忆属 T2-06（折叠状态仍是 `AppShell` 内的 `useState`，刷新即回展开态）；错误与空状态属 T2-05（`PlaceholderPage` 与 `NoAccessPage` 是两种具体状态，404 与 500 的统一页面尚未做）；亮暗两套令牌属 T2-07。
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
