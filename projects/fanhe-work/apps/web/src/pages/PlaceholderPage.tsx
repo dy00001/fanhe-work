@@ -2,7 +2,7 @@ import { navPath, type NavItem } from '@fanhe/shared'
 import { Link } from 'react-router'
 
 import { useVisibleNavItems } from '../auth/useVisibleNavItems'
-import { EmptyState } from '../components/EmptyState'
+import { EmptyState } from '../components/StateView'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { NAV_ICONS } from '../lib/nav-icons'

@@ -1,11 +1,18 @@
 import type {
   ApiErrorResponse,
+  CreateLaunchProfileRequest,
+  DeleteLaunchProfileResponse,
   InitializeOwnerResponse,
+  LaunchProfileListResponse,
+  LaunchProfileResponse,
   LoginResponse,
   LogoutResponse,
   MeResponse,
   RefreshResponse,
+  ReorderLaunchProfilesRequest,
+  RunLaunchProfileResponse,
   SetupStatusResponse,
+  UpdateLaunchProfileRequest,
 } from '@fanhe/shared'
 
 /**
@@ -59,7 +66,7 @@ export class ApiError extends Error {
 }
 
 type RequestOptions = {
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   accessToken?: string | null
 }
@@ -175,5 +182,82 @@ export function initializeOwnerRequest(input: {
   return request<InitializeOwnerResponse>('/api/setup/initialize', {
     method: 'POST',
     body: input,
+  })
+}
+
+/**
+ * 启动配置的六条接口。
+ *
+ * 全部要访问令牌，由 `lib/launch.ts` 经 `withAccessToken` 附加 —— 这一层只负责
+ * 「拼地址、发请求、把失败规范化」，与上面的认证接口一致。
+ *
+ * **id 一律经过 `encodeURIComponent`。** 它来自服务端返回的 UUID，理论上不含需要
+ * 转义的字符，但路径是拼接出来的字符串：一旦上游某天换成用户可控的标识，未转义的
+ * 值可以直接改写请求路径（`../` 之类）。这一行是零成本的兜底。
+ */
+
+export function launchProfilesRequest(accessToken: string): Promise<LaunchProfileListResponse> {
+  return request<LaunchProfileListResponse>('/api/launch/profiles', { method: 'GET', accessToken })
+}
+
+export function createLaunchProfileRequest(
+  accessToken: string,
+  input: CreateLaunchProfileRequest,
+): Promise<LaunchProfileResponse> {
+  return request<LaunchProfileResponse>('/api/launch/profiles', {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+export function updateLaunchProfileRequest(
+  accessToken: string,
+  id: string,
+  input: UpdateLaunchProfileRequest,
+): Promise<LaunchProfileResponse> {
+  return request<LaunchProfileResponse>(`/api/launch/profiles/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 重排。
+ *
+ * 提交**整个列表的 id 顺序**（见共享包里该结构的注释），因此这里收的是一个数组而不是
+ * 「某条挪到某处」。返回重排后的完整列表 —— 界面按服务端落库的结果重绘，不自己推算。
+ */
+export function reorderLaunchProfilesRequest(
+  accessToken: string,
+  ids: readonly string[],
+): Promise<LaunchProfileListResponse> {
+  const body: ReorderLaunchProfilesRequest = { ids }
+  return request<LaunchProfileListResponse>('/api/launch/profiles/order', {
+    method: 'PUT',
+    body,
+    accessToken,
+  })
+}
+
+export function deleteLaunchProfileRequest(
+  accessToken: string,
+  id: string,
+): Promise<DeleteLaunchProfileResponse> {
+  return request<DeleteLaunchProfileResponse>(`/api/launch/profiles/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+/** 启动。请求体为空 —— 能启动什么完全由服务端那条配置决定。 */
+export function runLaunchProfileRequest(
+  accessToken: string,
+  id: string,
+): Promise<RunLaunchProfileResponse> {
+  return request<RunLaunchProfileResponse>(`/api/launch/profiles/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    accessToken,
   })
 }

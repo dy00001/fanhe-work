@@ -1,6 +1,6 @@
 import { TriangleAlert } from 'lucide-react'
 
-import { EmptyState } from '../components/EmptyState'
+import { EmptyState } from '../components/StateView'
 import { Button } from '../components/ui/button'
 
 type ErrorPageProps = {

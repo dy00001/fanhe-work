@@ -3,7 +3,7 @@ import { FileQuestion } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { useVisibleNavItems } from '../auth/useVisibleNavItems'
-import { EmptyState } from '../components/EmptyState'
+import { EmptyState } from '../components/StateView'
 import { Button } from '../components/ui/button'
 
 /**

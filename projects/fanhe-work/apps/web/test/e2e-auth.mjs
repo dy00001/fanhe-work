@@ -1,7 +1,8 @@
 /**
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
  * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 折叠偏好跨刷新保持 →
- * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
+ * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除 →
+ * 启动通道的新增、编辑、排序、启动与删除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -19,7 +20,9 @@
  *   1. 数据库处于「未初始化」状态，即 users 表为空。否则首次初始化页不会出现，
  *      第 1 项必然失败。重置方法：
  *        docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \
- *          "delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
+ *          "delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
+ *      启动配置要一起清掉：删除是软删除，跑完之后 `launch_profiles` 里会留下几行
+ *      `deletedAt` 非空的记录，不清的话下一次跑会带着这些行进来。
  *   2. 启动 API 时把访问令牌有效期压短，否则续期要等 15 分钟才发生，观察窗口
  *      内什么也看不到：
  *        ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api
@@ -47,6 +50,20 @@ const OWNER = {
 
 /** 续期检查能容忍的最大访问令牌有效期。超过它就等不到刷新请求。 */
 const MAX_OBSERVABLE_TTL_SECONDS = 65
+
+/** 本次验证创建的启动配置。名字带 zz_ 前缀，与真实配置区分。 */
+const LAUNCH_PROFILE_A = { name: 'zz_e2e_微信', renamed: 'zz_e2e_微信改名' }
+const LAUNCH_PROFILE_B = { name: 'zz_e2e_自定义' }
+
+/**
+ * 启动通道里被拉起的程序：当前这个 Node。
+ *
+ * 用 `process.execPath` 有三个好处：一定是绝对路径（表单校验要放行）、一定存在
+ * （脚本能跑起来就说明它在）、参数让它立刻退出 —— 验证的是「工作台把一个进程创建
+ * 出来了」，不需要真的拉起某个客户端，也就不会在跑完之后于机器上留下一堆窗口。
+ */
+const LAUNCH_TARGET_PATH = process.execPath
+const LAUNCH_TARGET_ARGS = '-e\nprocess.exit(0)'
 
 const CHROME_CANDIDATES = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -198,12 +215,21 @@ function waitFor(expression, timeoutMs, label) {
   })`
 }
 
-/** 填受控输入。直接赋 value 不会触发 React 的 onChange，必须走原生 setter 再派发 input。 */
+/**
+ * 填受控输入。直接赋 value 不会触发 React 的 onChange，必须走原生 setter 再派发 input。
+ *
+ * setter 按元素类型取：`textarea` 的 value 描述符挂在 `HTMLTextAreaElement.prototype` 上，
+ * 拿 `HTMLInputElement` 的那一份去调用会抛「Illegal invocation」。两者的用法完全一样，
+ * 所以不另开一个函数 —— 调用方只需给出选择器。
+ */
 function fillInput(selector, value) {
   return `(() => {
     const input = document.querySelector(${JSON.stringify(selector)})
     if (!input) throw new Error('找不到输入框 ' + ${JSON.stringify(selector)})
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    const proto = input.tagName === 'TEXTAREA'
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set
     setter.call(input, ${JSON.stringify(value)})
     input.dispatchEvent(new Event('input', { bubbles: true }))
     return true
@@ -274,6 +300,76 @@ function clickNavByLabel(label) {
     return true
   })()`
 }
+
+/**
+ * 在启动通道的某一行里按文字点一个按钮。
+ *
+ * 先按行名定位那一行，再在行内找按钮 —— 直接用全局选择器会点到别的行：列表里每一行
+ * 都有「启动」按钮，`[...document.querySelectorAll('button')].find(...)` 命中的永远是
+ * 第一条，于是「点第二条的启动」这类断言会静默地测错对象。
+ *
+ * 行名用 `textContent.includes` 匹配而不是精确相等：一行的文本里还拼着软件标签与
+ * 参数个数，整串比较不现实。名字都带 `zz_` 前缀，不会互相包含。
+ */
+function clickRowButton(rowName, buttonText) {
+  return `(() => {
+    const rows = [...document.querySelectorAll('main ul li')]
+    const row = rows.find((item) => item.textContent.includes(${JSON.stringify(rowName)}))
+    if (!row) throw new Error('找不到行：' + ${JSON.stringify(rowName)})
+    const button = [...row.querySelectorAll('button')].find((item) => item.textContent.trim() === ${JSON.stringify(buttonText)})
+    if (!button) throw new Error('这一行里找不到按钮：' + ${JSON.stringify(buttonText)})
+    button.click()
+    return true
+  })()`
+}
+
+/**
+ * 返回某一行里「更多操作」按钮的元素，交给 `mouseClick`。
+ *
+ * 菜单按钮走真实指针事件（理由见 `mouseClick`），所以这里只负责找到它，不负责点。
+ */
+function rowMenuFinder(rowName) {
+  return `(() => {
+    const rows = [...document.querySelectorAll('main ul li')]
+    const row = rows.find((item) => item.textContent.includes(${JSON.stringify(rowName)}))
+    if (!row) throw new Error('找不到行：' + ${JSON.stringify(rowName)})
+    const button = [...row.querySelectorAll('button')].find((item) => (item.getAttribute('aria-label') ?? '').startsWith('更多操作'))
+    if (!button) throw new Error('这一行没有更多操作按钮')
+    return button
+  })()`
+}
+
+/** 按文字找到当前展开的下拉菜单项。 */
+function menuItemFinder(text) {
+  return `[...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.includes(${JSON.stringify(text)}))`
+}
+
+/**
+ * 打开某一行的操作菜单。
+ *
+ * 点之前必须先确认「没有浮层还开着」。Radix 的对话框与下拉菜单在关闭动画期间仍留在
+ * DOM 里：对话框的全屏遮罩会吃掉这一击，菜单触发器在自身关闭动画未结束时也会忽略
+ * 点击。两种情况的失败表现都是「菜单没打开」，而单跑这一段又往往正常 —— 因为那时
+ * 没有前一步留下的浮层，所以它是个只在完整流程里出现的时序问题。
+ */
+async function openRowMenu(client, rowName) {
+  await evaluate(
+    client,
+    waitFor(`document.querySelector('[role="dialog"]') === null`, 5000, '对话框关闭'),
+  )
+  await evaluate(
+    client,
+    waitFor(`document.querySelector('[role="menuitem"]') === null`, 5000, '下拉菜单关闭'),
+  )
+  await mouseClick(client, rowMenuFinder(rowName), `更多操作：${rowName}`)
+  await evaluate(
+    client,
+    waitFor(`document.querySelector('[role="menuitem"]') !== null`, 5000, '操作菜单展开'),
+  )
+}
+
+/** 启动通道列表里各行的文本，用于判断顺序。 */
+const ROW_TEXTS = `JSON.stringify([...document.querySelectorAll('main ul li')].map((item) => item.textContent))`
 
 /**
  * 在页面里挂钩 fetch，统计发往 /api/auth/ 的请求，并记下登录响应里的令牌有效期。
@@ -390,7 +486,7 @@ async function assertUninitialized() {
     throw new Error(
       '数据库已经完成初始化，首次初始化页不会出现。先重置再跑：\n' +
         '  docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \\\n' +
-        '    "delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
+        '    "delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
     )
   }
 }
@@ -519,19 +615,36 @@ async function main() {
     record('错误密码显示统一文案', wrongText.includes('用户名或密码不正确'), wrongText)
     await screenshot(client, '3-login-error')
 
-    // 5. 勾选「记住账号密码」后用正确密码登录，应进入主界面并展示权限点。
+    // 5. 勾选「记住账号密码」后用正确密码登录，应进入主界面。
+    //
+    //    判据是「已登录外壳挂上」而不是某段正文。T3-03 之前这里等的是工作台上的
+    //    「权限点」诊断板块，而那块内容随启动通道落地已被移除 —— 等正文的断言会在
+    //    内容改版时无声地失效（它等的那句话可能只是恰好还在）。账号菜单只存在于
+    //    已登录外壳里，与当前落在哪个模块无关。
     await evaluate(client, clickSelector('#login-remember'))
     await evaluate(client, fillInput('#login-password', OWNER.password))
     await evaluate(client, clickSelector('button[type="submit"]'))
-    await evaluate(client, waitFor(`document.body.innerText.includes('权限点')`, 25000, '主界面'))
-    const homeText = await evaluate(client, 'document.body.innerText')
-    record(
-      '登录成功后进入主界面',
-      homeText.includes(OWNER.displayName),
-      `显示名 ${OWNER.displayName}`,
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[aria-label="账号菜单"]') !== null`, 25000, '主界面'),
     )
-    record('主界面展示展开后的权限点', homeText.includes('11 项'), '')
-    record('主界面展示角色名', homeText.includes('超级管理员'), '')
+    record('登录成功后进入主界面', true, '')
+
+    // 账号与角色从工作台搬到了顶栏账号菜单（诊断板块在 T3-03 移除），展开一次即可
+    // 核对这两项。角色名取自共享包的 `ROLES`，与服务端引用同一份常量。
+    await mouseClick(client, `document.querySelector('[aria-label="账号菜单"]')`, '账号菜单')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitem"]') !== null`, 5000, '账号菜单展开'),
+    )
+    const accountPanel = await evaluate(
+      client,
+      `document.querySelector('[role="menu"]')?.innerText ?? ''`,
+    )
+    record('账号菜单展示显示名', accountPanel.includes(OWNER.displayName), '')
+    record('账号菜单展示角色名', accountPanel.includes('超级管理员'), '')
+    // 收起菜单，后面的截图与断言保持在无浮层状态。再点一次触发器即可 toggle。
+    await mouseClick(client, `document.querySelector('[aria-label="账号菜单"]')`, '账号菜单')
 
     // 5a. 凭据已加密落盘。断言三件事：结构只有约定的三个字段、不含账号明文、
     //     不含密码明文。只判断「存在」是不够的 —— 明文同样满足存在。
@@ -756,8 +869,11 @@ async function main() {
       )
     }
 
-    const afterText = await evaluate(client, 'document.body.innerText')
-    record('续期过程中未掉回登录页', afterText.includes('权限点'), '')
+    const stillInShell = await evaluate(
+      client,
+      `document.querySelector('[aria-label="账号菜单"]') !== null`,
+    )
+    record('续期过程中未掉回登录页', stillInShell === true, '')
 
     const authCalls = JSON.parse(await evaluate(client, 'JSON.stringify(window.__e2e.authCalls)'))
     console.log(`     期间发出的鉴权请求：${authCalls.join(' → ')}`)
@@ -1164,10 +1280,10 @@ async function main() {
     //     所以要等它完成再断言。
     //
     //     判据是「已登录外壳挂上」而不是某段正文。登出不会改写地址栏，7d 那一步把
-    //     地址留在了 `/workbench`，所以等「权限点」这一段此刻恰好能通过 —— 但那是
-    //     巧合：地址停在哪个模块取决于前一个小节最后点了什么，任何一处调整都会让
-    //     等特定正文的断言无声地失效。等账号菜单这种只存在于已登录外壳里的元素，
-    //     与落地在哪个模块无关。
+    //     地址留在了 `/workbench`，所以等某段落在工作台上的正文此刻恰好能通过 ——
+    //     但那是巧合：地址停在哪个模块取决于前一个小节最后点了什么，任何一处调整
+    //     都会让等特定正文的断言无声地失效。等账号菜单这种只存在于已登录外壳里的
+    //     元素，与落地在哪个模块无关。
     await evaluate(client, clickSelector('#login-remember'))
     await evaluate(client, clickSelector('button[type="submit"]'))
     await evaluate(
@@ -1184,6 +1300,261 @@ async function main() {
       cleared = false
     }
     record('取消勾选后登录，已保存的凭据被清除', cleared, '')
+
+    // 8c. 启动通道。T3-03 的验收点：配置可新增、编辑、排序，可一键唤起。
+    //
+    //     被拉起的程序是当前这个 Node（见 `LAUNCH_TARGET_PATH` 的注释），所以这一段
+    //     不会在机器上留下窗口，也不依赖本机装没装微信或 QQ。
+    //
+    //     位置放在最后：这一段会新增并删除配置，虽然结束时回到空态，但过程中会往
+    //     数据库里写行；排在前面的话，任何一步失败都会让后面的断言面对一份不干净的
+    //     数据，而失败原因会被埋在一堆连锁失败里。
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main h1')?.innerText === '个人工作台'`, 8000, '个人工作台'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('还没有启动配置')`,
+        10000,
+        '启动通道空态',
+      ),
+    )
+    record('启动通道空态给出新增入口', true, '')
+    await screenshot(client, '8a-launch-empty')
+
+    // 先试一个相对路径：客户端校验必须当场拦下，而不是提交后收一个 400。判据里包含
+    // 「对话框还开着」—— 只断言出现了错误文案的话，一个先关闭再报错的实现也能通过。
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '新增配置')`,
+      '空态的新增配置按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '新增对话框'),
+    )
+    const createTitle = await evaluate(
+      client,
+      `document.querySelector('[role="dialog"] h2')?.innerText ?? ''`,
+    )
+    record('空态入口能打开新增对话框', createTitle.includes('新增启动配置'), createTitle)
+
+    await evaluate(client, fillInput('#launch-name', LAUNCH_PROFILE_A.name))
+    await evaluate(client, fillInput('#launch-path', 'relative\\path.exe'))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('[role="dialog"]')?.innerText.includes('必须是绝对路径') === true`,
+        5000,
+        '相对路径校验',
+      ),
+    )
+    record('相对路径被客户端拦下且对话框不关闭', true, '')
+
+    // 改正后保存。路径与参数都填上，顺带覆盖「一行一个参数」的解析。
+    await evaluate(client, fillInput('#launch-path', LAUNCH_TARGET_PATH))
+    await evaluate(client, fillInput('#launch-args', LAUNCH_TARGET_ARGS))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') === null`, 8000, '新增对话框关闭'),
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelectorAll('main ul li').length === 1`, 8000, '列表出现一条'),
+    )
+    const firstRow = await evaluate(client, `document.querySelector('main ul li').innerText`)
+    record(
+      '新增后列表出现一条配置',
+      firstRow.includes(LAUNCH_PROFILE_A.name) && firstRow.includes('微信'),
+      firstRow.replace(/\s+/g, ' ').slice(0, 80),
+    )
+    record('启动参数按行解析为两个', firstRow.includes('2 个参数'), '')
+    await screenshot(client, '8b-launch-one')
+
+    // 再新增一条，用来验证排序。
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '新增')`,
+      '列表非空时的新增按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '第二次新增对话框'),
+    )
+    await evaluate(
+      client,
+      `(() => {
+        const button = [...document.querySelectorAll('#launch-software button')].find((item) => item.textContent.trim() === '自定义程序')
+        if (!button) throw new Error('找不到自定义程序选项')
+        button.click()
+        return true
+      })()`,
+    )
+    await evaluate(client, fillInput('#launch-name', LAUNCH_PROFILE_B.name))
+    await evaluate(client, fillInput('#launch-path', LAUNCH_TARGET_PATH))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelectorAll('main ul li').length === 2`, 8000, '列表出现两条'),
+    )
+    const orderBefore = JSON.parse(await evaluate(client, ROW_TEXTS))
+    record(
+      '新增的配置排在末尾',
+      orderBefore[0].includes(LAUNCH_PROFILE_A.name) &&
+        orderBefore[1].includes(LAUNCH_PROFILE_B.name),
+      orderBefore.map((text) => text.slice(0, 12)).join(' / '),
+    )
+
+    // 把第一条下移一格，顺序应当交换。判据是两行的实际先后，不是「点了没报错」——
+    // 排序失败时界面什么都不会变，而那正是最需要被抓住的情况。
+    await evaluate(client, clickSelector(`[aria-label="下移 ${LAUNCH_PROFILE_A.name}"]`))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li')][0]?.textContent.includes(${JSON.stringify(LAUNCH_PROFILE_B.name)}) === true`,
+        8000,
+        '下移后顺序交换',
+      ),
+    )
+    const orderAfter = JSON.parse(await evaluate(client, ROW_TEXTS))
+    record(
+      '下移一格后两条互换位置',
+      orderAfter[0].includes(LAUNCH_PROFILE_B.name) &&
+        orderAfter[1].includes(LAUNCH_PROFILE_A.name),
+      orderAfter.map((text) => text.slice(0, 12)).join(' / '),
+    )
+    // 首项不能上移、末项不能下移。不置灰的话点下去什么都不会发生，看起来像界面卡了。
+    const edges = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          up: document.querySelector('[aria-label="上移 ${LAUNCH_PROFILE_B.name}"]')?.disabled,
+          down: document.querySelector('[aria-label="下移 ${LAUNCH_PROFILE_A.name}"]')?.disabled,
+        })`,
+      ),
+    )
+    record(
+      '首项不能上移、末项不能下移',
+      edges.up === true && edges.down === true,
+      JSON.stringify(edges),
+    )
+    await screenshot(client, '8c-launch-reordered')
+
+    // 启动。被拉起的进程立刻退出，所以这里只能断言「接口回了成功结果」——工作台本来
+    // 也不管子进程的生死，spawn 之后它的存活就与工作台无关了。
+    await evaluate(client, clickRowButton(LAUNCH_PROFILE_A.name, '启动'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('已启动')`, 15000, '启动结果提示'),
+    )
+    const launchNotice = await evaluate(client, `document.querySelector('main').innerText`)
+    record('点击启动后提示已启动', launchNotice.includes(`已启动「${LAUNCH_PROFILE_A.name}」`), '')
+
+    // 编辑。带出原值是这一步的关键：带错的话保存下去就是「把 B 改成了 A」，
+    // 而界面上只表现为名字变了，看不出内容串了行。
+    await openRowMenu(client, LAUNCH_PROFILE_A.name)
+    await mouseClick(client, menuItemFinder('编辑'), '编辑菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '编辑对话框'),
+    )
+    const prefilled = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          title: document.querySelector('[role="dialog"] h2')?.innerText ?? '',
+          name: document.querySelector('#launch-name')?.value ?? '',
+          path: document.querySelector('#launch-path')?.value ?? '',
+          args: document.querySelector('#launch-args')?.value ?? '',
+        })`,
+      ),
+    )
+    record(
+      '编辑对话框带出原有值',
+      prefilled.title.includes('编辑启动配置') &&
+        prefilled.name === LAUNCH_PROFILE_A.name &&
+        prefilled.path === LAUNCH_TARGET_PATH &&
+        prefilled.args === LAUNCH_TARGET_ARGS,
+      prefilled.name,
+    )
+
+    await evaluate(client, fillInput('#launch-name', LAUNCH_PROFILE_A.renamed))
+    await evaluate(client, clickSelector('[role="dialog"] button[type="submit"]'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') === null`, 8000, '编辑对话框关闭'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes(${JSON.stringify(LAUNCH_PROFILE_A.renamed)})`,
+        8000,
+        '改名生效',
+      ),
+    )
+    const orderAfterEdit = JSON.parse(await evaluate(client, ROW_TEXTS))
+    record(
+      '编辑保存后名称更新且顺序不变',
+      orderAfterEdit[0].includes(LAUNCH_PROFILE_B.name) &&
+        orderAfterEdit[1].includes(LAUNCH_PROFILE_A.renamed),
+      orderAfterEdit.map((text) => text.slice(0, 14)).join(' / '),
+    )
+
+    // 删除。先出确认框 —— 这一条不可撤销，直接删掉的风险高于多点一次。
+    await openRowMenu(client, LAUNCH_PROFILE_B.name)
+    await mouseClick(client, menuItemFinder('删除'), '删除菜单项')
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('[role="dialog"]')?.innerText.includes('删除启动配置') === true`,
+        5000,
+        '删除确认对话框',
+      ),
+    )
+    const confirmText = await evaluate(
+      client,
+      `document.querySelector('[role="dialog"]').innerText`,
+    )
+    record('删除前先出确认框并说明删的是哪一条', confirmText.includes(LAUNCH_PROFILE_B.name), '')
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent.trim() === '删除')`,
+      '确认删除按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelectorAll('main ul li').length === 1`, 8000, '删除后剩一条'),
+    )
+    const remaining = await evaluate(client, `document.querySelector('main ul li').innerText`)
+    record('删除后该条从列表消失', remaining.includes(LAUNCH_PROFILE_A.renamed), '')
+
+    // 删掉最后一条应回到空态。这条路径与「删掉其中一条」不同：列表变空之后渲染的是
+    // 空态分支，而不是一个零行的列表 —— 后者会留下一块空白，看不出是没数据还是没加载出来。
+    await openRowMenu(client, LAUNCH_PROFILE_A.renamed)
+    await mouseClick(client, menuItemFinder('删除'), '删除菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认对话框'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent.trim() === '删除')`,
+      '确认删除按钮',
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('还没有启动配置')`,
+        8000,
+        '删空后回到空态',
+      ),
+    )
+    record('删掉最后一条后回到空态', true, '')
+    await screenshot(client, '8d-launch-cleared')
 
     // 9. 渲染层无错误。这是本脚本存在的理由。
     record(

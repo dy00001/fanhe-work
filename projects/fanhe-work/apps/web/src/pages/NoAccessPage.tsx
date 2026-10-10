@@ -1,7 +1,7 @@
 import { ShieldOff } from 'lucide-react'
 
 import { useAuth } from '../auth/useAuth'
-import { EmptyState } from '../components/EmptyState'
+import { EmptyState } from '../components/StateView'
 import { Button } from '../components/ui/button'
 
 /**
