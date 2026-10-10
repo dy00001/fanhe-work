@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from 'react-router'
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
 import { NoAccessPage } from './pages/NoAccessPage'
+import { NotFoundPage } from './pages/NotFoundPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
@@ -20,8 +21,9 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  * 状态与滚动位置因此不会丢。若把五个模块写成平级路由、各自再包一层外壳，切一次
  * 模块就重挂一次外壳，折叠状态会被重置回展开。
  *
- * 未匹配的路径统一回到落地页。真正的 404 页面属 T2-05，届时把这条 catch-all
- * 换成它即可。
+ * 未匹配的路径渲染 404 页，不重定向。重定向会把地址栏改写成落地页的地址，用户
+ * 看不出自己输错了什么，而保留原地址能让「复制给别人看」得到同样的结果。404 页
+ * 在外壳之内，侧栏与顶栏照常在位，用户可以直接切到别的模块。
  */
 export function AppRoutes() {
   const visibleItems = useVisibleNavItems()
@@ -40,7 +42,7 @@ export function AppRoutes() {
           <Route key={item.code} path={item.code} element={<ModuleRoute code={item.code} />} />
         ))}
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   )

@@ -2,6 +2,7 @@ import { BrowserRouter } from 'react-router'
 
 import { AuthProvider } from './auth/AuthProvider'
 import { useAuth } from './auth/useAuth'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
 import { AppRoutes } from './routes'
@@ -44,7 +45,14 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <AuthGate />
+        {/*
+          错误边界放在认证提供者之内、门禁之外。放在门禁之外是因为登录页与初始化页
+          同样可能渲染期抛错，只包住已登录的部分会漏掉那两个界面；放在提供者之内是
+          因为边界自身渲染的 500 页要能读到认证上下文，而提供者若抛错，它也无力接住。
+        */}
+        <ErrorBoundary>
+          <AuthGate />
+        </ErrorBoundary>
       </BrowserRouter>
     </AuthProvider>
   )

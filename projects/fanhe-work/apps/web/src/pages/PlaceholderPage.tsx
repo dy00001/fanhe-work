@@ -2,6 +2,7 @@ import { navPath, type NavItem } from '@fanhe/shared'
 import { Link } from 'react-router'
 
 import { useVisibleNavItems } from '../auth/useVisibleNavItems'
+import { EmptyState } from '../components/EmptyState'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { NAV_ICONS } from '../lib/nav-icons'
@@ -22,6 +23,9 @@ import { NAV_ICONS } from '../lib/nav-icons'
  * 历史无关，刷新或深链接进来都能用。落地项恰好是本模块时（某角色只可见一个占位模块）
  * 不渲染按钮，避免出现一个点了不动的链接。
  *
+ * **「功能开发中」的标记不进标题。** 放进 `h1` 会让读屏软件念出「系统设置功能开发中」，
+ * 而它只是状态标注。因此标题只放模块名，标记与规划范围一起进说明区。
+ *
  * 这一页只承担体验职责，与权限无关：能否进入某个模块由路由守卫与服务端判定。
  */
 export function PlaceholderPage({ item }: { item: NavItem }) {
@@ -30,26 +34,23 @@ export function PlaceholderPage({ item }: { item: NavItem }) {
   const Icon = NAV_ICONS[item.code]
 
   return (
-    <section className="rounded-xl border border-border bg-card px-8 py-14">
-      <div className="mx-auto flex max-w-sm flex-col items-center text-center">
-        <div className="flex size-14 items-center justify-center rounded-xl bg-accent">
-          <Icon className="size-6 text-muted-foreground" />
-        </div>
-
-        <div className="mt-5 flex items-center gap-2">
-          <h1 className="text-base font-medium text-foreground">{item.label}</h1>
+    <EmptyState
+      icon={Icon}
+      title={item.label}
+      description={
+        <span className="flex flex-col items-center gap-1.5">
           <Badge variant="secondary">功能开发中</Badge>
-        </div>
-
-        <p className="mt-4 text-xs text-muted-foreground-weak">规划范围</p>
-        <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{item.summary}</p>
-
-        {landing !== null && landing.code !== item.code && (
-          <Button asChild variant="outline" size="sm" className="mt-7">
+          <span className="text-xs text-muted-foreground-weak">规划范围</span>
+          <span>{item.summary}</span>
+        </span>
+      }
+      action={
+        landing === null || landing.code === item.code ? undefined : (
+          <Button asChild variant="outline" size="sm">
             <Link to={navPath(landing.code)}>返回{landing.label}</Link>
           </Button>
-        )}
-      </div>
-    </section>
+        )
+      }
+    />
   )
 }

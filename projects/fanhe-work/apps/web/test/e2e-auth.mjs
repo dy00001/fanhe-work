@@ -1,7 +1,7 @@
 /**
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
- * 切换模块 → 静默续期 → 直接访问子路由 → 登出 → 重新打开后凭据自动带出 →
- * 取消勾选后凭据被清除。
+ * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 登出 → 重新打开后
+ * 凭据自动带出 → 取消勾选后凭据被清除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -57,6 +57,27 @@ function findBrowser() {
   const found = CHROME_CANDIDATES.find((path) => existsSync(path))
   if (!found) throw new Error('没有找到 Chrome 或 Edge')
   return found
+}
+
+/**
+ * 浏览器 profile 的落点：真正的系统临时目录。
+ *
+ * **不能用 `os.tmpdir()`。** 经工作空间入口运行时，`TEMP` 与 `TMP` 已被重定向到 U 盘上
+ * 的 `.tmp/`，`os.tmpdir()` 读的正是这两个变量，于是 profile 又落回了 U 盘 —— 注释里
+ * 那条「不放 U 盘」的理由看起来成立，实际不成立。实测确认过：入口下 `os.tmpdir()`
+ * 返回 `E:\fanhe Work\.tmp`。绕开被重定向的变量，改从 `LOCALAPPDATA` 推（它不在重定向
+ * 映射表里）。非 Windows 环境退回 `os.tmpdir()`。
+ *
+ * 为什么在意落点：profile 里是 IndexedDB 与 localStorage 的后端文件，访问模式是随机
+ * 小 IO，而工作空间在 U 盘上 —— 同一份 profile 落在 U 盘时打开一次 IndexedDB 要 5.8 秒，
+ * 落在系统盘是毫秒级。这是项目约定「重型产物移出 U 盘」的一个具体落点。
+ */
+function systemTempDir() {
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA
+    if (localAppData) return join(localAppData, 'Temp')
+  }
+  return tmpdir()
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -325,16 +346,12 @@ async function main() {
   }
 
   // 每次用全新 profile，保证 localStorage 干净，也让断言不依赖上一次运行的残留。
-  //
-  // 放在系统临时目录，不放截图目录。profile 里是 IndexedDB 与 localStorage 的后端
-  // 文件，访问模式是随机小 IO，而工作空间在 U 盘上 —— 实测同一份 profile 落在 U 盘
-  // 时打开一次 IndexedDB 要 5.8 秒，落在系统盘是毫秒级。这是项目约定「重型产物移出
-  // U 盘」的一个具体落点。
+  // 落点的选择与理由见 `systemTempDir()`。
   //
   // 必须是绝对路径。传相对路径时 Chrome 不会报参数错误，而是弹一个模态对话框
   // 说「无法对其数据目录执行读写操作」，然后卡在那里等用户点确定 —— 调试端口
   // 始终不开，外部只看到「CDP 目标未就绪」，看不出真正原因。
-  const userDataDir = join(tmpdir(), `fanhe-work-e2e-${process.pid}`)
+  const userDataDir = join(systemTempDir(), `fanhe-work-e2e-${process.pid}`)
   await rm(userDataDir, { recursive: true, force: true })
 
   const browserPath = findBrowser()
@@ -716,6 +733,68 @@ async function main() {
     )
     await screenshot(client, '5b-deep-link')
 
+    // 7c. 未匹配的路径落到 404 页，且地址栏保持不变。T2-03 时这里是重定向回落地页，
+    //     代价是地址栏被改写成 `/workbench`，用户看不出自己输错了什么，只会觉得
+    //     「点了之后莫名其妙到了别处」。三条判据：正文是 404 的文案、地址栏仍是输入的
+    //     那个路径、面包屑回落到应用名而不是某个模块名。
+    //
+    //     用整页导航而不是客户端跳转，顺带验证了「服务器把未知路径交回给前端」——
+    //     生产环境缺了 SPA 回退配置时，这一步会直接拿到服务器的 404 而不是应用界面。
+    const notFoundLoaded = client.once('Page.loadEventFired')
+    await client.send('Page.navigate', { url: `${APP_URL}/no-such-module` })
+    await notFoundLoaded
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '页面不存在'`,
+        20000,
+        '未知路径 404 页',
+      ),
+    )
+    const notFound = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          path: location.pathname,
+          panel: document.querySelector('main').innerText,
+          header: document.querySelector('header').innerText,
+        })`,
+      ),
+    )
+    record(
+      '未知路径落到 404 页且地址栏未被改写',
+      notFound.path === '/no-such-module' && notFound.panel.includes('这个地址没有对应的页面'),
+      `路径 ${notFound.path}`,
+    )
+    record(
+      '404 页的面包屑回落到应用名',
+      notFound.header.includes('梵禾 Work') && !notFound.header.includes('个人工作台'),
+      notFound.header.trim().replace(/\s+/g, ' '),
+    )
+    await screenshot(client, '5c-not-found')
+
+    // 7d. 404 页的出口可用。出口指向落地模块而不是浏览器历史：直接输入地址进来时
+    //     没有历史可回，`navigate(-1)` 会把人留在原地或弹回站外。这一段走完地址栏
+    //     停在 `/workbench`，下一节的登出不会改写它。
+    await evaluate(
+      client,
+      `(() => {
+        const link = [...document.querySelectorAll('main a')].find((item) => item.textContent.includes('返回'))
+        if (!link) throw new Error('404 页找不到返回入口')
+        link.click()
+        return true
+      })()`,
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '个人工作台'`,
+        5000,
+        '404 页返回落地模块',
+      ),
+    )
+    record('404 页的返回入口指向落地模块', true, '')
+
     // 8. 登出应清掉本地令牌并回到登录页。
     //    退出登录从顶栏的裸按钮移进了账号菜单（T2-02 的布局骨架），要多两步：
     //    先点开菜单，等菜单项真的挂上 DOM，再点它。菜单的展开与选中都依赖真实
@@ -778,11 +857,11 @@ async function main() {
     //     账号密码这时已经带出在输入框里，直接提交即可。清除发生在登录成功之后，
     //     所以要等它完成再断言。
     //
-    //     判据是「已登录外壳挂上」而不是某段正文：登出不会改写地址栏，而上一节的
-    //     深链接验证把地址留在了 `/system-settings`，再次登录会**原样落到系统设置
-    //     模块**（这正是 App.tsx 里刻意保留深链接的行为）。系统设置是占位模块，
-    //     内容区没有个人工作台才有的「权限点」段落，等那段文案必然超时。等账号
-    //     菜单这种只存在于已登录外壳里的元素，与落地在哪个模块无关。
+    //     判据是「已登录外壳挂上」而不是某段正文。登出不会改写地址栏，7d 那一步把
+    //     地址留在了 `/workbench`，所以等「权限点」这一段此刻恰好能通过 —— 但那是
+    //     巧合：地址停在哪个模块取决于前一个小节最后点了什么，任何一处调整都会让
+    //     等特定正文的断言无声地失效。等账号菜单这种只存在于已登录外壳里的元素，
+    //     与落地在哪个模块无关。
     await evaluate(client, clickSelector('#login-remember'))
     await evaluate(client, clickSelector('button[type="submit"]'))
     await evaluate(

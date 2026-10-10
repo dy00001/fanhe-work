@@ -38,7 +38,14 @@ export function AppShell() {
   // 激活项从 URL 解析，不再由组件状态驱动。`resolveActiveNav` 在这里只用来取
   // 顶栏面包屑的标题；真正决定渲染哪个模块的是 routes.tsx 里的守卫，两者用的是
   // 同一个函数与同一份可见清单。
-  const activeItem = resolveActiveNav(visibleItems, navCodeFromPath(pathname))
+  const requested = navCodeFromPath(pathname)
+  const activeItem = resolveActiveNav(visibleItems, requested)
+
+  // 未匹配到一级导航的路径由路由渲染 404 页，面包屑此时回落到应用名（传 null），
+  // 而不是显示第一个模块的名称 —— 后者会让地址栏写着陌生路径、面包屑却说是个人
+  // 工作台。根路径要排除：它是落地页重定向的中转，重定向完成前也会走到这里。
+  const breadcrumbTitle =
+    requested === null && pathname !== '/' ? null : (activeItem?.label ?? null)
 
   // 类型上不可能为空：外壳只挂载在 authenticated 状态下。判空是为了收窄类型，
   // 必须放在所有 hook 之后。
@@ -56,7 +63,7 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          title={activeItem?.label ?? null}
+          title={breadcrumbTitle}
           user={user}
           roleName={roleName}
           onLogout={() => {

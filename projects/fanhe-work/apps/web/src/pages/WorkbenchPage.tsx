@@ -1,6 +1,8 @@
 import { PERMISSION_CATALOG, ROLES, type NavItem } from '@fanhe/shared'
+import { ShieldOff } from 'lucide-react'
 
 import { useAuth } from '../auth/useAuth'
+import { EmptyState } from '../components/EmptyState'
 import { ModuleHeader } from '../components/ModuleHeader'
 
 /**
@@ -60,7 +62,14 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
           </span>
         </h2>
         {permissions.length === 0 ? (
-          <p className="mt-3 text-sm text-muted-foreground">当前角色没有任何权限点。</p>
+          // 内联形态：卡片自身已有标题「权限点」，这里再出一个页面级标题会破坏层级。
+          <EmptyState
+            variant="plain"
+            icon={ShieldOff}
+            title="当前角色没有任何权限点"
+            description="权限点由角色决定，请联系管理员调整角色后再试。"
+            className="mt-3"
+          />
         ) : (
           <ul className="mt-3 flex flex-col gap-2">
             {permissions.map((code) => {
