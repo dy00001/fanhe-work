@@ -584,9 +584,9 @@ async function main() {
       ),
     )
 
-    // 5c. 切换导航项应切换内容区，占位项标注「功能开发中」。这一段走的是守卫的正常
-    //     路径（请求的项可见时直接采用）。回退路径由单元测试覆盖 —— 触发它需要在会话
-    //     存续期间改动权限，而那要等账号管理接口落地。
+    // 5c. 切换导航项应切换内容区。占位模块进入统一的占位页，页面注明规划范围并提供
+    //     返回落地模块的入口。这一段走守卫的正常路径（请求项可见时直接采用）；回退路径
+    //     由单元测试覆盖 —— 触发它需要在会话存续期间改动权限，而那要等账号管理接口落地。
     await evaluate(client, clickNavByLabel('系统设置'))
     await evaluate(
       client,
@@ -597,10 +597,33 @@ async function main() {
       ),
     )
     const systemPanel = await evaluate(client, `document.querySelector('main').innerText`)
-    record('点击占位项后内容区标注功能开发中', systemPanel.includes('功能开发中'), '')
+    record('点击占位项进入统一占位页', systemPanel.includes('功能开发中'), '')
+    record(
+      '占位页注明规划范围',
+      systemPanel.includes('规划范围') && systemPanel.includes('账号、角色与审计日志管理'),
+      '',
+    )
+    const backHref = await evaluate(
+      client,
+      `(() => {
+        const link = [...document.querySelectorAll('main a')].find((item) => item.textContent.includes('返回'))
+        return link ? link.getAttribute('href') : null
+      })()`,
+    )
+    record('占位页提供返回落地模块的入口', backHref === '/workbench', `href=${backHref}`)
     await screenshot(client, '4b-nav-system')
 
-    await evaluate(client, clickNavByLabel('个人工作台'))
+    // 5d. 点占位页的返回入口应回到个人工作台，且不再出现占位标注。用入口本身返回，
+    //     而不是再点一次侧栏，顺带把「操作入口真的可用」纳入覆盖。
+    await evaluate(
+      client,
+      `(() => {
+        const link = [...document.querySelectorAll('main a')].find((item) => item.textContent.includes('返回'))
+        if (!link) throw new Error('找不到返回入口')
+        link.click()
+        return true
+      })()`,
+    )
     await evaluate(
       client,
       waitFor(

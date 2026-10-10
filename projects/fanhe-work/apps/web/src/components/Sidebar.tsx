@@ -1,35 +1,11 @@
 import { navPath, type NavItem } from '@fanhe/shared'
-import {
-  ChartPie,
-  ChevronLeft,
-  ChevronRight,
-  LayoutGrid,
-  Settings,
-  TrendingUp,
-  Users,
-  type LucideIcon,
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { NavLink, type NavLinkRenderProps } from 'react-router'
 
+import { NAV_ICONS } from '../lib/nav-icons'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
-
-/**
- * 导航项的图标。
- *
- * 图标留在前端，与 `packages/shared/src/navigation.ts` 的分工一致：共享包放信息
- * 架构（编号、名称、可见性），表现层的东西放应用内。类型写成 `Record<NavCode, ...>`
- * 而不是 `Partial<...>`，是为了让新增导航项时**编译期**就报错 —— 漏配图标的表现
- * 是那一项没有图标而其他项都有，属于看得见但很容易被忽略的那类不一致。
- */
-const NAV_ICONS: Record<NavItem['code'], LucideIcon> = {
-  workbench: LayoutGrid,
-  customer: Users,
-  ops: TrendingUp,
-  dashboard: ChartPie,
-  'system-settings': Settings,
-}
 
 type SidebarProps = {
   /** 已按当前权限过滤后的导航项，顺序即界面顺序。 */

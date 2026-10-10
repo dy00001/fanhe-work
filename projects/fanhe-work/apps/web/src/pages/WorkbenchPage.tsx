@@ -1,7 +1,7 @@
 import { PERMISSION_CATALOG, ROLES, type NavItem } from '@fanhe/shared'
 
 import { useAuth } from '../auth/useAuth'
-import { ModulePage } from './ModulePage'
+import { ModuleHeader } from '../components/ModuleHeader'
 
 /**
  * 个人工作台的落地内容。
@@ -11,8 +11,9 @@ import { ModulePage } from './ModulePage'
  * 让登录、会话续期与权限可见范围有一个可观察的验证面。这段诊断内容随阶段三
  * 三板块落地后移除。
  *
- * 与占位模块的区别在于个人工作台 `planned` 为 false，`ModulePage` 因此不渲染
- * 「功能开发中」标注 —— 它是本期在做的模块，不是预留占位。
+ * 页头用 `ModuleHeader`。它与占位页的区别由路由表决定：个人工作台 `planned` 为
+ * false，路由分派给本页；占位模块交给 `PlaceholderPage`。两个页面各自持有自己的
+ * 呈现方式，不再由一个组件按标志位切换。
  */
 export function WorkbenchPage({ item }: { item: NavItem }) {
   const { user, permissions } = useAuth()
@@ -28,7 +29,7 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <ModulePage item={item} />
+      <ModuleHeader item={item} />
 
       <section className="rounded-xl border border-border bg-card p-6">
         <h2 className="text-base font-medium text-foreground">当前账号</h2>

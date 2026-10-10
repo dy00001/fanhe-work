@@ -3,8 +3,8 @@ import { Navigate, Route, Routes } from 'react-router'
 
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
-import { ModulePage } from './pages/ModulePage'
 import { NoAccessPage } from './pages/NoAccessPage'
+import { PlaceholderPage } from './pages/PlaceholderPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
 /**
@@ -70,11 +70,14 @@ function ModuleRoute({ code }: { code: NavCode }) {
   if (target === null) return <NoAccessPage />
   if (target.code !== code) return <Navigate to={navPath(target.code)} replace />
 
-  // 个人工作台是本期在做的模块，其余四项仍是占位。两者的差别只是页面内容，
-  // 路由与守卫完全一致。
-  return target.code === NAV_CODES.WORKBENCH ? (
-    <WorkbenchPage item={target} />
-  ) : (
-    <ModulePage item={target} />
-  )
+  // 占位模块统一走 PlaceholderPage。分派按 `planned` 而不是按「是否等于 workbench」：
+  // 将来某个模块落地时，只需把共享包里的 `planned` 置为 false 并在这里补一条已落地
+  // 分支，占位这一侧不必再动。
+  if (target.planned) return <PlaceholderPage item={target} />
+
+  if (target.code === NAV_CODES.WORKBENCH) return <WorkbenchPage item={target} />
+
+  // 共享包新增了 `planned` 为 false 却还没有对应页面的模块时的兜底。渲染占位页而不是
+  // 抛错：界面保持可用，且「功能开发中」的标注比一片空白更容易被注意到。
+  return <PlaceholderPage item={target} />
 }
