@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 
+import { registerAuthSupport } from './auth/guard.js'
 import { registerAuthRoutes } from './routes/auth.js'
 
 /**
@@ -22,6 +23,9 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
       },
     },
   })
+
+  // 认证结果的容器必须在注册任何使用守卫的路由之前挂上。
+  registerAuthSupport(app)
 
   app.get('/api/health', async () => ({
     status: 'ok',

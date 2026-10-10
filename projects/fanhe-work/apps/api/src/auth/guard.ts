@@ -1,0 +1,187 @@
+import { ALL_PERMISSIONS, hasPermission, type PermissionCode } from '@fanhe/shared'
+import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify'
+
+import { prisma } from '../db/prisma.js'
+import { verifyAccessToken } from './tokens.js'
+
+/**
+ * 服务端的认证与授权守卫。
+ *
+ * 分成两步，职责不重叠。**认证**回答「你是谁」，只解析访问令牌并确认账号可用。
+ * **授权**回答「你能不能做这件事」，在认证结果之上比对权限点。
+ *
+ * 权限校验只能发生在服务端。前端的菜单隐藏与按钮禁用承担的是体验职责，任何人
+ * 改一个请求就能绕过。两边的权限点取自同一份常量（`@fanhe/shared`），但只有
+ * 服务端这一步是强制的。
+ */
+
+export type AuthContext = {
+  userId: string
+  username: string
+  displayName: string
+  roleCode: string
+  permissions: readonly PermissionCode[]
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * 当前请求的认证结果。null 表示未认证，由守卫在解析成功后写入。
+     *
+     * 用 null 而不是 undefined 作为初值，是因为 Fastify 的 decorateRequest
+     * 需要一个确定的默认值，而 undefined 在序列化与判空上更容易被误判。
+     */
+    authContext: AuthContext | null
+  }
+}
+
+/**
+ * 挂上认证结果的容器。必须在注册任何使用守卫的路由之前调用。
+ *
+ * Fastify 要求自定义属性通过 decorateRequest 声明，直接往 request 上赋值会
+ * 绕开它对该对象的形状优化。
+ */
+export function registerAuthSupport(app: FastifyInstance): void {
+  app.decorateRequest('authContext', null)
+}
+
+const KNOWN_PERMISSIONS = new Set<string>(ALL_PERMISSIONS)
+
+/**
+ * 把库里的权限码收窄成已知的权限点。
+ *
+ * 库里可能存在清单里已经删掉的权限点，例如权限清单调整后种子还没重跑。这些码
+ * 在精确匹配下本来也命中不了任何 required，把它们过滤掉是为了让「权限只能来自
+ * 这份清单」在类型层面也成立，而不是靠调用方自觉。
+ */
+function toPermissionCodes(codes: readonly string[]): PermissionCode[] {
+  return codes.filter((code): code is PermissionCode => KNOWN_PERMISSIONS.has(code))
+}
+
+/**
+ * 解析访问令牌，加载账号与权限。
+ *
+ * **每次请求都查库，不做缓存。** 访问令牌本身是无状态的，但授权必须有状态：
+ * 权限点不放进令牌，否则改了角色授权后旧令牌仍带着旧权限，要等它过期才生效，
+ * 而撤权需要立刻生效。加一层缓存会把这条保证退化成「最多延迟 N 秒」，且延迟
+ * 长短取决于缓存是否命中，排查时看不出来。将来真要优化，正确做法是给角色加
+ * 版本号、在授权变更时递增，而不是给缓存设一个拍脑袋的 TTL。
+ *
+ * 既然这趟查询本来就要做，顺带把 status 与 deletedAt 读出来。账号被停用或
+ * 删除后，已经签发的访问令牌立刻失效，不必等它自然过期。
+ */
+async function resolveAuthContext(request: FastifyRequest): Promise<AuthContext | null> {
+  const header = request.headers.authorization
+  if (header === undefined || !header.startsWith('Bearer ')) {
+    return null
+  }
+
+  const token = header.slice('Bearer '.length).trim()
+  if (token === '') {
+    return null
+  }
+
+  const claims = await verifyAccessToken(token)
+  if (claims === null) {
+    return null
+  }
+
+  // claims.sub 来自我们自己签发的令牌，签名校验已经保证了它的来源，因此不必
+  // 担心它不是一个合法的 UUID。若在这里加一层格式判断，掩盖的是「签名校验被
+  // 绕过」这种更严重的问题。
+  const user = await prisma.user.findUnique({
+    where: { id: claims.sub },
+    select: {
+      id: true,
+      username: true,
+      displayName: true,
+      status: true,
+      deletedAt: true,
+      role: {
+        select: {
+          code: true,
+          rolePermissions: {
+            where: { permission: { deletedAt: null } },
+            select: { permission: { select: { code: true } } },
+          },
+        },
+      },
+    },
+  })
+
+  if (user === null || user.deletedAt !== null || user.status !== 'active') {
+    return null
+  }
+
+  return {
+    userId: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    roleCode: user.role.code,
+    permissions: toPermissionCodes(user.role.rolePermissions.map((row) => row.permission.code)),
+  }
+}
+
+/**
+ * 取当前请求的认证结果，同一次请求内只查一次库。
+ *
+ * 失败不写入缓存，因此同一请求内若有多个守卫，未认证时可能重复查库。这条路径
+ * 上第一个守卫就已经返回 401，重复只发生在「一个路由挂了多个守卫且请求未认证」
+ * 这个罕见组合里，为它加一个「已尝试」标记不值得。
+ */
+async function loadAuthContext(request: FastifyRequest): Promise<AuthContext | null> {
+  const cached = request.authContext
+  if (cached !== null) {
+    return cached
+  }
+
+  const context = await resolveAuthContext(request)
+  if (context !== null) {
+    request.authContext = context
+  }
+  return context
+}
+
+function sendUnauthorized(reply: FastifyReply): FastifyReply {
+  return reply
+    .code(401)
+    .header('www-authenticate', 'Bearer')
+    .send({ error: 'unauthorized', message: '请先登录' })
+}
+
+/** 要求已认证。通过后 `request.authContext` 一定有值。 */
+export const requireAuth: preHandlerHookHandler = async (request, reply) => {
+  const context = await loadAuthContext(request)
+  if (context === null) {
+    return sendUnauthorized(reply)
+  }
+}
+
+/**
+ * 要求持有指定权限点。
+ *
+ * 权限点用 `PermissionCode` 类型而不是字符串，调用方只能从 `@fanhe/shared`
+ * 的清单里取值。写错一个字母会在编译期被拒绝，而不是变成一个永远返回 403 的
+ * 路由 —— 后者在联调时表现为「权限配了却不生效」，排查方向会先落到数据库上。
+ */
+export function requirePermission(required: PermissionCode): preHandlerHookHandler {
+  return async (request, reply) => {
+    const context = await loadAuthContext(request)
+    if (context === null) {
+      return sendUnauthorized(reply)
+    }
+
+    if (!hasPermission(context.permissions, required)) {
+      // 403 要记日志。与登录失败不同，这里已经知道是谁在访问，拒绝记录是排查
+      // 「权限配错了」与「有人在试探」的唯一依据。
+      request.log.warn(
+        { userId: context.userId, role: context.roleCode, required },
+        'permission denied',
+      )
+      return reply.code(403).send({
+        error: 'forbidden',
+        message: '没有执行该操作的权限',
+      })
+    }
+  }
+}

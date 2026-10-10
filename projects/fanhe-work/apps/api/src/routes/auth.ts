@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 
+import { requireAuth } from '../auth/guard.js'
 import { login } from '../auth/login.js'
 import { logout, rotateRefreshToken, type LogoutScope } from '../auth/session.js'
 import { env } from '../config/env.js'
@@ -152,4 +153,26 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       return reply.code(200).send(result)
     },
   )
+
+  app.get('/api/auth/me', { preHandler: requireAuth }, async (request, reply) => {
+    const auth = request.authContext
+
+    // requireAuth 已经保证这里不为 null，判断只是为了收窄类型。真出现 null 说明
+    // 守卫没有挂上，那时返回 401 比抛一个 500 更贴近事实。
+    if (auth === null) {
+      return reply.code(401).send({ error: 'unauthorized', message: '请先登录' })
+    }
+
+    // 权限点一并返回。前端据此渲染菜单与按钮的可见性，服务端仍然独立校验，
+    // 两边引用的是同一份常量。前端拿到的是「可以展示什么」，不是「可以做什么」。
+    return reply.code(200).send({
+      user: {
+        id: auth.userId,
+        username: auth.username,
+        displayName: auth.displayName,
+        role: auth.roleCode,
+      },
+      permissions: auth.permissions,
+    })
+  })
 }
