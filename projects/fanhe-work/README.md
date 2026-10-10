@@ -107,12 +107,13 @@ Server listening at http://127.0.0.1:8787
 | `pnpm dev:api` | 只启动后端 |
 | `pnpm build` | 全仓构建 |
 | `pnpm typecheck` | 全仓类型检查 |
+| `pnpm test` | 全仓测试 |
 | `pnpm lint` | 全仓静态检查 |
 | `pnpm lint:fix` | 静态检查并自动修复 |
 | `pnpm format` | 按 Prettier 规则格式化 |
 | `pnpm format:check` | 只检查格式，不写入 |
 
-提交前建议依次跑 `pnpm lint`、`pnpm typecheck`、`pnpm format:check`。
+提交前建议依次跑 `pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm format:check`。
 
 数据库相关的命令会连接 PostgreSQL，需要先按下一节的说明准备好 `apps/api/.env`。
 
@@ -123,6 +124,7 @@ Server listening at http://127.0.0.1:8787
 | `pnpm db:generate` | 由 schema 生成 Prisma 客户端到 `apps/api/src/generated/prisma` |
 | `pnpm db:migrate` | 开发期创建并应用迁移 |
 | `pnpm db:deploy` | 只应用已有迁移，不创建新迁移，用于部署 |
+| `pnpm db:seed` | 写入权限点与内置角色，可重复执行 |
 | `pnpm db:studio` | 打开数据浏览器 |
 
 `db:generate` 的产物已被忽略，不进版本控制。`build` 与 `typecheck` 都会先跑一次 `prisma generate`，所以新克隆的仓库不需要额外准备步骤。
@@ -137,7 +139,7 @@ projects/fanhe-work/
 │   │   └── prisma/   数据模型与迁移；客户端生成到 src/generated/prisma
 │   └── desktop/      Electron 外壳，阶段四启用
 ├── packages/
-│   └── shared/       跨端共享的类型与常量，构建产物在 dist
+│   └── shared/       跨端共享的类型与常量，构建产物在 dist，测试在 test
 ├── data/             本地数据与数据库卷，不纳入版本控制
 └── docs/             规划文档、执行文档与 UI 预览稿
 ```
@@ -209,14 +211,17 @@ Copy-Item .env.example .env
 ```powershell
 docker compose up -d --wait   # 启动数据库并等到健康
 pnpm db:deploy                # 应用仓库里已有的迁移
+pnpm db:seed                  # 写入权限点与内置角色
 pnpm db:ping                  # 确认连得上、表都在
 ```
 
 改了 `apps/api/prisma/schema.prisma` 之后：
 
 ```powershell
-pnpm db:migrate    # 生成新迁移并应用
+pnpm db:migrate    # 生成新迁移并应用，随后自动跑一次种子
 ```
+
+`db:migrate` 走的是 `prisma migrate dev`，而 `prisma.config.ts` 里的 `migrations.seed` 指向种子脚本，所以迁移完成后会自动执行它。
 
 仓库里的首个迁移 `20261010150103_init` 建立六张账号权限表，已应用到 PostgreSQL 16.15，并用 `prisma migrate diff --from-config-datasource --to-schema` 确认无漂移（差异为空）。同一份 DDL 也曾在 PGlite 上执行过，那是数据库还不可达时的验证手段。
 
@@ -226,6 +231,29 @@ pnpm db:migrate    # 生成新迁移并应用
 pnpm --filter @fanhe/api exec prisma migrate diff `
   --from-config-datasource --to-schema prisma/schema.prisma --script
 ```
+
+### 种子数据
+
+`pnpm db:seed` 只写三类数据：11 个权限点、4 个内置角色、以及角色与权限的关联（展开后共 29 条）。
+
+**不创建任何账号。** 超级管理员由首次初始化引导创建（T1-08），在界面里由人设定用户名与密码。种子里塞一个带默认口令的管理员是最常见的一类事故来源：它会在每台部署过的机器上都存在，而且没人记得改。
+
+权限点与角色都以 `code` 为键 upsert，所以改了名称或说明后重跑即生效。角色权限关联做差集同步——新增缺失的、删除多余的。四个内置角色的授权完全由代码定义，所以「多余」就是确实该移除的。同步时只处理代码里定义过的角色，将来支持自建角色后，那些角色的授权不会被种子脚本抹掉。
+
+种子数据的事实来源是 `packages/shared/src/permissions.ts`，脚本不重复写一份常量。因此运行前 `@fanhe/shared` 必须先构建；根目录的 `pnpm db:seed` 与 `pnpm db:migrate` 会先构建一次，直接调用 api 内的脚本则不会。
+
+当前各角色的授权数：
+
+| 角色 | code | rank | 权限点数 |
+| --- | --- | --- | --- |
+| 超级管理员 | `owner` | 100 | 11 |
+| 管理员 | `admin` | 80 | 9 |
+| 成员 | `member` | 50 | 6 |
+| 只读访客 | `viewer` | 10 | 3 |
+
+授权模式支持五种写法，通配符的吃法取决于位置：末尾的 `*` 吞掉剩余全部段（`personal.*` 覆盖 `personal.note.read`），非末尾的 `*` 只匹配一段（`personal.*.read` 表示「personal 下任意对象的 read」）。两者必须区分开，否则只读角色会静默拿到写权限。展开只在种子阶段做一次，运行时只做精确匹配。
+
+`packages/shared/test/permissions.test.mjs` 覆盖了这些规则，用 Node 内置测试运行器，不引第三方框架。它直接跑 `dist` 产物，因为写进库的就是那份展开结果。
 
 ## 三个已知的版本取舍
 

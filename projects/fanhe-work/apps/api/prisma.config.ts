@@ -21,8 +21,12 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
-    // seed 命令在 T1-02 补上 `tsx prisma/seed.ts`。此时文件还不存在，
-    // 提前写进来会让 `prisma migrate dev` 在迁移完成后因找不到脚本而失败。
+    // `prisma migrate dev` 与 `prisma migrate reset` 会自动执行这一条。
+    //
+    // 前置条件是 @fanhe/shared 已经构建：种子脚本从那里取权限点与角色定义，
+    // 保持单一事实来源。根目录的 `pnpm db:seed` 与 `pnpm db:migrate` 会先构建
+    // 一次，直接调用 api 内的脚本则不会。
+    seed: 'tsx src/db/seed.ts',
   },
   datasource: {
     url: process.env.DATABASE_URL ?? FALLBACK_DATABASE_URL,

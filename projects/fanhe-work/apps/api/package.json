@@ -13,6 +13,7 @@
     "db:format": "prisma format",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx src/db/seed.ts",
     "db:ping": "tsx src/tools/ping-db.ts",
     "db:studio": "prisma studio"
   },
