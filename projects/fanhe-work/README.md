@@ -149,7 +149,8 @@ projects/fanhe-work/
 │   ├── web/          React 前端，Vite 开发服务器在 5173
 │   ├── api/          Fastify 后端，仅监听回环 8787
 │   │   ├── prisma/   数据模型与迁移；客户端生成到 src/generated/prisma
-│   │   ├── src/auth/ 密码哈希与后续的令牌逻辑
+│   │   ├── src/auth/ 密码哈希与会话令牌
+│   │   ├── src/launch/ 启动配置的读写与本机代理；代理核心刻意不认识数据库与 HTTP，阶段四要原样搬进外壳主进程
 │   │   └── test/     测试，用 tsx 跑源码
 │   └── desktop/      Electron 外壳，阶段四启用
 ├── packages/
