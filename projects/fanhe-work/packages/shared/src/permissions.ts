@@ -154,25 +154,44 @@ export const ROLES: readonly RoleDefinition[] = [
 ]
 
 /**
- * 判断一个权限点是否命中一条授权模式。支持四种写法：
+ * 判断一个权限点是否命中一条授权模式。支持五种写法：
  *
  *   `*`                  全部权限
  *   `personal.*`         模块下的全部权限
  *   `personal.note.*`    对象上的全部操作
+ *   `personal.*.read`    模块下任意对象的 read
  *   `personal.note.read` 单个权限点
  *
  * 按点号分段逐段比较，不用正则：正则要转义元字符，而权限点里除了 `*` 都是
- * 字母数字，分段比较更短也更好读。段数不等直接不命中，所以 `personal.*`
- * 不会意外匹配到 `personal.note.read.extra` 这类更长的编码。
+ * 字母数字，分段比较更短也更好读。
+ *
+ * 通配符的吃法取决于位置，这条规则必须讲清楚，否则两种写法会互相冲突：
+ *
+ *   末尾的 `*` 吞掉剩余全部段 —— `personal.*` 覆盖 `personal.note.read`
+ *   非末尾的 `*` 只匹配一段 —— `personal.*.read` 表示「personal 下任意对象的 read」
+ *
+ * 两者都要支持，因为它们表达的是不同的授权意图：`personal.*` 是「这个模块全给」，
+ * `personal.*.read` 是「这个模块只能看」。如果一律让 `*` 吞掉剩余段，后者就退化成
+ * 了前者，只读角色会静默拿到写权限 —— 这类错误在界面上看不出来。
+ *
+ * 模式走完且未出现末尾通配符时，段数必须相等。这条防止 `personal.note` 匹配到
+ * `personal.note.read`：少了它，写错一个漏掉 `.*` 的模式就会意外扩大授权范围。
  */
 export function matchesGrant(pattern: string, code: PermissionCode): boolean {
-  if (pattern === '*') return true
   const patternSegments = pattern.split('.')
   const codeSegments = code.split('.')
-  if (patternSegments.length !== codeSegments.length) return false
-  return patternSegments.every(
-    (segment, index) => segment === '*' || segment === codeSegments[index],
-  )
+  const lastIndex = patternSegments.length - 1
+
+  for (let index = 0; index < patternSegments.length; index += 1) {
+    const segment = patternSegments[index]
+    if (segment === '*') {
+      if (index === lastIndex) return true
+      continue
+    }
+    if (segment !== codeSegments[index]) return false
+  }
+
+  return patternSegments.length === codeSegments.length
 }
 
 /**
