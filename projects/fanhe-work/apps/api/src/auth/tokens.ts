@@ -45,7 +45,13 @@ export type AccessTokenClaims = {
   role: string
 }
 
-/** 签发访问令牌。 */
+/** 签发访问令牌。
+ *
+ * 载荷只有 sub、role 与 iat、exp。注意 iat 与 exp 都是**秒级**精度，因此同一
+ * 账号在同一秒内签发两次，得到的令牌逐字节相同。这是 JWT 的固有特性，不是
+ * 缺陷：两份令牌的语义完全相同，都能用、也都在同一时刻失效。需要「每次签发
+ * 都不同」时应加 jti，但当前没有任何场景需要区分它们。
+ */
 export async function signAccessToken(claims: AccessTokenClaims): Promise<string> {
   return new SignJWT({ role: claims.role })
     .setProtectedHeader({ alg: ALGORITHM })

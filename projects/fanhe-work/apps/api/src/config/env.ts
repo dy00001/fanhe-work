@@ -107,5 +107,16 @@ export const env = {
     accessTtlSeconds: readInt('ACCESS_TOKEN_TTL_SECONDS', 900, 60, 24 * 3600),
     /** 刷新令牌有效期，默认 30 天。决定「多久不用就要重新登录」。 */
     refreshTtlDays: readInt('REFRESH_TOKEN_TTL_DAYS', 30, 1, 365),
+    /**
+     * 轮换宽限期，单位秒。
+     *
+     * 已轮换的令牌在宽限期内被再次提交，判为并发竞态而非泄露。同一客户端的
+     * 多个窗口或标签页会几乎同时刷新，此时把整条链撤掉会让用户无端掉线。超出
+     * 宽限期的重复提交才视为令牌已泄露，按 familyId 整链撤销。
+     *
+     * 设为 0 即严格模式：任何重复提交都触发整链撤销。代价是并发刷新必然导致
+     * 重新登录，除非客户端保证同一时刻只有一个刷新请求在飞。
+     */
+    rotationGraceSeconds: readInt('REFRESH_ROTATION_GRACE_SECONDS', 10, 0, 300),
   },
 } as const
