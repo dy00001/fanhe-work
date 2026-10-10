@@ -241,15 +241,16 @@ pnpm db:migrate    # 生成新迁移并应用，随后自动跑一次种子
 
 `db:migrate` 走的是 `prisma migrate dev`，而 `prisma.config.ts` 里的 `migrations.seed` 指向种子脚本，所以迁移完成后会自动执行它。
 
-仓库里目前有三个迁移：
+仓库里目前有四个迁移：
 
 | 迁移 | 内容 |
 | --- | --- |
 | `20261010150103_init` | users、roles、permissions、role_permissions、refresh_tokens、audit_logs 六张账号权限表 |
 | `20261010082118_login_rate_limit` | `login_attempts` 表与 `login_outcome` 枚举（T1-06 加入） |
 | `20261010165220_launch_profiles` | `launch_profiles` 表（软删除、复合索引与级联外键，T3-01 加入） |
+| `20261010180508_launch_history` | `launch_history` 表（启动尝试记录，T3-04 加入） |
 
-三者互相独立，不引用对方的任何对象，所以按目录名的字典序应用没有问题——**注意字典序与实际创建顺序是相反的**（`login_rate_limit` 的目录名排在 `init` 之前，`launch_profiles` 排在最后但创建时间最新）。这一点已在一个临时空库上实测：`migrate deploy` 按字典序依次应用，八张业务表齐全，`migrate status` 报 up to date，`db:seed` 写入 11 / 4 / 29，结果与主库一致。
+不能宣称全部迁移互相独立：`launch_profiles` 依赖 `init` 的 `users`，`launch_history` 依赖 `users` 与 `launch_profiles`；但这两组依赖恰好被目录名字典序满足，所以按字典序应用没有问题——**注意字典序与实际创建顺序是相反的**（`login_rate_limit` 的目录名排在 `init` 之前，`launch_profiles` 与 `launch_history` 排在最后但创建时间更新）。这一点已在一个临时空库上实测：`migrate deploy` 按字典序依次应用全部四个迁移，九张业务表齐全，`migrate status` 报 up to date，`db:seed` 写入 11 / 4 / 29，结果与主库一致。
 
 已应用到 PostgreSQL 16.15，并用 `prisma migrate diff --from-config-datasource --to-schema` 确认无漂移（差异为空）。首个迁移的同一份 DDL 也曾在 PGlite 上执行过，那是数据库还不可达时的验证手段。
 
