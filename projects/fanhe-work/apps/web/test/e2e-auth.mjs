@@ -1,5 +1,6 @@
 /**
- * 浏览器级端到端验证：首次初始化 → 登录 → 主界面 → 导航过滤 → 静默续期 → 登出。
+ * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
+ * 静默续期 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -29,7 +30,8 @@
 import { spawn } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 const APP_URL = process.argv[2] ?? 'http://127.0.0.1:5173'
 const SHOT_DIR = process.argv[3] ?? 'e2e-shots'
@@ -292,10 +294,15 @@ async function main() {
 
   // 每次用全新 profile，保证 localStorage 干净，也让断言不依赖上一次运行的残留。
   //
+  // 放在系统临时目录，不放截图目录。profile 里是 IndexedDB 与 localStorage 的后端
+  // 文件，访问模式是随机小 IO，而工作空间在 U 盘上 —— 实测同一份 profile 落在 U 盘
+  // 时打开一次 IndexedDB 要 5.8 秒，落在系统盘是毫秒级。这是项目约定「重型产物移出
+  // U 盘」的一个具体落点。
+  //
   // 必须是绝对路径。传相对路径时 Chrome 不会报参数错误，而是弹一个模态对话框
   // 说「无法对其数据目录执行读写操作」，然后卡在那里等用户点确定 —— 调试端口
   // 始终不开，外部只看到「CDP 目标未就绪」，看不出真正原因。
-  const userDataDir = resolve(SHOT_DIR, 'chrome-profile')
+  const userDataDir = join(tmpdir(), `fanhe-work-e2e-${process.pid}`)
   await rm(userDataDir, { recursive: true, force: true })
 
   const browserPath = findBrowser()
@@ -405,7 +412,8 @@ async function main() {
     record('错误密码显示统一文案', wrongText.includes('用户名或密码不正确'), wrongText)
     await screenshot(client, '3-login-error')
 
-    // 5. 正确密码应进入主界面并展示权限点。
+    // 5. 勾选「记住账号密码」后用正确密码登录，应进入主界面并展示权限点。
+    await evaluate(client, clickSelector('#login-remember'))
     await evaluate(client, fillInput('#login-password', OWNER.password))
     await evaluate(client, clickSelector('button[type="submit"]'))
     await evaluate(client, waitFor(`document.body.innerText.includes('权限点')`, 25000, '主界面'))
@@ -417,6 +425,35 @@ async function main() {
     )
     record('主界面展示展开后的权限点', homeText.includes('11 项'), '')
     record('主界面展示角色名', homeText.includes('超级管理员'), '')
+
+    // 5a. 凭据已加密落盘。断言三件事：结构只有约定的三个字段、不含账号明文、
+    //     不含密码明文。只判断「存在」是不够的 —— 明文同样满足存在。
+    //
+    // 先等它出现再读。写入发生在登录成功之后，走的是 IndexedDB 取密钥加一次
+    // AES-GCM 加密，比界面切到主界面要慢一点，直接读会读到还没写进去的空值。
+    await evaluate(
+      client,
+      waitFor(`window.localStorage.getItem('fanhe-work.credential') !== null`, 10000, '凭据落盘'),
+    )
+    const storedCredential = await evaluate(
+      client,
+      `window.localStorage.getItem('fanhe-work.credential')`,
+    )
+    const credentialText = typeof storedCredential === 'string' ? storedCredential : ''
+    let credentialFields = ''
+    let credentialOk = false
+    try {
+      const payload = JSON.parse(credentialText)
+      credentialFields = Object.keys(payload).sort().join(',')
+      credentialOk =
+        credentialFields === 'data,iv,v' &&
+        !credentialText.includes(OWNER.password) &&
+        !credentialText.includes(OWNER.username)
+    } catch {
+      credentialOk = false
+    }
+    record('记住的凭据以密文落盘，磁盘上无明文', credentialOk, `字段 ${credentialFields || '无'}`)
+
     await screenshot(client, '4-home')
 
     // 5b. 左侧导航按权限过滤。owner 同时持有 personal 与 system 两段权限，五项应当
@@ -533,6 +570,56 @@ async function main() {
     )
     record('登出后回到登录页并清空本地刷新令牌', JSON.parse(afterLogout).refresh === null, '')
     await screenshot(client, '6-after-logout')
+
+    // 8a. 重新加载页面，账号密码应自动带出。这是「重启后生效」在浏览器里的等价形式。
+    //     刷新令牌已在上一步清掉，所以页面会停在登录页，而不是静默恢复会话 —— 若它
+    //     直接进了主界面，下面这个等待就会超时，而那说明登出没清干净。
+    const reloaded = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await reloaded
+
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('#login-username')?.value === ${JSON.stringify(OWNER.username)}`,
+        15000,
+        '凭据自动带出',
+      ),
+    )
+    const restored = JSON.parse(
+      await evaluate(
+        client,
+        `JSON.stringify({
+          username: document.querySelector('#login-username').value,
+          password: document.querySelector('#login-password').value,
+          remember: document.querySelector('#login-remember').checked,
+        })`,
+      ),
+    )
+    record(
+      '重新打开后账号密码自动带出',
+      restored.username === OWNER.username && restored.password === OWNER.password,
+      `${restored.username} / ${restored.password.length} 位密码`,
+    )
+    record('记住账号密码复选框保持勾选', restored.remember === true, '')
+    await screenshot(client, '7-credential-restored')
+
+    // 8b. 取消勾选后登录，已保存的凭据应被清除。
+    //     账号密码这时已经带出在输入框里，直接提交即可。清除发生在登录成功之后，
+    //     所以要等它完成再断言。
+    await evaluate(client, clickSelector('#login-remember'))
+    await evaluate(client, clickSelector('button[type="submit"]'))
+    await evaluate(client, waitFor(`document.body.innerText.includes('权限点')`, 25000, '再次登录'))
+    let cleared = true
+    try {
+      await evaluate(
+        client,
+        waitFor(`window.localStorage.getItem('fanhe-work.credential') === null`, 10000, '凭据清除'),
+      )
+    } catch {
+      cleared = false
+    }
+    record('取消勾选后登录，已保存的凭据被清除', cleared, '')
 
     // 9. 渲染层无错误。这是本脚本存在的理由。
     record(

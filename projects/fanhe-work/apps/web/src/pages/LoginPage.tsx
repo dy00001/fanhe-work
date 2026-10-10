@@ -1,9 +1,15 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import { useAuth } from '../auth/useAuth'
 import { AuthLayout } from '../components/AuthLayout'
 import { TextField } from '../components/TextField'
 import { ApiError } from '../lib/api'
+import {
+  clearCredential,
+  hasStoredCredential,
+  loadCredential,
+  saveCredential,
+} from '../lib/credential'
 
 /**
  * 把错误翻译成一句能给用户看的话。
@@ -27,8 +33,40 @@ export function LoginPage() {
   const { login } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  // 惰性初始化，让第一帧的勾选状态就是对的。密文在不在是一次同步读取，
+  // 不必等异步解密完成再把勾选框点亮。
+  const [remember, setRemember] = useState(() => hasStoredCredential())
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  /**
+   * 把上次记住的凭据填进输入框。
+   *
+   * 只在输入框还空着时填。浏览器自带的密码管理器可能已经填过一份，那一份是
+   * 用户刚在浏览器里更新过的，覆盖它会把密码换回旧的，而界面上看不出发生过什么。
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    void (async () => {
+      const saved = await loadCredential()
+      if (cancelled) return
+
+      if (saved === null) {
+        // 密文在但解不开（密钥被清、内容被改），`loadCredential` 已经把它删掉了。
+        // 勾选框跟着回到未勾选，与「本机没有可用凭据」这个事实保持一致。
+        setRemember(false)
+        return
+      }
+
+      setUsername((current) => (current === '' ? saved.username : current))
+      setPassword((current) => (current === '' ? saved.password : current))
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -47,7 +85,16 @@ export function LoginPage() {
     setSubmitting(true)
     try {
       await login(username, password)
-      // 成功后 Provider 会切走界面，本组件随即卸载，不需要再收尾。
+      // 凭据在登录成功之后才处理。放在提交时会把输错的密码一并记住，而用户下次
+      // 看到密码框已经被填满，会以为那个密码是对的。
+      //
+      // 这一步在组件卸载之后才跑完（登录成功会切走界面），因此不能碰任何 state。
+      // `saveCredential` 自身不抛错，失败只是没记住，不影响已经完成的登录。
+      if (remember) {
+        await saveCredential({ username, password })
+      } else {
+        clearCredential()
+      }
     } catch (caught) {
       setError(describeLoginError(caught))
       setSubmitting(false)
@@ -76,6 +123,23 @@ export function LoginPage() {
           autoComplete="current-password"
           disabled={submitting}
         />
+
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center gap-2 text-sm text-ink-soft">
+            <input
+              id="login-remember"
+              type="checkbox"
+              checked={remember}
+              onChange={(event) => setRemember(event.target.checked)}
+              disabled={submitting}
+              className="h-4 w-4 accent-accent"
+            />
+            记住账号密码
+          </label>
+          {/* 把凭据的去向直接写在界面上。用户勾选时有权知道它去了哪里，
+              而这件事在实现里看得到、在界面上看不到。 */}
+          <p className="text-xs text-ink-faint">加密后只保存在本机，不会上传到服务器</p>
+        </div>
 
         {error !== null && (
           <p
