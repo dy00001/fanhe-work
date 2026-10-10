@@ -4,6 +4,7 @@ import { Outlet, useLocation } from 'react-router'
 
 import { useAuth } from '../auth/useAuth'
 import { useVisibleNavItems } from '../auth/useVisibleNavItems'
+import { readSidebarCollapsed, writeSidebarCollapsed } from '../lib/preferences'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 
@@ -25,15 +26,28 @@ import { TopBar } from './TopBar'
  * 内容区的滚动条出现在侧栏右侧而不是窗口最右缘，视觉上略微内收，这是应用式布局
  * 的常规取舍。
  *
- * 折叠状态目前是组件内的 `useState`。T2-06 要做的「记住折叠偏好」只需把这里换成
- * 读写持久化的实现，接口不用变 —— 折叠是外壳自身的状态，上层不需要知道它，所以
- * 没有做成受控属性。
+ * 折叠状态是外壳自身的状态，不对外暴露，所以没有做成受控属性 —— 上层不需要知道它。
+ * 它从 `lib/preferences.ts` 读初值并写回，因此刷新后保持上次的选择。
+ *
+ * **初值必须走 `useState` 的惰性初始化，不能放在 `useEffect` 里读。** 后者会先用
+ * 默认的展开态渲染一帧，再跳到折叠态：用户看到的是每次刷新都闪一下展开的侧栏。
+ * 两种写法都能通过「刷新后量一下宽度是 64px」这类事后断言，差别只在首帧，所以
+ * 端到端脚本为此专门逐帧采样（见 `test/e2e-auth.mjs` 的 `SIDEBAR_WIDTH_PROBE`）。
  */
 export function AppShell() {
   const { user, logout } = useAuth()
   const visibleItems = useVisibleNavItems()
   const { pathname } = useLocation()
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
+
+  // 先算再写。不用 `setCollapsed` 的函数式更新把写回塞进去：那样写操作会落在
+  // React 的状态更新函数里，而 StrictMode 下更新函数会被调用两次 —— 写入同一个值
+  // 虽然幂等、不会出错，但把副作用藏在更新函数里迟早会在别处踩坑。
+  const toggleCollapsed = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    writeSidebarCollapsed(next)
+  }
 
   // 激活项从 URL 解析，不再由组件状态驱动。`resolveActiveNav` 在这里只用来取
   // 顶栏面包屑的标题；真正决定渲染哪个模块的是 routes.tsx 里的守卫，两者用的是
@@ -55,11 +69,7 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar
-        items={visibleItems}
-        collapsed={collapsed}
-        onToggleCollapsed={() => setCollapsed((current) => !current)}
-      />
+      <Sidebar items={visibleItems} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar

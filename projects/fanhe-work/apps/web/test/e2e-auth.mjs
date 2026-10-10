@@ -1,7 +1,7 @@
 /**
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
- * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 登出 → 重新打开后
- * 凭据自动带出 → 取消勾选后凭据被清除。
+ * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 折叠偏好跨刷新保持 →
+ * 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -314,6 +314,36 @@ const INSTALL_PROBE = `(() => {
   }
   return true
 })()`
+
+/**
+ * 首帧侧栏宽度采样器。用 `Page.addScriptToEvaluateOnNewDocument` 注入，因此它比
+ * 应用脚本更早开始跑 —— 这是它唯一的价值，也是不能用 `Runtime.evaluate` 替代的原因：
+ * 后者只能在文档加载完之后执行，那时该渲染的帧早就渲染过了。
+ *
+ * **存在的理由是区分两种都能通过事后断言的实现。** 折叠偏好的验收点是「刷新后保持
+ * 上次状态」，而把读取放进 `useEffect` 同样满足它：界面先按默认的展开态渲染一帧，
+ * 再跳到折叠态，等一会儿再看宽度确实是 64px。用户那边看到的是每次刷新都闪一下展开
+ * 的侧栏，而断言全绿。要分辨这两种写法，只能看**第一个出现侧栏的帧**有多宽。
+ *
+ * 逐帧记录而不是只记第一帧：万一将来出现别的闪烁来源，报错时把前几帧打出来比
+ * 只有一个数字好定位。上限 30 帧或 10 秒，避免采样循环一直挂着 —— 外壳要等一次
+ * 「初始化状态 + 静默续期」的往返才挂载，光靠帧数上限可能还没等到侧栏出现。
+ */
+const SIDEBAR_WIDTH_PROBE = `(() => {
+  const samples = []
+  window.__sidebarWidths = samples
+  const started = Date.now()
+  const tick = () => {
+    const aside = document.querySelector('aside')
+    if (aside) samples.push(Math.round(aside.getBoundingClientRect().width))
+    if (samples.length >= 30 || Date.now() - started > 10000) return
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+})()`
+
+/** 侧栏折叠偏好的键。与 `src/lib/preferences.ts` 里的常量必须一致。 */
+const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed'
 
 async function screenshot(client, name) {
   const { data } = await client.send('Page.captureScreenshot', { format: 'png' })
@@ -794,6 +824,104 @@ async function main() {
       ),
     )
     record('404 页的返回入口指向落地模块', true, '')
+
+    // 7e. 折叠偏好记忆。验收点是「刷新后保持上次状态」，但**这句话本身不足以成为
+    //     判据** —— 把读取放进 `useEffect` 也能满足它，代价是每次刷新先闪一帧展开
+    //     的侧栏。所以这里除了量宽度，还逐帧采样首帧宽度（见 `SIDEBAR_WIDTH_PROBE`）。
+    //
+    //     放在这里而不是紧挨着 5b-3 的折叠断言，是因为它要整页重载，而重载会把挂在
+    //     window 上的请求探针清掉 —— 续期断言（第 7 项）正靠它计数。这与 7b 的深链接
+    //     验证不能提前是同一个理由。
+    //
+    //     5b-3 结束时侧栏已展开回去，所以这里从展开态开始。
+    await evaluate(
+      client,
+      `(() => {
+        const button = document.querySelector('aside button[aria-label="收起侧栏"]')
+        if (!button) throw new Error('找不到收起按钮')
+        button.click()
+        return true
+      })()`,
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 64`,
+        5000,
+        '再次折叠',
+      ),
+    )
+    const collapsedStored = await evaluate(
+      client,
+      `window.localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)})`,
+    )
+    record('折叠后偏好写入 localStorage', collapsedStored === 'true', `值 ${collapsedStored}`)
+
+    // 注入采样器必须在重载之前，它只在文档创建时执行一次。
+    await client.send('Page.addScriptToEvaluateOnNewDocument', { source: SIDEBAR_WIDTH_PROBE })
+    const collapseReloaded = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await collapseReloaded
+    await evaluate(
+      client,
+      waitFor(`(window.__sidebarWidths ?? []).length >= 5`, 20000, '重载后首帧采样'),
+    )
+    const collapsedSamples = JSON.parse(
+      await evaluate(client, 'JSON.stringify(window.__sidebarWidths)'),
+    )
+    record(
+      '刷新后侧栏仍是折叠态',
+      collapsedSamples[0] === 64,
+      `首帧 ${collapsedSamples[0]}px，前几帧 ${collapsedSamples.slice(0, 6).join(' → ')}`,
+    )
+    record(
+      '刷新后没有展开→折叠的跳动',
+      collapsedSamples.every((width) => width === 64),
+      `共采样 ${collapsedSamples.length} 帧`,
+    )
+
+    // 展开回去，验证写回另一个方向。
+    await evaluate(
+      client,
+      `(() => {
+        const button = document.querySelector('aside button[aria-label="展开侧栏"]')
+        if (!button) throw new Error('找不到展开按钮')
+        button.click()
+        return true
+      })()`,
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 224`,
+        5000,
+        '重载后展开侧栏',
+      ),
+    )
+    const expandedStored = await evaluate(
+      client,
+      `window.localStorage.getItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)})`,
+    )
+    record('展开后偏好改写为 false', expandedStored === 'false', `值 ${expandedStored}`)
+
+    // 读侧的容错：只有 `'true'` 算折叠，其余一律回落展开。用 `Boolean()` 转换的写法
+    // 会在这里把 `'maybe'` 当成折叠 —— 表现是「侧栏自己收起来了」，而用户没做过这个
+    // 操作。这一步同时把结束状态留在展开态。
+    await evaluate(
+      client,
+      `window.localStorage.setItem(${JSON.stringify(SIDEBAR_COLLAPSED_KEY)}, 'maybe')`,
+    )
+    const garbageReloaded = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await garbageReloaded
+    await evaluate(
+      client,
+      waitFor(`(window.__sidebarWidths ?? []).length >= 5`, 20000, '非法偏好值下的首帧采样'),
+    )
+    const garbageSamples = JSON.parse(
+      await evaluate(client, 'JSON.stringify(window.__sidebarWidths)'),
+    )
+    record('偏好值非法时回落为展开', garbageSamples[0] === 224, `首帧 ${garbageSamples[0]}px`)
 
     // 8. 登出应清掉本地令牌并回到登录页。
     //    退出登录从顶栏的裸按钮移进了账号菜单（T2-02 的布局骨架），要多两步：
