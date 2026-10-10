@@ -117,6 +117,16 @@ Server listening at http://127.0.0.1:8787
 
 提交前建议依次跑 `pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm format:check`。
 
+上面这四道关卡都覆盖不到渲染层：React 在运行期抛错时构建照样通过、接口照样返回 200，只有页面会白掉。补这一层用浏览器级端到端验证，它驱动本机已装的 Chrome 或 Edge，不需要额外下载：
+
+```bash
+ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api   # 一个终端，有效期压短才能观察到续期
+pnpm dev                                    # 另一个终端
+pnpm --filter @fanhe/web test:e2e
+```
+
+前置条件、断言清单与注意事项见 `docs/DEVELOPMENT-PLAN.md` 9.18。
+
 数据库相关的命令会连接 PostgreSQL，需要先按下一节的说明准备好 `apps/api/.env`。
 
 | 命令 | 作用 |
