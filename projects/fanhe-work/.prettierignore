@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# Lockfile is generated; formatting it only produces noise in diffs.
+pnpm-lock.yaml
+
+# Runtime data and database volumes.
+data/
+
+# Prose is authored by hand and reviewed as text. Prettier would reflow the
+# Chinese tables in the plan documents, so markdown stays untouched.
+**/*.md
+
+# Reference UI mockups are frozen artefacts already reviewed as rendered pages.
+docs/mockups/
