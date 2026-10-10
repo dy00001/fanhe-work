@@ -12,6 +12,10 @@ out/
 .next/
 *.tsbuildinfo
 
+# Prisma 生成的客户端。由 `pnpm db:generate` 从 schema 重建，产物随 schema
+# 变化而整体重写，提交进来只会制造无意义的 diff 与冲突。
+apps/api/src/generated/
+
 # 本地环境变量
 .env
 .env.local

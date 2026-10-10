@@ -1,7 +1,15 @@
 /**
- * Types and constants shared between the web and api packages.
- * Wiring into the apps happens in 阶段一, when the first shared contract exists.
+ * web 与 api 两个应用共享的类型与常量。
+ *
+ * 只放两边都要用的东西：跨进程传输的结构、需要严格一致的字面量集合。
+ * 只在一个应用里用到的类型留在那个应用内部，塞进来会让这个包变成杂物间，
+ * 最后没人知道某个导出还有没有人在用。
+ *
+ * 注意本包不依赖任何运行时框架，也不引入数据库客户端 —— api 侧的 Prisma
+ * 类型留在 apps/api，一旦从这里导出，web 的构建就会被拖上数据库依赖。
  */
+
+export * from './permissions.js'
 
 export const APP_NAME = '梵禾 Work'
 export const API_PORT = 8787

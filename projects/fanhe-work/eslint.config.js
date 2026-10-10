@@ -11,6 +11,9 @@ export default [
     ignores: [
       '**/dist/**',
       '**/node_modules/**',
+      // Prisma 生成的客户端。机器产物，改动它的格式没有任何意义，
+      // 而且下次 generate 会整体覆盖。
+      '**/src/generated/**',
       // Runtime data and database volumes never belong to the sources.
       'data/**',
       // Reference UI mockups are frozen artefacts that were reviewed and

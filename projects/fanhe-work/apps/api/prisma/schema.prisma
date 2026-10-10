@@ -1,0 +1,214 @@
+// 梵禾 Work 数据模型 —— 阶段一：账号与权限
+//
+// 迁移范围说明
+//   本文件在阶段一只落地账号与权限相关的六张表。业务表（launch_profiles、
+//   launch_history、notes、events、event_logs）在阶段三随对应模块一起加入，
+//   通过追加迁移演进，不预先建空表。
+//
+// 命名约定
+//   模型名用单数大驼峰，物理表名用复数小写下划线（@@map）。
+//   字段名用大驼峰，物理列名用小写下划线（@map）。
+//   时间列一律用 timestamptz(3)，避免跨时区与跨机比较时出现歧义。
+//   主键统一 UUIDv7，由客户端生成。UUIDv7 前 48 位是毫秒时间戳，索引局部性
+//   接近自增列，同时不暴露总量，优于 UUIDv4 与 serial。
+//
+// 时间戳与软删除的适用范围
+//   @@map 之外的三列不是每张表都有，按表的性质区分，规则如下。
+//   1. 实体表（users、roles、permissions）：带 createdAt、updatedAt、deletedAt。
+//      软删除保证引用过该实体的历史记录不断裂。
+//   2. 关联表（role_permissions）：只带 createdAt。取消授权即物理删除该行，
+//      授权本身没有需要保留的历史。
+//   3. 流水表（refresh_tokens、audit_logs）：只带 createdAt，不做软删除。
+//      凭证用 revokedAt 表达失效，审计日志是追加写、不可改不可删。
+//      给审计日志加 updatedAt 反而会给出「这行被改过」的错误暗示。
+//
+// 大小写
+//   PostgreSQL 的 text 等值比较区分大小写。username 在写入前由应用层统一
+//   归一为小写并去除首尾空白，数据库侧只加唯一约束。这条规则写在服务端，
+//   前端提交什么大小写都能登录，但不能依赖数据库做归一。
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// 枚举
+// ---------------------------------------------------------------------------
+
+/// 账号状态。locked 由连续登录失败触发，disabled 由管理员手动设置。
+/// 两者分开是为了让解锁与恢复走不同的处理路径。
+enum UserStatus {
+  active
+  locked
+  disabled
+
+  @@map("user_status")
+}
+
+/// 审计结果。失败也要落库，否则无法回答「谁在反复试密码」。
+enum AuditResult {
+  success
+  failure
+
+  @@map("audit_result")
+}
+
+// ---------------------------------------------------------------------------
+// 实体表
+// ---------------------------------------------------------------------------
+
+/// 账号。一个账号只属于一个角色，角色之间是层级关系而非并集关系。
+/// 需要多角色时改法是加 user_roles 关联表，届时 users.role_id 退化为默认角色。
+model User {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  username     String     @unique @db.VarChar(64)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  displayName  String     @map("display_name") @db.VarChar(64)
+  status       UserStatus @default(active)
+  roleId       String     @map("role_id") @db.Uuid
+
+  /// 连续失败次数与锁定截止时间，服务于登录限速。登录成功后清零。
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(3)
+  lastLoginAt         DateTime? @map("last_login_at") @db.Timestamptz(3)
+  /// 改密时间。签发访问令牌时带上，改密后旧令牌立即失效。
+  passwordChangedAt   DateTime? @map("password_changed_at") @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  role          Role           @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@index([roleId])
+  @@index([status])
+  @@map("users")
+}
+
+/// 角色。内置四个（owner/admin/member/viewer），isSystem 为 true 的不允许删除。
+/// rank 用于比较层级高低：数值大的可以管理数值小的。仅靠 code 做字符串比较
+/// 无法表达层级，所以显式存一个整数。
+model Role {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  code        String   @unique @db.VarChar(32)
+  name        String   @db.VarChar(64)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false) @map("is_system")
+  rank        Int      @default(0)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@index([rank])
+  @@map("roles")
+}
+
+/// 权限点。code 是「模块.对象.操作」三段式，唯一且是校验时的查表键。
+/// 三段同时落成独立列，是为了在管理界面按模块分组展示时不必解析字符串。
+/// 本表由种子脚本维护，不接受用户直接增删。
+model Permission {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  code        String   @unique @db.VarChar(128)
+  module      String   @db.VarChar(32)
+  object      String   @db.VarChar(64)
+  action      String   @db.VarChar(32)
+  description String?  @db.VarChar(255)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  rolePermissions RolePermission[]
+
+  @@index([module, object])
+  @@map("permissions")
+}
+
+// ---------------------------------------------------------------------------
+// 关联表
+// ---------------------------------------------------------------------------
+
+/// 角色与权限的多对多。复合唯一约束保证同一角色不会重复持有同一权限。
+/// 两侧都用级联删除：角色或权限点被物理清理时，关联行失去意义。
+/// 正常流程下 roles 与 permissions 都走软删除，级联只在种子重建时触发。
+model RolePermission {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// ---------------------------------------------------------------------------
+// 流水表
+// ---------------------------------------------------------------------------
+
+/// 刷新令牌。只存哈希，明文仅在签发响应的那一刻出现一次。
+/// familyId 把一次登录衍生出的整条轮换链归为一组：检测到已用令牌被重放时，
+/// 按 familyId 整链撤销，而不是只撤当前这一条。
+model RefreshToken {
+  id          String @id @default(uuid(7)) @db.Uuid
+  userId      String @map("user_id") @db.Uuid
+  tokenHash   String @unique @map("token_hash") @db.VarChar(255)
+  familyId    String @default(uuid(7)) @map("family_id") @db.Uuid
+
+  deviceId   String? @map("device_id") @db.VarChar(128)
+  deviceName String? @map("device_name") @db.VarChar(128)
+  userAgent  String? @map("user_agent") @db.VarChar(512)
+  ip         String? @db.VarChar(64)
+
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokedReason String?   @map("revoked_reason") @db.VarChar(32)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/// 审计日志。追加写，不做更新与删除。
+/// actorName 冗余存一份当时的显示名：账号被改名或软删除后，历史记录仍要能读。
+/// actorId 用 SetNull 而非 Cascade，删账号不能连带抹掉它做过的操作痕迹。
+model AuditLog {
+  id         String      @id @default(uuid(7)) @db.Uuid
+  actorId    String?     @map("actor_id") @db.Uuid
+  actorName  String?     @map("actor_name") @db.VarChar(64)
+  action     String      @db.VarChar(64)
+  targetType String?     @map("target_type") @db.VarChar(64)
+  targetId   String?     @map("target_id") @db.VarChar(64)
+  result     AuditResult @default(success)
+  detail     Json?
+  ip         String?     @db.VarChar(64)
+  userAgent  String?     @map("user_agent") @db.VarChar(512)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}

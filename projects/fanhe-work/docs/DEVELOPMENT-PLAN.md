@@ -414,11 +414,13 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T0-03 Electron 缓存 | 已完成 | 修正变量名缺陷并补镜像，详见 9.4 |
 | 界面方案对比 | 已完成 | `docs/mockups/index.html`，四版方案，选定方案 B |
 | 品牌标识 | 已完成 | `docs/mockups/logo.png` 与 `apps/web/public/brand/logo.png` |
+| T1-01 数据模型与首个迁移 | 部分完成 | schema 与首个迁移已落地并逐项验证，迁移尚未应用到真实数据库，阻塞于容器引擎，见 9.5 |
 
 ### 9.2 待办
 
-1. 进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
-2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
+1. **解除数据库阻塞。** 需要手动把 `wsl.exe` 移出安全中心的程序黑名单，详见 9.5。
+2. 数据库可用后执行 `pnpm db:deploy` 应用首个迁移，随后进入 T1-02 数据库连接与种子。
+3. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
 
 开发者模式已于 2026-10-10 开启，两个环境脚本与仓库本地配置中的 `core.symlinks` 已改为 true，原先列在这里的这一项已完成。实测确认 git 与 node 均可在不提权的情况下创建符号链接；PowerShell 5.1 的 `New-Item -ItemType SymbolicLink` 仍会失败，因为它不传 `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`，属该版本的自身限制，不影响 git。
 
@@ -444,6 +446,32 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 
 关键点在于 `@electron/get` 自身没有 `ELECTRON_CACHE` 回退，它只接受调用方传入的 `cacheRoot`，而调用方读的是 `electron_config_cache`。Windows 环境变量大小写不敏感，故同时设置大小写两种拼写以兼容大小写敏感的系统。
 
-镜像指向 npmmirror，与 `infra/portable/config/.npmrc` 中已固定的 npm registry 同源。实测 Electron 二进制、校验文件和 electron-builder 二进制三类地址均返回 200。
+镜像指向 npmmirror。本轮已把 `infra/portable/config/.npmrc` 的 registry 也固定为 npmmirror，Prisma 引擎与 Electron 二进制使用同一家镜像。
+
+### 9.5 T1-01 实施中的四处判断
+
+**Prisma 7 与 6.x 不兼容，不能照搬旧写法。** 三处变化都会直接导致跑不起来。一是 SQL 提供方必须配驱动适配器，7 起不再自带 Rust 查询引擎，PostgreSQL 需要 `@prisma/adapter-pg` 与 `pg`，实例化时传入 `new PrismaClient({ adapter })`。二是连接串与迁移目录从 schema 移到 `prisma.config.ts`，生成器由 `prisma-client-js` 改为 `prisma-client` 且 `output` 变为必填。三是 `.env` 不再自动加载，配置文件里必须自己 `import 'dotenv/config'` 且置于首行。另有 `migrate diff` 的 `--to-schema-datamodel` 改名为 `--to-schema`。
+
+**版本取 7.10.0，不取 npm 标记为 latest 的 8.0.0-rc.22。** `prisma` 的 `latest` 标签当前指向预发布版，而 `@prisma/client` 的 `latest` 是 7.10.0。两个包必须同版本，因此都钉在 7.10.0。这条约束意味着后续不要用 `@latest` 安装。
+
+**首个迁移离线推导，并在 PGlite 上实际执行验证。** 真实数据库不可达，但迁移没有跑过就只是一份文本。用 `prisma migrate diff --from-empty --to-schema` 推导出 DDL，再借 Prisma 传递依赖中已有的 PGlite（编译为 WASM 的 PostgreSQL）实际执行，逐项确认六张表、两个枚举、22 个索引与五个外键，并验证唯一约束拒绝重复、外键拒绝无效引用、角色被引用时不可删除、删除账号后审计日志保留且 `actor_id` 置空。这能证明 DDL 可执行且语义正确，**不能**替代真实实例上的验证：`_prisma_migrations` 记账、并发行为与具体 PostgreSQL 版本差异都不在其中。
+
+**`packages/shared` 由源码直出改为构建型包。** 原先 `exports` 直接指向 `src/index.ts`，对 Vite 可行，但 api 用 NodeNext 且 `rootDir` 限定为 `src`，引用包外的 TS 源文件会触发 TS6059。改为编译到 `dist` 并输出声明文件，根脚本在启动前先构建一次。
+
+### 9.6 数据库阻塞与所需操作
+
+Docker 29.8.1 与 Compose v5.5.1 已安装，但守护进程起不来，本机也没有原生 PostgreSQL。按四层顺序诊断，前三层全部正常：CPU 虚拟化已启用且被 Hyper-V 接管，`VirtualMachinePlatform`、`HypervisorPlatform`、`Microsoft-Windows-Subsystem-Linux`、`Microsoft-Hyper-V-All` 的可选功能状态均为已启用，BCD 的启动类型为 `AUTO`。
+
+根因在第四层，Docker 后端日志给出：
+
+```
+[com.docker.backend.exe.wslexec][E] c:\windows\system32\wsl.exe --version failed:
+  fork/exec C:\Windows\System32\wsl.exe: Access is denied.
+[com.docker.backend.exe.engines][E] starting engine: engine linux/wsl failed to start
+```
+
+`wsl.exe` 被安全策略列入程序黑名单，Docker 的 Linux 引擎因此无法启动。这条策略同时拦住了直接调用该程序，无法从当前环境绕过。
+
+**需要手动操作：在安全中心的「命令安全 → 程序黑名单」中把 `wsl.exe` 移出。** 不做这一步，阶段五的容器编排同样会被挡住。
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
