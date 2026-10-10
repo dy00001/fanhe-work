@@ -1,3 +1,6 @@
+import { AUDIT_ACTIONS } from '@fanhe/shared'
+
+import { recordAudit, type AuditContext } from '../audit/audit.js'
 import { env } from '../config/env.js'
 import { prisma } from '../db/prisma.js'
 import type { Prisma } from '../generated/prisma/client.js'
@@ -83,9 +86,21 @@ async function revokeFamily(
   })
 }
 
+/**
+ * 重放命中时要写进审计的信息。
+ *
+ * 单独带出来而不是直接在事务里写审计：审计是另一次 INSERT，放进事务会把行锁多
+ * 持有一段时间，而这段时间正好卡着并发刷新的第二个请求。
+ */
+type ReuseAudit = {
+  userId: string
+  actorName: string
+  familyId: string
+}
+
 type RotationOutcome =
   | { ok: true; userId: string; roleCode: string; refreshToken: string }
-  | { ok: false; reason: RotateFailureReason }
+  | { ok: false; reason: RotateFailureReason; reuse?: ReuseAudit }
 
 /**
  * 用刷新令牌换一组新令牌。
@@ -94,7 +109,10 @@ type RotationOutcome =
  * 的话，两个请求会同时读到「未撤销」，各自签发一份新令牌。一次登录就此裂成
  * 两条互不知晓的链，而两条链都能用，轮换的意义随之消失。
  */
-export async function rotateRefreshToken(providedToken: string): Promise<RotateResult> {
+export async function rotateRefreshToken(
+  providedToken: string,
+  context?: AuditContext,
+): Promise<RotateResult> {
   const tokenHash = hashRefreshToken(providedToken)
   const now = new Date()
 
@@ -130,7 +148,15 @@ export async function rotateRefreshToken(providedToken: string): Promise<RotateR
       // 超出宽限期的重放：这条链已经泄露，整链撤销。
       if (stored.revokedReason === 'rotated') {
         await revokeFamily(tx, stored.familyId, 'reuse_detected', now)
-        return { ok: false, reason: 'reuse_detected' }
+        return {
+          ok: false,
+          reason: 'reuse_detected',
+          reuse: {
+            userId: stored.userId,
+            actorName: stored.user.displayName,
+            familyId: stored.familyId,
+          },
+        }
       }
 
       // 因登出或其它原因已撤销的令牌被再次使用。链本身已经失效，无需再撤。
@@ -178,7 +204,24 @@ export async function rotateRefreshToken(providedToken: string): Promise<RotateR
   })
 
   if (!outcome.ok) {
-    return outcome
+    // 重放是真正的安全事件，值得单独留痕：要么有人拿到了旧令牌，要么客户端在
+    // 宽限期之外重试。记在事务外，不延长持锁时间。
+    //
+    // `user_unavailable` 不记。那是账号状态变更的连带结果，账号管理本身会有对应
+    // 的事件；而且合法客户端在账号被停用后每次刷新都会撞上它，记下来只有噪声。
+    if (outcome.reuse !== undefined) {
+      await recordAudit({
+        action: AUDIT_ACTIONS.AUTH_SESSION_REUSE,
+        result: 'failure',
+        actor: { id: outcome.reuse.userId, name: outcome.reuse.actorName },
+        // 记的是会话链而不是单个令牌：整链被撤销，而令牌明文与哈希都不该进审计。
+        target: { type: 'session_family', id: outcome.reuse.familyId },
+        detail: { reason: 'reuse_detected' },
+        ip: context?.ip,
+        userAgent: context?.userAgent,
+      })
+    }
+    return { ok: false, reason: outcome.reason }
   }
 
   // 签发放在事务之外：它是纯计算，放进事务只会延长持锁时间，让并发的第二个
@@ -204,35 +247,60 @@ export async function rotateRefreshToken(providedToken: string): Promise<RotateR
  * 撤销范围决定影响面。`device` 与 `all` 都需要先从令牌反查出账号，因此登出本身
  * 就是一次「用刷新令牌证明身份」的操作，不需要访问令牌参与。
  */
-export async function logout(providedToken: string, scope: LogoutScope): Promise<LogoutResult> {
+export async function logout(
+  providedToken: string,
+  scope: LogoutScope,
+  context?: AuditContext,
+): Promise<LogoutResult> {
   const tokenHash = hashRefreshToken(providedToken)
   const now = new Date()
 
-  return prisma.$transaction(async (tx) => {
-    const stored = await tx.refreshToken.findUnique({
-      where: { tokenHash },
-      select: { userId: true, familyId: true, deviceId: true },
+  const outcome = await prisma.$transaction(
+    async (tx): Promise<{ revoked: number; actor: { id: string; name: string } | null }> => {
+      const stored = await tx.refreshToken.findUnique({
+        where: { tokenHash },
+        select: {
+          userId: true,
+          familyId: true,
+          deviceId: true,
+          user: { select: { displayName: true } },
+        },
+      })
+      if (stored === null) {
+        return { revoked: 0, actor: null }
+      }
+
+      const reason: RevokeReason =
+        scope === 'all' ? 'logout_all' : scope === 'device' ? 'logout_device' : 'logout'
+
+      // scope 为 device 但令牌没有记录设备号时退化为只撤当前会话。无从识别设备
+      // 就把整个账号的会话全撤掉，会把用户从其它正常的设备上踢出去。
+      const where: Prisma.RefreshTokenWhereInput =
+        scope === 'all'
+          ? { userId: stored.userId, revokedAt: null }
+          : scope === 'device' && stored.deviceId !== null
+            ? { userId: stored.userId, deviceId: stored.deviceId, revokedAt: null }
+            : { familyId: stored.familyId, revokedAt: null }
+
+      const result = await tx.refreshToken.updateMany({
+        where,
+        data: { revokedAt: now, revokedReason: reason },
+      })
+      return { revoked: result.count, actor: { id: stored.userId, name: stored.user.displayName } }
+    },
+  )
+
+  // 只在实际撤销了令牌时记。登出是幂等的，客户端在令牌失效后重试、用户重复点击
+  // 都会走到这里，每次都记一条只会把审计淹掉。没撤销任何东西，就等于没有事件。
+  if (outcome.revoked > 0 && outcome.actor !== null) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_SESSION_LOGOUT,
+      actor: outcome.actor,
+      detail: { scope, revoked: outcome.revoked },
+      ip: context?.ip,
+      userAgent: context?.userAgent,
     })
-    if (stored === null) {
-      return { revoked: 0 }
-    }
+  }
 
-    const reason: RevokeReason =
-      scope === 'all' ? 'logout_all' : scope === 'device' ? 'logout_device' : 'logout'
-
-    // scope 为 device 但令牌没有记录设备号时退化为只撤当前会话。无从识别设备
-    // 就把整个账号的会话全撤掉，会把用户从其它正常的设备上踢出去。
-    const where: Prisma.RefreshTokenWhereInput =
-      scope === 'all'
-        ? { userId: stored.userId, revokedAt: null }
-        : scope === 'device' && stored.deviceId !== null
-          ? { userId: stored.userId, deviceId: stored.deviceId, revokedAt: null }
-          : { familyId: stored.familyId, revokedAt: null }
-
-    const result = await tx.refreshToken.updateMany({
-      where,
-      data: { revokedAt: now, revokedReason: reason },
-    })
-    return { revoked: result.count }
-  })
+  return { revoked: outcome.revoked }
 }

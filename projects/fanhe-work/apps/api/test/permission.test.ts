@@ -107,6 +107,8 @@ describe('权限守卫', { skip: reachable ? false : '数据库不可达，跳�
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }
     await prisma.loginAttempt.deleteMany({ where: { ip: TEST_IP } })
+    // 本文件用 login 取令牌，会顺带写入审计。
+    await prisma.auditLog.deleteMany({ where: { ip: TEST_IP } })
     await prisma.$disconnect()
   })
 

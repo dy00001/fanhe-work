@@ -84,6 +84,10 @@ describe('刷新令牌轮换与撤销', { skip: reachable ? false : '数据库�
 
   after(async () => {
     if (createdUserIds.length > 0) {
+      // 审计行必须**先于**账号删除。actor_id 的外键是 SetNull，账号一删归属就断了，
+      // 之后按 actorId 再也查不到这些行。本文件直接调 service，登出与轮换都没有
+      // 来源地址，落库的 ip 是 NULL，按 ip 清理同样圈不住它们。
+      await prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } })
       // 删除用户会级联删掉它的刷新令牌，不必单独清令牌表。
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }

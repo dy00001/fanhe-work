@@ -116,7 +116,12 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       },
     },
     async (request, reply) => {
-      const result = await rotateRefreshToken(request.body.refreshToken)
+      // 带上来源与客户端标识。重放检测命中时要把这两项写进审计 —— 那正是最需要
+      // 知道「从哪儿来的」的时刻。
+      const result = await rotateRefreshToken(request.body.refreshToken, {
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      })
 
       if (!result.ok) {
         request.log.info({ reason: result.reason }, 'refresh failed')
@@ -149,7 +154,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       // 默认只撤当前会话。撤销范围越大影响面越大，不能靠「省略参数」意外得到，
       // 必须由调用方显式指定。
       const scope: LogoutScope = request.body.scope ?? 'session'
-      const result = await logout(request.body.refreshToken, scope)
+      const result = await logout(request.body.refreshToken, scope, {
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      })
       return reply.code(200).send(result)
     },
   )

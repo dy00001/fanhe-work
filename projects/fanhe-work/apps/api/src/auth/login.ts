@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
 
-import { normalizeUsername } from '@fanhe/shared'
+import { AUDIT_ACTIONS, normalizeUsername } from '@fanhe/shared'
 
+import { recordAudit } from '../audit/audit.js'
 import { env } from '../config/env.js'
 import { prisma } from '../db/prisma.js'
-import type { LoginOutcome } from '../generated/prisma/client.js'
+import type { AuditResult, LoginOutcome } from '../generated/prisma/client.js'
 import { hashPassword, verifyPassword } from './password.js'
 import {
   generateRefreshToken,
@@ -135,6 +136,32 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   const submittedUsername = input.username
   const username = normalizeUsername(submittedUsername)
 
+  /**
+   * 记一条登录审计。
+   *
+   * **被限速的那条路径不写。** 限速的目的是让被拒的请求不产生任何写入：一旦写，
+   * 攻击者的请求量就直接变成表的增长量，限速本身成了放大器。这与 T1-06 里「被限速
+   * 的请求不写 login_attempts」是同一条理由。
+   *
+   * **失败的登录一律不填 actor。** 只在账号存在时才填，等于让 actor 列变成「这个
+   * 账号存不存在」的旁路判据，而审计是 owner 能看的，没必要把枚举结果沉淀进去。
+   * 提交的账号名进 detail，它忠实反映有人试过什么。
+   */
+  const auditLogin = async (
+    result: AuditResult,
+    detail: { reason?: string } = {},
+    actor?: { id: string; name: string },
+  ): Promise<void> => {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_SESSION_LOGIN,
+      result,
+      actor,
+      detail: { username: submittedUsername, ...detail },
+      ip,
+      userAgent: input.userAgent,
+    })
+  }
+
   // IP 维度先判。被限速的请求直接返回，连哈希校验都不做。限速的目的就是阻止
   // 攻击者消耗资源，如果这里还照常算一次 Argon2，限速本身就成了 CPU 放大器：
   // 攻击者用大量请求就能把服务端打满，而挡在前面的限速恰恰在帮他完成这件事。
@@ -155,6 +182,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if (user === null) {
     await burnTime(input.password)
     await recordAttempt(ip, submittedUsername, 'unknown_user')
+    await auditLogin('failure', { reason: 'invalid_credentials' })
     return { ok: false, reason: 'invalid_credentials' }
   }
 
@@ -163,12 +191,14 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if (user.status !== 'active') {
     await burnTime(input.password)
     await recordAttempt(ip, submittedUsername, 'account_unavailable')
+    await auditLogin('failure', { reason: 'account_unavailable' })
     return { ok: false, reason: 'account_unavailable' }
   }
 
   if (user.lockedUntil !== null && user.lockedUntil.getTime() > Date.now()) {
     await burnTime(input.password)
     await recordAttempt(ip, submittedUsername, 'account_locked')
+    await auditLogin('failure', { reason: 'account_locked' })
     return { ok: false, reason: 'account_locked' }
   }
 
@@ -176,6 +206,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if (!passwordMatches) {
     await recordFailedAttempt(user.id, user.failedLoginAttempts)
     await recordAttempt(ip, submittedUsername, 'wrong_password')
+    await auditLogin('failure', { reason: 'invalid_credentials' })
     return { ok: false, reason: 'invalid_credentials' }
   }
 
@@ -207,6 +238,9 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   ])
 
   await recordAttempt(ip, username, 'success')
+  // 成功这条填 actor：从这一步起，「是谁」是确定的事实，不再是从提交的账号名推断
+  // 出来的东西。
+  await auditLogin('success', {}, { id: user.id, name: user.displayName })
 
   return {
     ok: true,

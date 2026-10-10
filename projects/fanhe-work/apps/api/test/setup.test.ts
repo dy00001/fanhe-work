@@ -128,11 +128,20 @@ describe('首次初始化', { skip: reachable ? false : '数据库不可达，�
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }
     await prisma.loginAttempt.deleteMany({ where: { ip: TEST_IP } })
+    // 初始化成功会写一条审计，登录那一步也会写。
+    await prisma.auditLog.deleteMany({ where: { ip: TEST_IP } })
     await prisma.$disconnect()
   })
 
   function initialize(payload: Record<string, unknown>) {
-    return app.inject({ method: 'POST', url: '/api/setup/initialize', payload })
+    // 显式给出来源地址。inject 不给时默认是 127.0.0.1，那样写出来的审计行会落到
+    // 真实地址段上，按 TEST_IP 清理就圈不住它们。
+    return app.inject({
+      method: 'POST',
+      url: '/api/setup/initialize',
+      payload,
+      remoteAddress: TEST_IP,
+    })
   }
 
   test(

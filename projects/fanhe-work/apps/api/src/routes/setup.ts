@@ -51,7 +51,11 @@ export function registerSetupRoutes(app: FastifyInstance): void {
       },
     },
     async (request, reply) => {
-      const result = await initializeOwner(request.body)
+      // 来源与客户端标识只用于审计。创建 owner 是系统里最值得留痕的一件事。
+      const result = await initializeOwner(request.body, {
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      })
 
       if (!result.ok) {
         if (result.reason === 'invalid_username') {

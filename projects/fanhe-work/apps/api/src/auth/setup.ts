@@ -1,5 +1,6 @@
-import { isValidUsername, normalizeUsername, ROLE_CODES } from '@fanhe/shared'
+import { AUDIT_ACTIONS, isValidUsername, normalizeUsername, ROLE_CODES } from '@fanhe/shared'
 
+import { recordAudit, type AuditContext } from '../audit/audit.js'
 import { prisma } from '../db/prisma.js'
 import { hashPassword } from './password.js'
 
@@ -59,6 +60,8 @@ export type InitializeResult =
 type CreateOwnerOptions = {
   /** 是否要求系统尚未初始化。HTTP 入口传 true，恢复脚本传 false。 */
   requireUninitialized: boolean
+  /** 请求上下文，只用于审计里的 ip 与 userAgent。命令行恢复通道没有这两项。 */
+  context?: AuditContext | undefined
 }
 
 /**
@@ -90,7 +93,7 @@ export async function createOwnerAccount(
   // 哈希在事务外算。Argon2 单次要几十毫秒，放进事务会让咨询锁被多持有这么久。
   const passwordHash = await hashPassword(input.password)
 
-  return prisma.$transaction(async (tx): Promise<InitializeResult> => {
+  const result = await prisma.$transaction(async (tx): Promise<InitializeResult> => {
     // 咨询锁把并发的初始化请求串行化。没有它，两个请求会同时读到「还没有 owner」，
     // 各自创建一个，于是一次初始化产生两个超级管理员，而流程不报任何错。
     //
@@ -140,9 +143,34 @@ export async function createOwnerAccount(
 
     return { ok: true, data: created }
   })
+
+  // 只记成功的那一次。
+  //
+  // 「已初始化」被再次调用不记：那条路径在算哈希之前就返回了，每次请求只多一次
+  // SELECT；若还要写一行审计，匿名调用者就能用请求量直接换成表的增长量 —— 与
+  // T1-06 里被限速的请求不写 login_attempts 是同一条理由。
+  //
+  // 写入放在事务外。初始化是系统里唯一一处不需要认证就能建账号的入口，若审计表
+  // 出问题就整个建不出账号，等于把一次外部故障放大成「无法初始化」。审计写入失败
+  // 会出声，不会静默。
+  if (result.ok) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.SYSTEM_SETUP_INITIALIZE,
+      actor: { id: result.data.id, name: result.data.displayName },
+      target: { type: 'user', id: result.data.id },
+      detail: { username: result.data.username },
+      ip: options.context?.ip,
+      userAgent: options.context?.userAgent,
+    })
+  }
+
+  return result
 }
 
 /** HTTP 初始化入口。 */
-export function initializeOwner(input: InitializeInput): Promise<InitializeResult> {
-  return createOwnerAccount(input, { requireUninitialized: true })
+export function initializeOwner(
+  input: InitializeInput,
+  context?: AuditContext,
+): Promise<InitializeResult> {
+  return createOwnerAccount(input, { requireUninitialized: true, context })
 }

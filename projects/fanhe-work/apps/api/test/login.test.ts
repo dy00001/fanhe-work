@@ -80,6 +80,8 @@ describe('登录限速', { skip: reachable ? false : '数据库不可达，跳�
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }
     await prisma.loginAttempt.deleteMany({ where: { ip: { startsWith: TEST_IP_PREFIX } } })
+    // 每次登录尝试都会写一条审计，同样按来源地址清掉。
+    await prisma.auditLog.deleteMany({ where: { ip: { startsWith: TEST_IP_PREFIX } } })
     await prisma.$disconnect()
   })
 
