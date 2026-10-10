@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.11 |
+| 版本 | v1.12 |
 | 日期 | 2026-10-10 |
 | 上游文档 | `projects/fanhe-work/docs/IMPLEMENTATION-PLAN.md` |
 | 交接文档 | `projects/fanhe-work/docs/HANDOFF-2026-10-10.md` |
 | 选定界面方案 | 方案 B 现代极简，`projects/fanhe-work/docs/mockups/option-b-minimal.html` |
 | 方案对比入口 | `projects/fanhe-work/docs/mockups/index.html` |
 | 载体 | `projects/fanhe-work/` |
-| 当前状态 | 阶段一任务已全部完成（T1-01 至 T1-12），验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选 |
+| 当前状态 | 阶段一任务已全部完成（T1-01 至 T1-12），阶段二首项 T2-01（shadcn/ui 与设计令牌）已完成，下一项为 T2-02 布局骨架。验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选 |
 
 ---
 
@@ -341,7 +341,7 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 
 - [ ] 导航折叠状态可记忆
 - [ ] 占位页正确显示「功能开发中」
-- [ ] 界面与方案 B 的设计令牌一致
+- [x] 界面与方案 B 的设计令牌一致
 - [ ] 子路由可直接访问
 
 ### 阶段三 个人工作台三板块
@@ -430,11 +430,12 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T1-12 记住账号密码 | 已完成 | 新增 `apps/web/src/lib/credential.ts`（AES-GCM 加密，密钥存 IndexedDB 且不可导出）与登录页的记住勾选；凭据只在登录成功后写入，取消勾选即清除；端到端验证从 18 项扩到 22 项。判断与安全边界见 9.20 |
 | 迁移顺序核验 | 已完成 | 两个迁移的目录名字典序与应用顺序相反，实测确认互相独立、按字典序应用正常；空库重建链路（deploy → 七表齐全 → seed 11/4/29）验证通过。见 9.16 |
 | 交接文档 | 已完成 | `docs/HANDOFF-2026-10-10.md`，含当日成果、关键决策、未解决问题、后续待办、逐文件清单与换机步骤。见 9.16 |
+| T2-01 shadcn/ui 与设计令牌 | 已完成 | 新增 `apps/web/components.json`、`src/lib/utils.ts` 与 `src/components/ui/` 下 14 个官方组件源码；`index.css` 改为两层令牌结构并统一到 shadcn 语义命名，现有界面 60 余处类名同步迁移；`TextField` 内部改用 `Input` 与 `Label`，登录与初始化按钮改用 `Button`，记住账号密码改用 `Checkbox`。接入路线与四处源码修正见 9.21 |
 
 ### 9.2 待办
 
-1. 阶段一的任务已全部完成，下一项是阶段二的 T2-01（shadcn/ui 与设计令牌）。阶段二涉及界面骨架与路由体系的整体替换，开工前先确认组件清单与令牌规格，避免边做边改。
-2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
+1. 阶段一的任务与阶段二首项 T2-01 均已完成，下一项是 T2-02（布局骨架）：左侧导航 224px / 折叠 64px、顶栏 56px、内容区最大宽度约束，规格见实施方案第五章。令牌与组件已由 T2-01 备齐，T2-02 起是纯使用，不应再改动令牌体系。
+2. 组件清单与令牌规格已在 T2-01 落定，见 9.21。**新增界面一律从 `apps/web/src/components/ui/` 取组件，不要再手写等价元素**：同一件东西两种实现时，差异只会在改令牌或换主题时才暴露，而那时已经很难判断是哪一处漏改。现有 `NavRail`、`AuthLayout` 与 `HomePage` 里的手写元素是阶段一的临时形态，随 T2-02 与 T2-03 一并换掉。
 3. `users.passwordChangedAt` 已在 T1-01 建表时留下，schema 注释写的是「改密后旧令牌立即失效」，但 T1-04 签发访问令牌时并未把它写进载荷，因此目前改密不会让已签发的访问令牌失效。补齐需要在访问令牌里加 `pwd` 声明并在校验时比对，属于改密流程的一部分，等该功能排期时一并处理。
 4. username 的大小写归一已在 T1-08 落地，`packages/shared/src/account.ts` 是唯一实现，账号创建与登录查询两侧都走它。尚未覆盖的是**改名**：账号管理功能排期后，改名必须复用同一个 `normalizeUsername`，并在改名前用归一后的值查一次冲突，否则会出现「改成一个只差大小写的名字」而库侧唯一约束恰好拦不住的情形。目前用得上唯一约束冲突检测的入口只有首次初始化。
 5. 权限点的可见范围目前只有 `system` 与 `personal` 两段，共 11 个。客户信息平台与运营信息平台的对象清单尚未确定，等阶段三这两个模块定下来后再追加常量与权限行，不需要改表结构。**追加时要同步改 `packages/shared/src/navigation.ts` 里对应导航项的 `module`**：三个占位项现在填的是 `null`，含义是「尚无权限点可绑，对所有已认证用户可见」，模块落地后要改成各自的模块段，否则它们会一直对所有人可见。`navigation.test.mjs` 里那条「占位项对已认证用户一律可见」的断言届时也要一并改掉。
@@ -805,5 +806,53 @@ bash ../../infra/portable/ws-run.sh pnpm install
 **本次验证结果。** 门禁 `format` / `lint` / `typecheck` / `test` / `format:check` 全绿，shared 27 项加 api 85 项合计 112 项，0 跳过。前端生产构建通过（241.32 kB，gzip 76.23 kB）。浏览器级端到端验证 22 项全部通过，其中新增 4 项覆盖凭据的落盘形态、重启带出、复选框状态与取消勾选后的清除。数据库在验证后回到基线：四张流水表 0 行，种子 11 / 4 / 29 完好。
 
 **阶段一至此收尾。** 验收清单剩「关键操作在 `audit_logs` 有记录」一项未勾选，它依赖账号与角色管理接口，见 9.15 与 9.2 第 7 项。
+
+### 9.21 T2-01 实施中的几处判断
+
+**接入路线：拉官方 registry 源码，不跑 CLI。** shadcn 的官方接入方式是 `npx shadcn@latest init` 后按需 `add`。这条路在别处没问题，在本项目里有两处冲突。一是 CLI 会自行调用包管理器，而项目约定**所有包管理操作必须经 `ws-run` 入口**，否则 pnpm 的 store 会落到宿主机磁盘；这个偏差当场没有任何提示，只有对比 `node_modules/.modules.yaml` 的 `storeDir` 才看得出来。二是 CLI 会写入 npx 缓存，那也在宿主机上。
+
+改为直接取 registry 的 HTTP 端点：`https://ui.shadcn.com/r/styles/new-york-v4/<组件>.json`，返回体里的 `files[].content` 就是组件源码全文。依赖仍然经入口显式安装。`components.json` 照样写进项目，字段与 CLI 生成的一致，将来若要改用 CLI 追加组件，不必先补配置。
+
+**取 v4 版源码，但把它的 `radix-ui` 导入改回分散原语包。** registry 有两个版本。旧版（`styles/new-york/`）是 React 18 时代的写法：`forwardRef`、`ButtonProps` 接口、依赖七个分散的 `@radix-ui/react-*`。v4 版（`styles/new-york-v4/`）是函数组件加 `data-slot` 属性，依赖统一的 `radix-ui` 包。选 v4 版是因为 `data-slot` 让样式可以按插槽定位，且 React 19 下 `forwardRef` 已是过渡写法。
+
+但选完源码之后又做了一处反向改写：v4 源码里 `import { Slot } from "radix-ui"` 这类写法，被改回 `@radix-ui/react-slot` 等分散包。原因是 `radix-ui` 是 umbrella 包，把全部原语都声明为依赖，而本期只用到六个。**这是对官方源码唯一一处主动改写**，涉及 9 个文件的 import 行，以及 `Slot.Root` 到 `Slot` 的写法差异（umbrella 导出命名空间，分散包导出组件本身）。
+
+**令牌统一到 shadcn 的语义命名，其中 `accent` 的语义是反转的。** 旧令牌是项目自定义名（`surface` / `card` / `line` / `ink` / `accent`），shadcn 组件源码引用的是它自己的语义名（`background` / `foreground` / `muted` / `primary` / `accent`）。两套并存的代价是每搬一个组件都要改一遍样式类，此后官方每更新一次组件，diff 里都会混进这些改写，无法判断哪些是官方变更、哪些是本地修改。
+
+统一的方向只能是往 shadcn 那边靠，因为改组件源码会让后续追加组件变成逐行对照的负担。这里有一处必须记住的反转：**旧的 `--color-accent` 是近黑主色，在 shadcn 体系里主色叫 `primary`；而 `accent` 指的是浅灰悬停底色。** 同名不同义，看名字猜不出方向。旧名到新名的完整映射是：`surface`→`background`、`ink`→`foreground`、`ink-soft`→`muted-foreground`、`ink-faint`→`muted-foreground-weak`、`line`→`border`、`line-soft`→`border-soft`、`accent`→`primary`、`accent-soft`→`accent`，`card` 两套同名。
+
+另有一处无对应：旧令牌 `ink-faint`（#a1a1aa，最弱一级文字）在 shadcn 默认集里没有。方案 B 的层级靠三级文字深浅区分，所以保留它，命名 `muted-foreground-weak`，作为本项目的扩展令牌。
+
+**令牌分两层，为的是让 T2-07 的主题切换不必重构。** 第一层是 `:root` 里的原始值，第二层是 `@theme inline` 到 Tailwind 工具类的映射。若只写一层（直接把颜色写进 `@theme`），Tailwind 会把它们烘进 `:root` 的一次性定义，没有第二个作用域可以插进来，亮暗切换就无从下手。分两层之后，T2-07 只需加一个 `.dark` 块覆盖同名变量，组件侧一行都不用动。
+
+`inline` 关键字是这一层的关键：不加它，Tailwind 会先产出 `--color-background: var(--background)` 再让工具类引用那份中间变量，覆盖时要保证两份同时变；加了它，工具类直接编译成 `var(--background)`。
+
+**方案 B 与 shadcn 默认风格的差异在令牌层消化，不改组件源码。** 两处差异。一是阴影：方案 B 明确「无阴影」，而组件源码带 `shadow-xs` 与 `shadow-sm`。做法是把这两档令牌归零（`0 0 #0000`），而不是逐个组件删类名；浮层另留 `md` 与 `lg` 两档极浅阴影，否则下拉菜单浮不起来。二是圆角：方案 B 的规格是「小控件 7–8px、大容器 12px」，Tailwind 默认刻度里 `rounded-xl` 正好 12px 可直接用，`rounded-md` 是 6px 窄了 2px，所以**只覆盖这一档**。
+
+不覆盖整套刻度是有意的：项目里已有的 `rounded-lg` 是 8px，重定义整个序列会让它无声地变成别的值，而这类变化在界面上只表现为「圆角看着有点怪」，很难反查回令牌表。
+
+**四处对官方源码的必要修正。** 除上面那处导入改写外，还有三处。
+
+其一，registry 源码里的 `import { cn } from "cn"` 是占位符，CLI 会在写入时替换，手工搬运需要自己换成 `@/lib/utils`。
+
+其二，六个文件带 `"use client"` 指令。那是 React Server Components 的标记，Vite 构建会对模块级指令发警告，本项目也没有 RSC，因此删除。
+
+其三，`empty.tsx` 与 `skeleton.tsx` 用了 `React.ComponentProps` 却没有导入 `React`。官方源码依赖 UMD 全局，而在模块文件里 TS 不认这个全局，直接报错。补上 `import * as React from "react"`。
+
+其四，`dropdown-menu.tsx` 里 `DropdownMenuCheckboxItem` 把 `checked` 解构出来又原样传回，在 `exactOptionalPropertyTypes: true` 下不合法：目标属性的可选语义与显式传 `undefined` 不等价。让 `checked` 留在 `props` 里透传即可，行为不变。
+
+**路径别名要同时在两处声明。** shadcn 源码用 `@/` 引用项目内模块。类型侧靠 `tsconfig.json` 的 `paths`，构建侧靠 `vite.config.ts` 的 `resolve.alias`，缺一处就是「类型检查能过而构建失败」。`baseUrl` 没有写：TypeScript 6 已把它标记为弃用，而 `paths` 在没有 `baseUrl` 时本来就相对于 tsconfig 所在目录解析。
+
+**现有界面的迁移范围。** 六个文件、六十余处类名，按映射表逐条替换。`TextField` 内部改为 `Input` 加 `Label`，对外接口一字未动；保留这层封装是因为「标签 + 输入框 + 提示」这套间距在五个调用点重复，摊开写会变成改一处要改五处。登录与初始化页的提交按钮改为 `Button`，记住账号密码的复选框改为 `Checkbox`。
+
+**迁移时漏了一个文件，靠 `git diff` 兜住。** 替换脚本按文件清单执行，`App.tsx` 不在清单里，它里面的 `bg-surface` 与 `text-ink-faint` 留了下来。这次没造成后果，因为 Prettier 的 Tailwind 插件重排了那两行的类名顺序，文件因此出现在 `git status` 里，顺着 diff 看到了未替换的令牌名。教训是**替换脚本不该维护文件清单，应该按模式扫全目录**。
+
+**复选框换成 Radix 之后，端到端脚本的断言要跟着改。** 原来断言 `document.querySelector('#login-remember').checked`，而 Radix 的复选框渲染成 `<button role="checkbox">`，没有 `checked` 属性，改为读 `data-state` 是否为 `checked`。这是「组件替换改变了 DOM 结构」的一个具体代价，凡是断言到元素属性而非可见文本的地方都要检查一遍。
+
+**ESLint 对 `components/ui/` 关掉 fast-refresh 规则。** `button.tsx` 与 `badge.tsx` 同时导出组件和 cva 生成的变体常量，触发 `react-refresh/only-export-components`。这条规则约束的是 HMR 边界，代价仅限于这两个文件在编辑时可能整页刷新一次，而保持源码能逐行对照官方版本的收益更大，所以在这一层关掉而不是拆文件。
+
+**本次验证结果。** 门禁 `format` / `lint` / `typecheck` / `test` / `format:check` 全绿，shared 27 项加 api 85 项合计 112 项，0 跳过。前端生产构建通过（JS 292.18 kB，gzip 93.33 kB；CSS 36.72 kB，gzip 7.19 kB）。JS 较 T1-11 增加约 51 kB，来自 Radix 原语、`class-variance-authority` 与 `tailwind-merge`（`cn` 的实现），本期未使用的组件已被 tree-shaking 排除。浏览器级端到端验证 22 项全部通过，登录页与主界面另经截图复核。数据库在验证后回到基线：四张流水表 0 行，种子 11 / 4 / 29 完好。
+
+**验收清单第 3 项的勾选依据与边界。** 「界面与方案 B 的设计令牌一致」勾选，依据是令牌层已建成且全局生效，现有全部界面已迁到新令牌，观感经截图确认。边界要说清楚：**阶段二剩下的三项验收（折叠记忆、占位页、子路由）尚未开始**，T2-02 起是在这套令牌之上搭布局与路由，不再涉及令牌体系本身。
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
