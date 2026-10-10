@@ -409,15 +409,40 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T0-02 workspace 与脚手架 | 已完成 | pnpm workspace、根脚本、web 与 api 骨架，安装、类型检查、构建与开发服务器均验证通过 |
 | T0-07 git 仓库 | 已完成 | 分支 `main`，提交身份 梵禾 `<dev@fanhe.local>`，基线提交 `70b382e` |
 | T0-06 忽略规则 | 已完成 | 根级与项目级规则已补齐，随基线提交纳入版本控制 |
+| T0-05 代码规范 | 已完成 | ESLint 10 扁平配置、Prettier、Tailwind 类名排序；`lint`、`typecheck`、`format:check` 均通过 |
+| T0-04 约定文档 | 已完成 | `projects/fanhe-work/README.md`，含起步步骤、强制约定、数据库与版本取舍说明 |
+| T0-03 Electron 缓存 | 已完成 | 修正变量名缺陷并补镜像，详见 9.4 |
 | 界面方案对比 | 已完成 | `docs/mockups/index.html`，四版方案，选定方案 B |
 | 品牌标识 | 已完成 | `docs/mockups/logo.png` 与 `apps/web/public/brand/logo.png` |
 
 ### 9.2 待办
 
-1. 执行 T0-05，补齐 ESLint、Prettier 与 Tailwind 类名排序，使 `lint` 与 `format` 脚本可用。
-2. 执行 T0-04，编写项目级约定文档，记录入口唯一、禁盘符、`data/` 忽略、编码约定与数据库不随盘移动。
-3. 执行 T0-03，核对 Electron 缓存重定向，必要时补 `ELECTRON_MIRROR`。
-4. 阶段零通过验收后进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
-5. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
+1. 阶段零通过验收后进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
+2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
+3. 以管理员身份运行 `infra/portable/ws-enable-devmode.cmd` 开启开发者模式，之后可把 `core.symlinks` 由 false 改为 true。
+
+### 9.3 阶段零实施中的三处技术判断
+
+**TypeScript 取 6.x 而非 7.x。** `typescript-eslint` 8.71.1 的 peer 声明为 `>=4.8.4 <6.1.0`，且遇到 TS 7 是导入即抛错而非警告。官方给出的出路是并行安装第二个 TS 6 编译器供工具链使用，代价是并存两套类型系统。工作区在 32GB U 盘上，且 G1 决策只约定「TypeScript」未指定大版本，故取 6.0.3。上游支持 TS >= 7.1 后可再评估。
+
+**Vite 开发服务器显式绑定 IPv4 回环。** Vite 默认使用 `localhost` 主机名，在 Windows 上只解析到 IPv6 回环 `::1`，导致服务在 `127.0.0.1` 上不可达，且与后端 `127.0.0.1:8787` 不在同一协议栈。已改为显式绑定。
+
+**Electron 缓存变量名修正。** 见下节。
+
+### 9.4 T0-03 发现的缺陷与修正
+
+机制原先只设置了 `ELECTRON_CACHE`。核查安装链路源码后确认，**这个变量在整条链路里没有任何一处读取**，因此二进制实际会写到系统盘的 `%LOCALAPPDATA%\electron\Cache`，与写入内聚的约定相悖。
+
+| 变量 | 读取方 | 修正前 | 修正后 |
+| --- | --- | --- | --- |
+| `electron_config_cache` | `electron` 包的安装脚本，转交 `@electron/get` 作 `cacheRoot` | 未设置 | 指向 `.cache/electron` |
+| `ELECTRON_CACHE` | 链路内无读取方，仅第三方工具可能引用 | 已设置 | 保留 |
+| `ELECTRON_BUILDER_CACHE` | electron-builder | 已设置，有效 | 保留 |
+| `ELECTRON_MIRROR` | `@electron/get` | 未设置 | npmmirror |
+| `ELECTRON_BUILDER_BINARIES_MIRROR` | electron-builder | 未设置 | npmmirror |
+
+关键点在于 `@electron/get` 自身没有 `ELECTRON_CACHE` 回退，它只接受调用方传入的 `cacheRoot`，而调用方读的是 `electron_config_cache`。Windows 环境变量大小写不敏感，故同时设置大小写两种拼写以兼容大小写敏感的系统。
+
+镜像指向 npmmirror，与 `infra/portable/config/.npmrc` 中已固定的 npm registry 同源。实测 Electron 二进制、校验文件和 electron-builder 二进制三类地址均返回 200。
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。

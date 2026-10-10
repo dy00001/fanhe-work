@@ -132,9 +132,22 @@ export GOMODCACHE="$(ws_win_path "$WS_ROOT_POSIX/.go/pkg/mod")"
 export CCACHE_DIR="$(ws_win_path "$WS_ROOT_POSIX/.cache/ccache")"
 export DOCKER_CONFIG="$(ws_win_path "$WS_ROOT_POSIX/.docker")"
 export PLAYWRIGHT_BROWSERS_PATH="$(ws_win_path "$WS_ROOT_POSIX/.cache/ms-playwright")"
-export ELECTRON_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron")"
-export ELECTRON_BUILDER_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron/builder")"
 export NUGET_PACKAGES="$(ws_win_path "$WS_ROOT_POSIX/.nuget/packages")"
+
+# Electron. Three separate variables, not interchangeable. See the matching
+# block in ws-env.ps1 for the full reasoning. The short version is that the
+# `electron` npm package reads electron_config_cache, not ELECTRON_CACHE, and
+# @electron/get has no ELECTRON_CACHE fallback, so without it the binary is
+# written to the system drive.
+export ELECTRON_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron")"
+export ELECTRON_CONFIG_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron")"
+export electron_config_cache="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron")"
+export ELECTRON_BUILDER_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron/builder")"
+
+# Mirror the binary downloads, following the npm registry host already pinned
+# in infra/portable/config/.npmrc.
+export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
 
 # Git on a removable, permission-less filesystem. exFAT has no execute bit, no
 # symlink support and a 260 character path limit unless long paths are enabled.

@@ -154,9 +154,35 @@ $env:GOMODCACHE = Join-Path $wsPath['goPath'] 'pkg\mod'
 $env:CCACHE_DIR               = $wsPath['ccache']
 $env:DOCKER_CONFIG            = $wsPath['dockerCfg']
 $env:PLAYWRIGHT_BROWSERS_PATH = $wsPath['pwBrowsers']
-$env:ELECTRON_CACHE           = $wsPath['electron']
-$env:ELECTRON_BUILDER_CACHE   = Join-Path $wsPath['electron'] 'builder'
 $env:NUGET_PACKAGES           = $wsPath['nuget']
+
+# Electron. Three separate variables are involved, they are not
+# interchangeable, and only the middle one decides where the binary lands.
+#
+#   ELECTRON_CACHE          no longer read anywhere in the install chain. Kept
+#                           because third party tooling still looks for it.
+#   electron_config_cache   the name the `electron` npm package actually reads
+#                           in its install script and forwards to @electron/get
+#                           as cacheRoot. @electron/get itself has no
+#                           ELECTRON_CACHE fallback: without this variable the
+#                           zip is written to %LOCALAPPDATA%\electron\Cache on
+#                           the system drive.
+#   ELECTRON_BUILDER_CACHE  read by electron-builder for its own cache.
+#
+# Windows environment lookups ignore case, so the upper case spelling already
+# satisfies the lower case read there. Both are set so the same block keeps
+# working on a case sensitive system.
+$env:ELECTRON_CACHE                 = $wsPath['electron']
+$env:ELECTRON_CONFIG_CACHE          = $wsPath['electron']
+$env:electron_config_cache          = $wsPath['electron']
+$env:ELECTRON_BUILDER_CACHE         = Join-Path $wsPath['electron'] 'builder'
+
+# Binaries are fetched from GitHub releases by default, which is slow or
+# unreachable from a mainland China network. The npm registry is already pinned
+# to npmmirror in infra/portable/config/.npmrc, so the mirrors follow that host.
+# ELECTRON_MIRROR is read by @electron/get, the other one by electron-builder.
+$env:ELECTRON_MIRROR                  = 'https://npmmirror.com/mirrors/electron/'
+$env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 
 # Git on a removable, permission-less filesystem.
 # exFAT carries no execute bit, no symlink support and a 260 character path
