@@ -5,7 +5,6 @@
 .local/
 .config/
 logs/
-.docker/
 
 # Bundled runtimes and dependency trees
 runtime/

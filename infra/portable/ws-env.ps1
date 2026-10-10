@@ -86,7 +86,6 @@ $wsRelative = [ordered]@{
     'goPath'     = '.go'
     'goBuild'    = '.cache\go-build'
     'ccache'     = '.cache\ccache'
-    'dockerCfg'  = '.docker'
     'pwBrowsers' = '.cache\ms-playwright'
     'electron'   = '.cache\electron'
     'nuget'      = '.nuget\packages'
@@ -152,9 +151,26 @@ $env:GOMODCACHE = Join-Path $wsPath['goPath'] 'pkg\mod'
 
 # Other build and tool caches
 $env:CCACHE_DIR               = $wsPath['ccache']
-$env:DOCKER_CONFIG            = $wsPath['dockerCfg']
 $env:PLAYWRIGHT_BROWSERS_PATH = $wsPath['pwBrowsers']
 $env:NUGET_PACKAGES           = $wsPath['nuget']
+
+# Docker is deliberately NOT redirected.
+#
+# DOCKER_CONFIG is not a cache, it is where the CLI keeps its contexts, registry
+# credentials and cli-plugins. Pointing it at an empty workspace directory has
+# two consequences, both measured on 2026-10-10:
+#
+#   1. `docker compose` stops existing. The compose plugin is discovered under
+#      $DOCKER_CONFIG/cli-plugins, so an empty directory turns it into
+#      "docker: unknown command: docker compose". Every container workflow in
+#      this workspace would break, silently, with a confusing message.
+#   2. The desktop-linux context disappears and only the bare `default` context
+#      remains. Plain `docker ps` still happens to work because Docker Desktop
+#      publishes both named pipes, which is exactly the kind of accidental
+#      success that hides the defect until it matters.
+#
+# Redirecting it would also carry machine specific endpoints across machines,
+# which is the same reason the mechanism does not rely on ACLs.
 
 # Electron. Three separate variables are involved, they are not
 # interchangeable, and only the middle one decides where the binary lands.

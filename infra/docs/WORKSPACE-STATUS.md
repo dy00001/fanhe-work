@@ -68,7 +68,7 @@
 2. **变化检测**。`ws-state.ps1` 每次启动比较两个独立信号，任一不一致即调用 `ws-repair.ps1`。根变化对应盘符改变，主机变化对应换电脑而盘符可能相同。
 3. **定位兜底**。`ws-locate.ps1` 扫描全部已挂载卷，用标记文件定位，用于工具或快捷方式仍指向旧路径时的手工恢复。
 
-环境重定向覆盖临时目录、XDG 三类根、Python、Node 生态、JVM 生态、Rust、Go、编译缓存、Docker 配置、浏览器与 Electron 二进制、NuGet、日志。全部为进程级变量，不修改宿主机环境。
+环境重定向覆盖临时目录、XDG 三类根、Python、Node 生态、JVM 生态、Rust、Go、编译缓存、浏览器与 Electron 二进制、NuGet、日志。全部为进程级变量，不修改宿主机环境。Docker 的客户端配置不在此列，原因是它存的是上下文与 CLI 插件而非可重建的缓存，重定向会让 `docker compose` 失效，详见 `PORTABLE-WORKSPACE.md`。
 
 健康检查可随时单独运行，只报告不修改。
 

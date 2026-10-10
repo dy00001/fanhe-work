@@ -39,13 +39,16 @@
 | Rust 工具链与注册表 | `CARGO_HOME` `RUSTUP_HOME` | `.cargo/` `.rustup/` |
 | Go 工作区与构建缓存 | `GOPATH` `GOCACHE` `GOMODCACHE` | `.go/` `.cache/go-build/` |
 | 编译缓存 | `CCACHE_DIR` | `.cache/ccache/` |
-| Docker 客户端配置 | `DOCKER_CONFIG` | `.docker/` |
 | 浏览器与 Electron 二进制 | `PLAYWRIGHT_BROWSERS_PATH` `ELECTRON_CACHE` | `.cache/ms-playwright/` `.cache/electron/` |
 | NuGet 包缓存 | `NUGET_PACKAGES` | `.nuget/packages/` |
 | 日志 | `WS_LOGS` | `logs/` |
 | 可选便携运行时 | 追加到 `PATH` 首位 | `runtime/` |
 
 重定向以进程级环境变量实现，不修改宿主机的用户级或系统级环境变量，因此不会污染使用过的电脑。
+
+**Docker 的客户端配置不在重定向之列，这是刻意的。** `DOCKER_CONFIG` 曾被指向 `.docker/`，与其它工具主目录一并处理，但那个目录存的不是可重建的缓存，而是上下文、registry 凭据与 `cli-plugins`。实测两项后果：`docker compose` 直接变成未知命令（插件在 `$DOCKER_CONFIG/cli-plugins` 下发现），以及 `desktop-linux` 上下文消失、只剩裸的 `default`。后者尤其危险，因为 `docker ps` 仍然能通，缺陷要到真正用到上下文或插件时才暴露。重定向还会把机器相关的端点带到另一台机器上，与机制不依赖 ACL 是同一个理由。
+
+判断一个新工具主目录该不该重定向，标准是它存的是可重建的缓存，还是跨机无效的身份与端点。前者重定向，后者不重定向。
 
 ### 2.2 不覆盖范围
 

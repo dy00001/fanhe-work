@@ -80,7 +80,6 @@ _ws_dirs=(
   "$WS_ROOT_POSIX/.rustup"
   "$WS_ROOT_POSIX/.go"
   "$WS_ROOT_POSIX/.nuget/packages"
-  "$WS_ROOT_POSIX/.docker"
 )
 for _d in "${_ws_dirs[@]}"; do ws_mkdir "$_d"; done
 
@@ -130,9 +129,14 @@ export GOMODCACHE="$(ws_win_path "$WS_ROOT_POSIX/.go/pkg/mod")"
 
 # Other build and tool caches
 export CCACHE_DIR="$(ws_win_path "$WS_ROOT_POSIX/.cache/ccache")"
-export DOCKER_CONFIG="$(ws_win_path "$WS_ROOT_POSIX/.docker")"
 export PLAYWRIGHT_BROWSERS_PATH="$(ws_win_path "$WS_ROOT_POSIX/.cache/ms-playwright")"
 export NUGET_PACKAGES="$(ws_win_path "$WS_ROOT_POSIX/.nuget/packages")"
+
+# DOCKER_CONFIG is deliberately NOT redirected. It is not a cache: it holds the
+# CLI contexts, registry credentials and cli-plugins. Redirecting it to an empty
+# workspace directory makes `docker compose` an unknown command, because the
+# compose plugin is discovered under $DOCKER_CONFIG/cli-plugins. See the matching
+# block in ws-env.ps1 for the full measurement.
 
 # Electron. Three separate variables, not interchangeable. See the matching
 # block in ws-env.ps1 for the full reasoning. The short version is that the
