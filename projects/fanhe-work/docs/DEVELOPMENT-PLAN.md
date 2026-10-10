@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.2 |
+| 版本 | v1.3 |
 | 日期 | 2026-10-10 |
 | 上游文档 | `projects/fanhe-work/docs/IMPLEMENTATION-PLAN.md` |
 | 选定界面方案 | 方案 B 现代极简，`projects/fanhe-work/docs/mockups/option-b-minimal.html` |
 | 方案对比入口 | `projects/fanhe-work/docs/mockups/index.html` |
 | 载体 | `projects/fanhe-work/` |
-| 当前状态 | 目录骨架与 git 仓库已建立，等待首次提交 |
+| 当前状态 | 阶段零进行中，目录骨架、git 仓库、工作区脚手架与依赖安装已完成 |
 
 ---
 
@@ -406,16 +406,17 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | G4 桌面外壳 | 已确认 | Electron |
 | G5 账号登录方式 | 已确认 | 账号密码加记住账号密码，作用于工作台自身登录 |
 | T0-01 目录骨架 | 已完成 | `apps/web`、`apps/api`、`apps/desktop`、`packages/shared`、`data` |
-| T0-07 git 仓库 | 部分完成 | 仓库已建立，分支 `main`，本地配置与机制一致，首次提交待提交身份 |
-| T0-06 忽略规则 | 部分完成 | 根级与项目级规则已补齐，待首次提交验证 |
+| T0-02 workspace 与脚手架 | 已完成 | pnpm workspace、根脚本、web 与 api 骨架，安装、类型检查、构建与开发服务器均验证通过 |
+| T0-07 git 仓库 | 已完成 | 分支 `main`，提交身份 梵禾 `<dev@fanhe.local>`，基线提交 `70b382e` |
+| T0-06 忽略规则 | 已完成 | 根级与项目级规则已补齐，随基线提交纳入版本控制 |
 | 界面方案对比 | 已完成 | `docs/mockups/index.html`，四版方案，选定方案 B |
-| 品牌标识 | 已完成 | `docs/mockups/logo.png`，已接入四版预览 |
+| 品牌标识 | 已完成 | `docs/mockups/logo.png` 与 `apps/web/public/brand/logo.png` |
 
 ### 9.2 待办
 
-1. 提供 git 提交身份，即 `user.name` 与 `user.email`，完成 T0-07 的首次提交。
-2. 执行 T0-02，初始化 pnpm workspace 与根脚本，这是阶段零的核心交付。
-3. 依次执行 T0-05 代码规范与类型检查、T0-04 项目级约定文档、T0-03 Electron 缓存核对。
+1. 执行 T0-05，补齐 ESLint、Prettier 与 Tailwind 类名排序，使 `lint` 与 `format` 脚本可用。
+2. 执行 T0-04，编写项目级约定文档，记录入口唯一、禁盘符、`data/` 忽略、编码约定与数据库不随盘移动。
+3. 执行 T0-03，核对 Electron 缓存重定向，必要时补 `ELECTRON_MIRROR`。
 4. 阶段零通过验收后进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
 5. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
 

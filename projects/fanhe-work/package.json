@@ -1,0 +1,17 @@
+{
+  "name": "fanhe-work",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @fanhe/web dev",
+    "dev:api": "pnpm --filter @fanhe/api dev",
+    "dev:all": "pnpm --filter @fanhe/web --filter @fanhe/api --parallel dev",
+    "build": "pnpm -r --if-present run build",
+    "typecheck": "pnpm -r --if-present run typecheck"
+  }
+}

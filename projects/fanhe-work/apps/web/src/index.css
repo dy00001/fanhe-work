@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+
+/* Design tokens for the 方案 B direction, neutral grayscale with a near black
+   accent. Defined once here so every component inherits the same values. */
+@theme {
+  --color-surface: #fafafa;
+  --color-card: #ffffff;
+  --color-line: #e4e4e7;
+  --color-line-soft: #f1f1f3;
+  --color-ink: #09090b;
+  --color-ink-soft: #52525b;
+  --color-ink-faint: #a1a1aa;
+  --color-accent: #18181b;
+  --color-accent-soft: #f4f4f5;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

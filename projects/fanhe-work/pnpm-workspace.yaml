@@ -1,0 +1,10 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# pnpm 10 blocks dependency lifecycle scripts by default and that default is
+# kept here on purpose. The esbuild binary ships as the optional platform
+# package @esbuild/win32-x64, so its postinstall only re-validates a version
+# that is already correct. Allowing it caused the install to abort with EBUSY
+# while spawning a child process, so the script stays blocked.
+onlyBuiltDependencies: []
