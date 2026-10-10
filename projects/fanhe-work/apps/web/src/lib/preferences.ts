@@ -54,3 +54,54 @@ export function writeSidebarCollapsed(collapsed: boolean): void {
     // 见上。
   }
 }
+
+/**
+ * 主题偏好。
+ *
+ * `'system'` 是**第三个值，不是「没存过」**。把它折算成读到的实际亮暗再存回去，等于
+ * 存了一个瞬间的快照而不是一条规则：用户在系统里改了深浅，界面不会跟着变，因为他
+ * 选的是「跟随系统」，而库里躺着的却是当时那个具体值。所以这里读什么存什么。
+ */
+export type ThemePreference = 'light' | 'dark' | 'system'
+
+/** 主题偏好。值为 `'light'` / `'dark'` / `'system'`。 */
+const THEME_KEY = 'fanhe-work.ui.theme'
+
+/**
+ * 判断一个值是不是合法的主题偏好。
+ *
+ * 合法值只有这一处定义，读侧（`readThemePreference`）与写侧（菜单的选中回调）都用它。
+ * 两处各写一遍的话，将来加一档（比如「高对比度」）会漏改其中之一，而漏改的那一侧
+ * 表现为「选了没反应」—— 回调里的守卫把新值挡掉了，界面上什么都不会发生。
+ */
+export function isThemePreference(value: string | null): value is ThemePreference {
+  return value === 'light' || value === 'dark' || value === 'system'
+}
+
+/**
+ * 读取主题偏好。
+ *
+ * 读不懂（旧版本留下的 `'auto'`、手改出来的 `'1'`）一律回落 `'system'`，而不是某个
+ * 固定的亮或暗：跟随系统是唯一不会让用户觉得「界面坏了」的默认档 —— 它至少与用户
+ * 此刻看到的其它窗口一致。这与侧栏折叠那边「读不懂就展开」是同一条原则，只是默认值
+ * 取得不同。
+ *
+ * 读不出来（隐私模式、存储被禁用）同样按跟随系统处理。
+ */
+export function readThemePreference(): ThemePreference {
+  try {
+    const raw = window.localStorage.getItem(THEME_KEY)
+    return isThemePreference(raw) ? raw : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+/** 写入主题偏好。写不进去不是致命错误：本次会话内界面照常切换，只是下次打开回到默认。 */
+export function writeThemePreference(preference: ThemePreference): void {
+  try {
+    window.localStorage.setItem(THEME_KEY, preference)
+  } catch {
+    // 见上。
+  }
+}

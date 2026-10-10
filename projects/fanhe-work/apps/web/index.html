@@ -5,6 +5,27 @@
     <link rel="icon" type="image/png" href="/brand/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>梵禾 Work</title>
+    <script>
+      // 主题初值必须在这里定下，不能等 main.tsx。模块脚本是 defer 语义，浏览器在它
+      // 执行之前就有机会按默认的浅色画一帧，深色偏好的用户每次打开都会看到一下白闪。
+      // 而这一帧在事后的任何断言里都量不到 —— 只能靠「比样式更早」来消除。
+      //
+      // 这段判断与 src/lib/preferences.ts 的 readThemePreference 是**刻意的重复**：
+      // 内联脚本无法 import 模块，而这里要的恰恰是「比模块更早」。改键名或改回落规则
+      // 时两处必须一起改。键名 fanhe-work.ui.theme；只有存了 'light' 才强制浅色，
+      // 其余情况（'dark'、'system'、缺失、非法值）都按下面这个条件判断。
+      try {
+        var saved = localStorage.getItem('fanhe-work.ui.theme')
+        if (
+          saved === 'dark' ||
+          (saved !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+        ) {
+          document.documentElement.classList.add('dark')
+        }
+      } catch (error) {
+        // 读不到偏好（隐私模式、存储被禁用）就按浅色渲染，与应用的回落一致。
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

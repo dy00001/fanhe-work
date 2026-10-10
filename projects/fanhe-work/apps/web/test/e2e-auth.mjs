@@ -1,7 +1,7 @@
 /**
  * 浏览器级端到端验证：首次初始化 → 登录（勾选记住账号密码）→ 主界面 → 导航过滤 →
  * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 折叠偏好跨刷新保持 →
- * 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
+ * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -344,6 +344,34 @@ const SIDEBAR_WIDTH_PROBE = `(() => {
 
 /** 侧栏折叠偏好的键。与 `src/lib/preferences.ts` 里的常量必须一致。 */
 const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed'
+
+/** 主题偏好的键。同样与 `src/lib/preferences.ts` 保持一致。 */
+const THEME_KEY = 'fanhe-work.ui.theme'
+
+/**
+ * 首帧配色采样器。与 `SIDEBAR_WIDTH_PROBE` 同一手法、同一理由，只是量的东西不同：
+ * 「刷新后还是深色」这句话同样不足以成为判据，把应用放进 `useEffect` 也能满足它，
+ * 代价是每次刷新先闪一帧浅色。
+ *
+ * 量的是 `<html>` 上有没有 `dark` 类，而不是背景色：类名是应用自己写下的意图，
+ * 背景色还取决于样式表有没有加载完 —— 样式到位之前 `body` 背景是透明的，量出来
+ * 会是一个与主题无关的值，那样的断言看起来在测主题，实际在测 CSS 的加载时机。
+ *
+ * 这里还额外验证了一件事：主题的初值不在 React 里，而在 `index.html` 的内联脚本里
+ * （配色要在第一个像素上就对，那时 React 还没挂载）。注入的这段脚本比内联脚本更早
+ * 跑，所以它采到的第一帧正是内联脚本判定的结果。
+ */
+const THEME_FRAME_PROBE = `(() => {
+  const samples = []
+  window.__themeFrames = samples
+  const started = Date.now()
+  const tick = () => {
+    samples.push(document.documentElement.classList.contains('dark') ? 'dark' : 'light')
+    if (samples.length >= 30 || Date.now() - started > 10000) return
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+})()`
 
 async function screenshot(client, name) {
   const { data } = await client.send('Page.captureScreenshot', { format: 'png' })
@@ -922,6 +950,156 @@ async function main() {
       await evaluate(client, 'JSON.stringify(window.__sidebarWidths)'),
     )
     record('偏好值非法时回落为展开', garbageSamples[0] === 224, `首帧 ${garbageSamples[0]}px`)
+
+    // 7f. 主题切换与跨刷新保持。判据与 7e 是同一条：「刷新后还是深色」不足以证明
+    //     没有闪烁 —— 把应用放进 `useEffect` 也能满足它，代价是每次刷新先闪一帧浅色。
+    //     所以这里同样逐帧采样首帧配色（见 `THEME_FRAME_PROBE`）。
+    //
+    //     与侧栏折叠的区别在初值的落点：折叠状态可以等到 React 挂载再读，配色不行，
+    //     它要在第一个像素上就对，所以判断写在 `index.html` 的内联脚本里。这一段验证
+    //     的正是那条路径 —— 只把逻辑写进 React 的话，下面「首帧就是深色」会失败。
+    //
+    //     位置同样受「要整页重载」的约束：重载会清掉挂在 window 上的请求探针，而续期
+    //     断言（第 7 项）已经做完，所以排在这里是安全的。
+    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('深色'))`,
+      '深色选项',
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.documentElement.classList.contains('dark')`,
+        5000,
+        '切到深色后 html 挂上 dark 类',
+      ),
+    )
+    const darkStored = await evaluate(
+      client,
+      `window.localStorage.getItem(${JSON.stringify(THEME_KEY)})`,
+    )
+    record('切到深色后偏好写入 localStorage', darkStored === 'dark', `值 ${darkStored}`)
+
+    await client.send('Page.addScriptToEvaluateOnNewDocument', { source: THEME_FRAME_PROBE })
+    const themeReloaded = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await themeReloaded
+    // 先等外壳挂回来，再读采样。**这一步不能省，也不能用「攒够 5 帧」代替**：
+    // 主题采样器是无条件逐帧记录的（侧栏那个只在 `aside` 存在时才记），所以它几帧
+    // 就攒满了，而那时重载后的「初始化状态 + 静默续期」往返还没走完，顶栏根本没挂载，
+    // 紧接着点主题按钮会报「找不到元素」—— 一个与主题毫无关系的失败。
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('[aria-label="切换主题"]') !== null`,
+        20000,
+        '重载后外壳挂载',
+      ),
+    )
+    await evaluate(
+      client,
+      waitFor(`(window.__themeFrames ?? []).length >= 5`, 20000, '重载后主题首帧采样'),
+    )
+    const darkSamples = JSON.parse(await evaluate(client, 'JSON.stringify(window.__themeFrames)'))
+    record(
+      '刷新后首帧就是深色',
+      darkSamples[0] === 'dark',
+      `首帧 ${darkSamples[0]}，前几帧 ${darkSamples.slice(0, 6).join(' → ')}`,
+    )
+    record(
+      '刷新后没有浅色→深色的闪烁',
+      darkSamples.every((frame) => frame === 'dark'),
+      `共采样 ${darkSamples.length} 帧`,
+    )
+
+    // 切回浅色，验证写回另一个方向，同时把后续截图留在浅色下。
+    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('浅色'))`,
+      '浅色选项',
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `!document.documentElement.classList.contains('dark')`,
+        5000,
+        '切到浅色后摘掉 dark 类',
+      ),
+    )
+    const lightStored = await evaluate(
+      client,
+      `window.localStorage.getItem(${JSON.stringify(THEME_KEY)})`,
+    )
+    record('切到浅色后偏好改写为 light', lightStored === 'light', `值 ${lightStored}`)
+
+    // 「跟随系统」这一档是本期最容易做错的地方：把它在写入时折算成当时的亮暗，用户
+    // 之后改了系统设置界面不会跟着变。所以这里用 CDP 改系统配色，再选「跟随系统」，
+    // 断言界面跟着走、而存储里留下的是 `system` 这个**规则**而不是某个具体配色。
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: 'dark' }],
+    })
+    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+    )
+    await mouseClick(
+      client,
+      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('跟随系统'))`,
+      '跟随系统选项',
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `document.documentElement.classList.contains('dark')`,
+        5000,
+        '跟随系统下按系统配色渲染',
+      ),
+    )
+    const systemStored = await evaluate(
+      client,
+      `window.localStorage.getItem(${JSON.stringify(THEME_KEY)})`,
+    )
+    record(
+      '跟随系统档存的是 system 而不是当时的配色',
+      systemStored === 'system',
+      `值 ${systemStored}`,
+    )
+    // 此刻界面是深色（模拟的系统配色为深色），截图留档。
+    await screenshot(client, '7-dark-theme')
+
+    // 系统配色变化时界面要即时跟随。这是「跟随系统」区别于固定档的唯一行为，也是
+    // 它必须存成第三个值的理由 —— 存了具体配色的话，界面在这一步不会动。
+    await client.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: 'light' }],
+    })
+    let followedSystem = true
+    try {
+      await evaluate(
+        client,
+        waitFor(
+          `!document.documentElement.classList.contains('dark')`,
+          5000,
+          '系统改浅色后界面跟随',
+        ),
+      )
+    } catch {
+      followedSystem = false
+    }
+    record('跟随系统档下系统配色变化即时生效', followedSystem, '')
+
+    // 收尾：撤掉模拟的系统配色，让后面的截图回到本机真实配色。
+    await client.send('Emulation.setEmulatedMedia', { features: [] })
 
     // 8. 登出应清掉本地令牌并回到登录页。
     //    退出登录从顶栏的裸按钮移进了账号菜单（T2-02 的布局骨架），要多两步：

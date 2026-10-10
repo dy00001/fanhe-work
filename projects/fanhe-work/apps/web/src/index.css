@@ -28,9 +28,27 @@
    而在 shadcn 体系里主色叫 `primary`，`accent` 指的是**浅灰悬停底色**（#f4f4f5）。
    同名不同义，看名字猜不出方向，只能对照这张表。旧名到新名的完整映射见
    docs/DEVELOPMENT-PLAN.md 第 9.21 节。
+
+   亮暗两套令牌就是上面「第一层可被覆盖」那句话的兑现：`:root` 写浅色，下面的
+   `.dark` 块覆盖同名原始值，组件侧一行都不用动。配套的东西有两处，都不能漏 ——
+   一是紧接着的 `@custom-variant dark`，Tailwind 4 的 `dark:` 默认按媒体查询走，
+   不声明这个变体的话组件源码里那些 `dark:` 类不会认 `.dark` 类名；二是两个作用域
+   里的 `color-scheme`，它决定滚动条、自动填充底色、原生控件这些**浏览器自己画的**
+   部分跟不跟着走，那些地方取不到我们的令牌。
    ============================================================================= */
 
+/* Tailwind 4 的 `dark:` 变体默认是 `@media (prefers-color-scheme: dark)`，与「按类名
+   切换」是两回事。这一行把它改成认 `.dark` 类，shadcn 组件源码里的 `dark:` 类才会
+   跟着 html 上的类走。
+   `:where()` 把选择器权重压到 0，是为了不让它盖过下面 `.dark` 块里的令牌覆盖 ——
+   少了它，覆盖在层叠顺序上会输给工具类。 */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
+  /* 浏览器自己画的那部分（滚动条、输入框自动填充底色、日期选择器）取不到我们的
+     令牌，只能靠这个属性告诉它该用哪套配色。下面 `.dark` 里对应写 `dark`。 */
+  color-scheme: light;
+
   /* 圆角基数。下面的刻度直接从它推，但推不出方案 B 要的三个值，所以刻度是
      离散写死的，这里只作为需要 `rounded-[var(--radius)]` 时的取值。 */
   --radius: 8px;
@@ -72,6 +90,61 @@
   --border-soft: #f1f1f3;
   --input: #e4e4e7;
   --ring: #18181b;
+}
+
+/* =============================================================================
+   暗色令牌
+   =============================================================================
+
+   只覆盖上面 `:root` 里的原始值，不碰 `@theme inline` 那一层 —— 后者是映射关系，
+   与明暗无关，两套配色共用。这正是当初把两层拆开的目的。
+
+   三处关系必须与浅色保持一致，否则界面会在某个角落露馅：
+
+   1. **背景比卡片深。** 浅色下 background #fafafa 比 card #ffffff 深一档，白色卡片
+      靠这一档从背景里浮起来。暗色下方向不变：background #0a0a0a 比 card #141414 深。
+      若反过来（背景比卡片浅），卡片看起来是凹进去的，整块布局的层次会翻过来。
+   2. **主色反转。** 浅色下 primary 是近黑、primary-foreground 是白；暗色下两者对调。
+      Avatar 与侧栏选中态用的就是这一对，不反转会得到一块浅底浅字。
+   3. **三级文字的明度顺序。** 浅色下 foreground 最深、muted-foreground 次之、
+      muted-foreground-weak 最浅；暗色下要按亮度反过来排，最弱的那级必须比次弱的
+      **更暗**。照抄浅色的明度会让「最弱一级」在暗色下反而更醒目。
+
+   阴影不做暗色适配，两个理由：方案 B 本来就不用阴影分层，浮层靠描边区分；而且
+   `--shadow-*` 定义在 `@theme inline` 里，那是会被内联进工具类的值，覆盖不到。 */
+
+.dark {
+  color-scheme: dark;
+
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+
+  --card: #141414;
+  --card-foreground: #fafafa;
+  --popover: #1c1c1c;
+  --popover-foreground: #fafafa;
+
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+
+  --secondary: #262626;
+  --secondary-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a1a1aa;
+  --muted-foreground-weak: #71717a;
+
+  --accent: #262626;
+  --accent-foreground: #fafafa;
+
+  /* 浅色用红 600，暗色下换成更亮的红 500：同一个色值在深底上的对比度会掉下来，
+     而危险色恰恰是最不能看不清的一档。 */
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+
+  --border: #27272a;
+  --border-soft: #1f1f22;
+  --input: #27272a;
+  --ring: #d4d4d8;
 }
 
 @theme inline {
