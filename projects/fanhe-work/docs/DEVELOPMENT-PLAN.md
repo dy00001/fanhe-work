@@ -55,7 +55,7 @@
 
 ### 0.4 环境实测结论
 
-工作区已具备启动条件。Node `v22.22.2`、npm `10.9.7`、pnpm `10.33.0`、git `2.55.0` 均可用。工作区为空，无历史依赖需要清理。git 仓库已在工作区根初始化，分支 `main`，本地配置为 `core.filemode=false`、`core.autocrlf=false`、`core.symlinks=false`、`core.longpaths=true`，与机制约定一致。开发者模式尚未开启，`core.symlinks` 暂保持 false，待该步骤完成后改为 true。
+工作区已具备启动条件。Node `v22.22.2`、npm `10.9.7`、pnpm `10.33.0`、git `2.55.0` 均可用。工作区为空，无历史依赖需要清理。git 仓库已在工作区根初始化，分支 `main`，本地配置为 `core.filemode=false`、`core.autocrlf=false`、`core.symlinks=true`、`core.longpaths=true`，与机制约定一致。开发者模式已于 2026-10-10 开启，`core.symlinks` 随之由 false 改为 true。
 
 ---
 
@@ -417,9 +417,10 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 
 ### 9.2 待办
 
-1. 阶段零通过验收后进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
+1. 进入阶段一，先做登录与权限的最小闭环，记住账号密码并入其中。
 2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
-3. 以管理员身份运行 `infra/portable/ws-enable-devmode.cmd` 开启开发者模式，之后可把 `core.symlinks` 由 false 改为 true。
+
+开发者模式已于 2026-10-10 开启，两个环境脚本与仓库本地配置中的 `core.symlinks` 已改为 true，原先列在这里的这一项已完成。实测确认 git 与 node 均可在不提权的情况下创建符号链接；PowerShell 5.1 的 `New-Item -ItemType SymbolicLink` 仍会失败，因为它不传 `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`，属该版本的自身限制，不影响 git。
 
 ### 9.3 阶段零实施中的三处技术判断
 

@@ -184,14 +184,28 @@ $env:ELECTRON_BUILDER_CACHE         = Join-Path $wsPath['electron'] 'builder'
 $env:ELECTRON_MIRROR                  = 'https://npmmirror.com/mirrors/electron/'
 $env:ELECTRON_BUILDER_BINARIES_MIRROR = 'https://npmmirror.com/mirrors/electron-builder-binaries/'
 
-# Git on a removable, permission-less filesystem.
-# exFAT carries no execute bit, no symlink support and a 260 character path
-# limit unless long paths are enabled. GIT_CONFIG_COUNT injects these settings
-# for this process only, so the user's own global git configuration is untouched.
+# Git on a removable filesystem. GIT_CONFIG_COUNT injects these settings for
+# this process only, so the user's own global git configuration is untouched.
+#
+# The medium is NTFS since 2026-10-10, so the exFAT restrictions are gone and
+# the execute bit and long paths are available.
+#
+# core.symlinks is true because Developer Mode is enabled on this host
+# (AllowDevelopmentWithoutDevLicense = 1), which is what lets git create
+# symbolic links without elevation. Verified by materialising a symlink entry
+# out of the index.
+#
+# Two things to keep in mind. PowerShell's own New-Item -ItemType SymbolicLink
+# still fails without elevation, because Windows PowerShell 5.1 does not pass
+# SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE; git and node both do, so this
+# setting is safe. And the capability is a property of the host, not of the
+# workspace: on a machine without Developer Mode git degrades gracefully by
+# writing the link target as a plain file, but a checkout that depends on
+# symlinks will not behave the same there.
 $env:GIT_CONFIG_COUNT    = '4'
 $env:GIT_CONFIG_KEY_0    = 'core.filemode';  $env:GIT_CONFIG_VALUE_0 = 'false'
 $env:GIT_CONFIG_KEY_1    = 'core.autocrlf';  $env:GIT_CONFIG_VALUE_1 = 'false'
-$env:GIT_CONFIG_KEY_2    = 'core.symlinks';  $env:GIT_CONFIG_VALUE_2 = 'false'
+$env:GIT_CONFIG_KEY_2    = 'core.symlinks';  $env:GIT_CONFIG_VALUE_2 = 'true'
 $env:GIT_CONFIG_KEY_3    = 'core.longpaths'; $env:GIT_CONFIG_VALUE_3 = 'true'
 
 # Prefer workspace-local runtimes and shims when they exist, so a bundled

@@ -110,7 +110,7 @@ infra\portable\ws-repair.ps1 -CheckOnly
 
 | 类别 | 限制 | 影响与应对 |
 | --- | --- | --- |
-| 文件系统 | 符号链接仍需提权 | `core.symlinks` 保持 false，开启开发者模式后方可改 true |
+| 文件系统 | 符号链接依赖开发者模式 | 本机已开启，`core.symlinks` 已改为 true。该能力属于主机而非工作区，换到未开启开发者模式的机器上 git 会退化为写普通文件 |
 | 文件系统 | ACL 跨机无效 | 卷根已放宽为 Everyone 完全控制，写入范围依靠重定向加审计 |
 | 硬件 | 32GB U 盘，闪存颗粒 | 随机 IO 弱且有写入寿命，重型构建产物应移出或重定向 |
 | 路径 | 工作区路径含空格 | 脚本中所有变量必须加引号 |
@@ -125,12 +125,16 @@ infra\portable\ws-repair.ps1 -CheckOnly
 
 按优先级排列。
 
-1. **开启开发者模式**，之后把两个环境脚本中的 `core.symlinks` 由 false 改为 true。
-2. **开启 NTFS 长路径支持**，注册表 `LongPathsEnabled`。
-3. **确认新盘可用后清理备份** `D:\_ws-migration`，含诊断文件。
-4. **视需要建立 git 仓库**，当前三份根级配置尚未生效。
-5. **补 `CARGO_TARGET_DIR`**，若最终采用 Tauri，Rust 编译产物默认落在项目内并随盘移动。
-6. **换 USB 硬盘盒加 SSD**，需确认桥接芯片支持 UASP 与 TRIM 透传。
+1. **确认新盘可用后清理备份** `D:\_ws-migration`，含诊断文件。
+2. **换 USB 硬盘盒加 SSD**，需确认桥接芯片支持 UASP 与 TRIM 透传。
+
+已于 2026-10-10 完成的三项，原先列在这里。
+
+- 开发者模式已开启（`AllowDevelopmentWithoutDevLicense` 由未设置改为 1），两个环境脚本与仓库本地配置中的 `core.symlinks` 已由 false 改为 true。
+- NTFS 长路径支持此前已是 1，无需处理。
+- git 仓库已在工作区根建立，三份根级配置已生效。
+
+原第 5 项「补 `CARGO_TARGET_DIR`」已作废。桌面外壳在决策门 G4 中定为 Electron，不再需要 Rust 工具链。
 
 ---
 

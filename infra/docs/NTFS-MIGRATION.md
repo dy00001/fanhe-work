@@ -141,6 +141,8 @@ New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
 
 用于免提权创建符号链接。也可在设置的「隐私和安全性」下的「开发者选项」中手动开启。
 
+已于 2026-10-10 执行，方式为由用户以管理员身份运行 `infra/portable/ws-enable-devmode.cmd`。执行前后值由 `NOT_SET` 变为 `1`。
+
 ```powershell
 New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" `
   -Name "AllowDevelopmentWithoutDevLicense" -Value 1 -PropertyType DWord -Force
@@ -168,7 +170,7 @@ infra\portable\ws-doctor.ps1
 改走 NTFS 之后，之前为了绕开 exFAT 而关闭的两项能力可以打开。
 
 1. **pnpm 硬链接模式**。删除 `infra/portable/config/.npmrc` 中的复制模式相关设置，改用 pnpm 默认的内容寻址存储加硬链接，多项目共用依赖时可显著节省空间。
-2. **Git 符号链接**。把 `infra/portable/ws-env.ps1` 与 `infra/portable/ws-env.sh` 中的 `core.symlinks` 由 `false` 改为 `true`，依赖符号链接的项目才能正常检出。
+2. **Git 符号链接**。已执行。`infra/portable/ws-env.ps1` 与 `infra/portable/ws-env.sh` 中的 `core.symlinks` 已由 `false` 改为 `true`，仓库本地配置同步更新。注意该能力属于主机而非介质：在未开启开发者模式的机器上 git 会退化为写普通文件。
 
 同时可以移除 `.gitattributes` 中为 exFAT 添加的说明性注释，并把记忆文件中「介质约束」一节改写为 NTFS 下的新约定。
 

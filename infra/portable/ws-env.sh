@@ -149,14 +149,18 @@ export ELECTRON_BUILDER_CACHE="$(ws_win_path "$WS_ROOT_POSIX/.cache/electron/bui
 export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
 export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
 
-# Git on a removable, permission-less filesystem. exFAT has no execute bit, no
-# symlink support and a 260 character path limit unless long paths are enabled.
-# These are injected for this shell only and do not override the user's own
-# global git configuration.
+# Git on a removable filesystem. Injected for this shell only, so the user's
+# own global git configuration is untouched.
+#
+# The medium is NTFS since 2026-10-10, so the exFAT restrictions are gone.
+# core.symlinks is true because Developer Mode is enabled on this host, which
+# is what lets git create symbolic links without elevation. The capability
+# belongs to the host rather than the workspace; see the matching block in
+# ws-env.ps1 for the caveats.
 export GIT_CONFIG_COUNT=4
 export GIT_CONFIG_KEY_0=core.filemode   GIT_CONFIG_VALUE_0=false
 export GIT_CONFIG_KEY_1=core.autocrlf   GIT_CONFIG_VALUE_1=false
-export GIT_CONFIG_KEY_2=core.symlinks   GIT_CONFIG_VALUE_2=false
+export GIT_CONFIG_KEY_2=core.symlinks   GIT_CONFIG_VALUE_2=true
 export GIT_CONFIG_KEY_3=core.longpaths  GIT_CONFIG_VALUE_3=true
 
 # Prefer workspace-local runtimes and shims when present.
