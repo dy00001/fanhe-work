@@ -172,6 +172,21 @@ export async function listProfiles(userId: string): Promise<LaunchProfile[]> {
   return rows.map(toProfile)
 }
 
+/**
+ * 按 id 取一条配置，取不到返回 null。
+ *
+ * 存在性、归属与软删除三件事合成一个 where，与其余函数保持同一条规则：归属不符
+ * 与不存在在调用方看来是同一种结果。启动接口要用它，因为「取配置」与「启动进程」
+ * 必须分成两步 —— 后者是 agent 模块的职责，而那个模块刻意不认识数据库。
+ */
+export async function getProfile(userId: string, id: string): Promise<LaunchProfile | null> {
+  const row = await prisma.launchProfile.findFirst({
+    where: { id, userId, deletedAt: null },
+    select: PROFILE_SELECT,
+  })
+  return row === null ? null : toProfile(row)
+}
+
 export async function createProfile(
   userId: string,
   input: CreateLaunchProfileRequest,
