@@ -416,11 +416,13 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | 品牌标识 | 已完成 | `docs/mockups/logo.png` 与 `apps/web/public/brand/logo.png` |
 | T1-01 数据模型与首个迁移 | 已完成 | 六张账号权限表与首个迁移，已应用到 PostgreSQL 16.15 并确认无漂移；连接自检 `pnpm db:ping` 通过 |
 | T1-02 数据库连接与种子 | 已完成 | 连接封装 `src/db/prisma.ts` 与种子 `src/db/seed.ts`；库中 11 个权限点、4 个角色、29 条授权关联，重跑无副作用；发现并修正 `matchesGrant` 缺陷，详见 9.8 |
+| T1-03 密码哈希 | 已完成 | `src/auth/password.ts`，Argon2id 参数可配置、可判定重算；12 项测试通过。依赖选型受本机无编译器约束，见 9.9 |
 
 ### 9.2 待办
 
-1. 进入 T1-03，实现 Argon2id 密码哈希封装。
+1. 进入 T1-04，实现登录接口与访问令牌、刷新令牌签发。
 2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
+3. **待确认**：入口脚本强制切换工作目录的缺陷，详见 9.9。
 
 开发者模式已于 2026-10-10 开启，两个环境脚本与仓库本地配置中的 `core.symlinks` 已改为 true，原先列在这里的这一项已完成。实测确认 git 与 node 均可在不提权的情况下创建符号链接；PowerShell 5.1 的 `New-Item -ItemType SymbolicLink` 仍会失败，因为它不传 `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`，属该版本的自身限制，不影响 git。
 
@@ -519,5 +521,25 @@ personal.*.read   非末尾通配 → 只匹配 personal.<对象>.read
 脚本放在 `src/db/` 而非 Prisma 惯例的 `prisma/seed.ts`：api 的 tsconfig 把 `rootDir` 限定为 `src`，放在 `prisma` 目录下会脱离类型检查，或者要为它再引一份 tsconfig。这个脚本是要写库的真实代码，不该落在检查范围之外。
 
 **验证方式。** 除重跑确认 `0 新增 / 0 移除` 外，另手工向 `viewer` 插入一条多余的写权限，重跑后确认被移除、计数回到 3 —— 差集同步的两个方向都实际走通了，而不只是「重跑没变化」。
+
+### 9.9 密码哈希的依赖选型与一处机制缺陷
+
+**依赖只能选 `@node-rs/argon2`，不是偏好而是约束。** 本机没有 MSVC 编译器（`cl.exe` 不存在）。官方 `argon2` 包靠 postinstall 脚本调 `prebuild-install` 拉预编译二进制，而 `pnpm-workspace.yaml` 里的 `onlyBuiltDependencies: []` 会禁掉该脚本，于是退回 `node-gyp` 源码编译，然后必然失败。`@node-rs/argon2` 的二进制由 optionalDependencies 按平台分发，包内不含任何安装脚本，实测 19.4 秒装完、无需编译。这条约束适用于后续任何原生依赖：**先看它是靠 postinstall 还是靠可选依赖包分发二进制**。
+
+**`parseOptions` 与 `Version` 枚举是两个容易踩错的点。** 库本身导出了 `parseOptions`，注释明确写着就是给 needs-rehash 用的，不必自己拆 PHC 串。更要紧的是库的 `Version` 枚举是 `V0x10 = 0`、`V0x13 = 1`，而 PHC 串里写的是 `v=19` —— 两者不是同一个数。按字面量 19 去比对，会让每一个哈希都被判为需要重算，而且不报错，只是每次登录都多做一次哈希。
+
+**机制缺陷：入口脚本强制切换工作目录。** 安装依赖时发现 virtual store 落到了 `apps/api/node_modules/.pnpm`，而其它依赖都在工作空间根的 `node_modules/.pnpm`，出现了两套。
+
+根因在入口脚本。`ws-run.sh` 结尾是 `cd "$WS_ROOT"`，`ws-run.ps1` 用 `Push-Location $env:WS_ROOT` 包住命令，两者都把工作目录切到工作空间根。文档里的示例是 `ws-run.cmd npm install`，那是单项目时代的写法 —— 当时项目就在根目录下，切过去是对的。现在项目在 `projects/fanhe-work/`，根目录下没有 `package.json`，同样的写法等于在错误目录执行命令，而且不会有任何提示。
+
+本次的后果：`pnpm --filter @fanhe/api add` 在根目录执行，pnpm 未能按预期定位 workspace 根，virtual store 落到了子包目录下。用 `pnpm install` 归位后，残留的 666K 目录要手工清除；删掉之后 pnpm 又因非交互环境拒绝重建 modules 目录（`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`），需加 `CI=true` 才能继续。
+
+**环境重定向全部通过进程级环境变量实现，与工作目录无关**，所以切目录并非重定向所必需。合理做法是保留调用者的目录，仅当调用者在工作空间之外时才回退到根。这处改动涉及 `ws-run.sh` 与 `ws-run.ps1`，属机制变更，**待确认后再动**。
+
+在此之前，在项目子目录下工作必须显式带上目录：
+
+```bash
+bash infra/portable/ws-run.sh bash -c 'cd "projects/fanhe-work" && pnpm install'
+```
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。

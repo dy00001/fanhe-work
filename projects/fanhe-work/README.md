@@ -136,7 +136,9 @@ projects/fanhe-work/
 ├── apps/
 │   ├── web/          React 前端，Vite 开发服务器在 5173
 │   ├── api/          Fastify 后端，仅监听回环 8787
-│   │   └── prisma/   数据模型与迁移；客户端生成到 src/generated/prisma
+│   │   ├── prisma/   数据模型与迁移；客户端生成到 src/generated/prisma
+│   │   ├── src/auth/ 密码哈希与后续的令牌逻辑
+│   │   └── test/     测试，用 tsx 跑源码
 │   └── desktop/      Electron 外壳，阶段四启用
 ├── packages/
 │   └── shared/       跨端共享的类型与常量，构建产物在 dist，测试在 test
@@ -255,13 +257,37 @@ pnpm --filter @fanhe/api exec prisma migrate diff `
 
 `packages/shared/test/permissions.test.mjs` 覆盖了这些规则，用 Node 内置测试运行器，不引第三方框架。它直接跑 `dist` 产物，因为写进库的就是那份展开结果。
 
-## 三个已知的版本取舍
+## 认证
+
+### 密码哈希
+
+密码以 Argon2id 哈希存储，实现在 `apps/api/src/auth/password.ts`。
+
+参数从环境变量读，默认是 OWASP 对 Argon2id 给出的最低推荐档：
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `ARGON2_MEMORY_KIB` | 19456 | 单次哈希占用的内存，单位 KiB（约 19 MiB） |
+| `ARGON2_TIME_COST` | 2 | 迭代轮数 |
+| `ARGON2_PARALLELISM` | 1 | 并行线程数 |
+
+三者留空即用默认值。`ARGON2_MEMORY_KIB` 直接决定单次哈希的内存占用，并发 10 个登录请求就是 10 倍，所以能开多高取决于部署机器的内存与预期并发。Argon2 规范要求它至少是 `ARGON2_PARALLELISM` 的 8 倍；配错会在进程启动时报错，并指出是哪两个变量。
+
+**改参数不会让已有密码失效。** PHC 编码的哈希串自带生成时的参数，校验时按串里的参数走，只有新密码才用新参数。`needsRehash(hash)` 用来判断哪些旧哈希值得重算：它只在参数确实变弱时返回 true——数值项比的是「小于当前配置」而不是「不等于」，把配置调低不该反过来让全库重算一遍。调用方不必立刻重算并写库，等密码校验通过时顺手重算一次即可。
+
+选 `@node-rs/argon2` 而非官方包的原因见下一节。
+
+`apps/api/test/password.test.ts` 覆盖哈希往返、盐随机性、非法串不抛异常、旧参数哈希仍可校验、以及重算判定的四种情形，共 12 项。测试先固定 `ARGON2_*` 再动态 import 被测模块，因此结果与本机 `.env` 无关。
+
+## 四个已知的版本取舍
 
 **TypeScript 固定在 6.x，不是 7.x。** `typescript-eslint` 8.71.1 的 peer 声明为 `>=4.8.4 <6.1.0`，且遇到 TS 7 是导入即抛错，不是警告。官方给的出路是并行安装第二个 TS 6 编译器供工具链使用。工作区在 32GB U 盘上，并存两套类型系统不划算，因此取 6.0.3。上游支持 TS >= 7.1 后可以再升。
 
 **Prisma 取 7.10.0，不是 npm 上标记为 latest 的 8.0.0-rc.22。** `prisma` 包的 `latest` 标签目前指向一个预发布版本，而 `@prisma/client` 的 `latest` 是 7.10.0。两个包必须同版本，因此都钉在 7.10.0。安装时不要用 `@latest`，会把 CLI 拉到 RC 上，与客户端版本错开。
 
 **esbuild 的安装脚本被有意阻止。** pnpm 10 默认阻止依赖的生命周期脚本，`pnpm-workspace.yaml` 里的 `onlyBuiltDependencies` 保持为空是刻意的。esbuild 的二进制由可选依赖包 `@esbuild/win32-x64` 直接提供，postinstall 只是重复校验，在本环境执行必然报 `EBUSY`。代价是每次安装会提示 ignored build scripts，可以忽略。
+
+**密码哈希用 `@node-rs/argon2`，不是官方的 `argon2` 包。** 这条是被环境逼出来的，不是偏好。官方包靠 postinstall 脚本调 `prebuild-install` 拉预编译二进制，而上面那条 `onlyBuiltDependencies: []` 会禁掉它，于是退回 `node-gyp` 源码编译；本机没有 MSVC 编译器（`cl.exe` 不存在），编译必然失败。`@node-rs/argon2` 的二进制由 optionalDependencies 按平台分发（Windows x64 对应 `@node-rs/argon2-win32-x64-msvc`），包内不含任何安装脚本，因此不受该限制。换机器只要同为 win32-x64 就不需要重新编译。
 
 ## 常见问题
 
