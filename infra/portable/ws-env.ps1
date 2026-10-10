@@ -1,0 +1,201 @@
+<#
+  ws-env.ps1
+  Portable workspace environment resolver. Drive-letter agnostic.
+
+  Apply to the current PowerShell session by dot-sourcing:
+      . "$PSScriptRoot\ws-env.ps1"
+
+  The entry points (ws-run.cmd / ws-run.ps1 / ws-run.sh) call this
+  automatically, so interactive shells and build tools launched through them
+  inherit the redirected environment.
+
+  The workspace root is derived from THIS FILE'S location. No absolute path is
+  ever persisted into a tracked file, therefore changing the drive letter is
+  transparent.
+
+  Parameters
+      -NoRepair   skip the relocation repair routine
+      -Quiet      suppress informational output
+#>
+[CmdletBinding()]
+param(
+    [switch]$NoRepair,
+    [switch]$Quiet
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Write-WsLog {
+    param([string]$Message, [string]$Level = 'info')
+    if ($Quiet -and $Level -eq 'info') { return }
+    $color = 'DarkCyan'
+    if ($Level -eq 'warn')  { $color = 'Yellow' }
+    if ($Level -eq 'error') { $color = 'Red' }
+    Write-Host ('[ws] ' + $Message) -ForegroundColor $color
+}
+
+# ---------------------------------------------------------------------------
+# 1. Self-location. The workspace root is found by walking up from this script
+#    until a directory containing the .ws-root marker is reached.
+#    Using the marker instead of a fixed relative depth means the mechanism
+#    keeps working no matter how the directory layout is reorganised later.
+# ---------------------------------------------------------------------------
+function Get-WsRootPath {
+    param([string]$Start)
+    $probe = [System.IO.Path]::GetFullPath($Start)
+    while ($probe) {
+        if (Test-Path -LiteralPath (Join-Path $probe '.ws-root')) {
+            return $probe.TrimEnd([char]92)
+        }
+        $parent = Split-Path -Parent $probe
+        if (-not $parent -or $parent -eq $probe) { break }
+        $probe = $parent
+    }
+    # Fallback for a workspace whose marker is missing, one level above portable.
+    return [System.IO.Path]::GetFullPath((Join-Path $Start '..')).TrimEnd([char]92)
+}
+
+$script:WsPortableDir = $PSScriptRoot
+$script:WsRoot        = Get-WsRootPath $PSScriptRoot
+$script:WsStateDir    = Join-Path $PSScriptRoot 'state'
+$script:WsConfigDir   = Join-Path $PSScriptRoot 'config'
+
+# ---------------------------------------------------------------------------
+# 2. Workspace-internal directory map. Every value is relative to the root.
+#    Adding a new tool means adding one row here, nothing else.
+# ---------------------------------------------------------------------------
+$wsRelative = [ordered]@{
+    'tmp'        = '.tmp'
+    'cache'      = '.cache'
+    'local'      = '.local'
+    'config'     = '.config'
+    'logs'       = 'logs'
+    'venv'       = '.venv'
+    'npmCache'   = '.cache\npm'
+    'npmPrefix'  = '.local\npm-global'
+    'pipCache'   = '.cache\pip'
+    'pyCache'    = '.cache\pycache'
+    'pyUserBase' = '.local\python'
+    'yarnCache'  = '.cache\yarn'
+    'pnpmStore'  = '.cache\pnpm-store'
+    'pnpmHome'   = '.local\pnpm'
+    'gradleHome' = '.gradle'
+    'mavenRepo'  = '.m2\repository'
+    'cargoHome'  = '.cargo'
+    'rustupHome' = '.rustup'
+    'goPath'     = '.go'
+    'goBuild'    = '.cache\go-build'
+    'ccache'     = '.cache\ccache'
+    'dockerCfg'  = '.docker'
+    'pwBrowsers' = '.cache\ms-playwright'
+    'electron'   = '.cache\electron'
+    'nuget'      = '.nuget\packages'
+    'runtime'    = 'runtime'
+}
+
+$wsPath = [ordered]@{}
+foreach ($key in $wsRelative.Keys) {
+    $full = Join-Path $script:WsRoot $wsRelative[$key]
+    $wsPath[$key] = $full
+    if (-not (Test-Path -LiteralPath $full)) {
+        New-Item -ItemType Directory -Path $full -Force | Out-Null
+    }
+}
+$script:WsPath = $wsPath
+
+# ---------------------------------------------------------------------------
+# 3. Redirect every writable tool path into the workspace.
+#    These are per-process variables. They never touch the host's persistent
+#    user or system environment.
+# ---------------------------------------------------------------------------
+$env:WS_ROOT         = $script:WsRoot
+$env:WS_PORTABLE_DIR = $script:WsPortableDir
+$env:WS_LOGS         = $wsPath['logs']
+
+# Process scratch space
+$env:TMP  = $wsPath['tmp']
+$env:TEMP = $wsPath['tmp']
+
+# XDG style bases (honoured by many cross platform tools)
+$env:XDG_CACHE_HOME  = $wsPath['cache']
+$env:XDG_CONFIG_HOME = $wsPath['config']
+$env:XDG_DATA_HOME   = $wsPath['local']
+
+# Python
+$env:VIRTUAL_ENV                 = $wsPath['venv']
+$env:PIP_CACHE_DIR               = $wsPath['pipCache']
+$env:PIP_DISABLE_PIP_VERSION_CHECK = '1'
+$env:PYTHONPYCACHEPREFIX         = $wsPath['pyCache']
+$env:PYTHONUSERBASE              = $wsPath['pyUserBase']
+
+# Node and the JavaScript ecosystem
+$env:npm_config_cache      = $wsPath['npmCache']
+$env:npm_config_prefix     = $wsPath['npmPrefix']
+$env:npm_config_userconfig = Join-Path $script:WsConfigDir '.npmrc'
+$env:NODE_REPL_HISTORY     = Join-Path $wsPath['cache'] 'node_repl_history'
+$env:YARN_CACHE_FOLDER     = $wsPath['yarnCache']
+$env:PNPM_HOME             = $wsPath['pnpmHome']
+$env:npm_config_store_dir  = $wsPath['pnpmStore']
+
+# JVM ecosystem
+$env:GRADLE_USER_HOME = $wsPath['gradleHome']
+$env:MAVEN_OPTS       = ('-Dmaven.repo.local=' + $wsPath['mavenRepo'])
+
+# Rust
+$env:CARGO_HOME  = $wsPath['cargoHome']
+$env:RUSTUP_HOME = $wsPath['rustupHome']
+
+# Go
+$env:GOPATH     = $wsPath['goPath']
+$env:GOCACHE    = $wsPath['goBuild']
+$env:GOMODCACHE = Join-Path $wsPath['goPath'] 'pkg\mod'
+
+# Other build and tool caches
+$env:CCACHE_DIR               = $wsPath['ccache']
+$env:DOCKER_CONFIG            = $wsPath['dockerCfg']
+$env:PLAYWRIGHT_BROWSERS_PATH = $wsPath['pwBrowsers']
+$env:ELECTRON_CACHE           = $wsPath['electron']
+$env:ELECTRON_BUILDER_CACHE   = Join-Path $wsPath['electron'] 'builder'
+$env:NUGET_PACKAGES           = $wsPath['nuget']
+
+# Git on a removable, permission-less filesystem.
+# exFAT carries no execute bit, no symlink support and a 260 character path
+# limit unless long paths are enabled. GIT_CONFIG_COUNT injects these settings
+# for this process only, so the user's own global git configuration is untouched.
+$env:GIT_CONFIG_COUNT    = '4'
+$env:GIT_CONFIG_KEY_0    = 'core.filemode';  $env:GIT_CONFIG_VALUE_0 = 'false'
+$env:GIT_CONFIG_KEY_1    = 'core.autocrlf';  $env:GIT_CONFIG_VALUE_1 = 'false'
+$env:GIT_CONFIG_KEY_2    = 'core.symlinks';  $env:GIT_CONFIG_VALUE_2 = 'false'
+$env:GIT_CONFIG_KEY_3    = 'core.longpaths'; $env:GIT_CONFIG_VALUE_3 = 'true'
+
+# Prefer workspace-local runtimes and shims when they exist, so a bundled
+# interpreter always wins over whatever the host machine happens to have.
+$prepend = @(
+    (Join-Path $wsPath['runtime'] 'python'),
+    (Join-Path $wsPath['runtime'] 'python\Scripts'),
+    (Join-Path $wsPath['runtime'] 'node'),
+    (Join-Path $wsPath['venv'] 'Scripts'),
+    $wsPath['npmPrefix']
+)
+$existing = ($env:PATH -split ';') | Where-Object { $_ }
+$env:PATH = (($prepend + $existing) -join ';')
+
+# ---------------------------------------------------------------------------
+# 4. Change detection and the repair trigger.
+#    Two independent signals are compared by ws-state.ps1, which owns the
+#    logic for every entry point.
+#      root  the drive letter changed
+#      host  the workspace was carried to another computer
+#    The host signal matters because a new computer can hand out the same drive
+#    letter, in which case host dependent artifacts such as the venv base
+#    interpreter recorded in pyvenv.cfg may still be broken.
+# ---------------------------------------------------------------------------
+$stateScript = Join-Path $PSScriptRoot 'ws-state.ps1'
+if (Test-Path -LiteralPath $stateScript) {
+    $stateArgs = @{ Root = $script:WsRoot }
+    if ($NoRepair) { $stateArgs['NoRepair'] = $true }
+    if ($Quiet)    { $stateArgs['Quiet']    = $true }
+    & $stateScript @stateArgs
+} else {
+    Write-WsLog ('state manager not found: ' + $stateScript) 'warn'
+}

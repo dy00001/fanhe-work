@@ -1,0 +1,52 @@
+# Workspace scratch, caches and logs. These live inside the workspace but are
+# not version controlled. Physical location is inside; git tracking is separate.
+.tmp/
+.cache/
+.local/
+.config/
+logs/
+.docker/
+
+# Bundled runtimes and dependency trees
+runtime/
+.venv/
+venv/
+node_modules/
+.yarn/cache/
+.yarn/install-state.gz
+.yarn/unplugged/
+
+# Tool homes redirected into the workspace
+.gradle/
+.m2/
+.cargo/
+.rustup/
+.go/
+.nuget/
+
+# Build output
+dist/
+build/
+out/
+target/
+.next/
+.nuxt/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editors and operating system noise
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Machine specific state. The recorded root differs per machine by design.
+infra/portable/state/root.json
+infra/portable/state/leak-baseline.json
+
+# Local assistant memory. Managed by the memory system, scoped to this user and
+# session history, therefore kept out of version control.
+.workbuddy-ai/

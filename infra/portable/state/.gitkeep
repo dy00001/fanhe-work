@@ -1,0 +1,7 @@
+# This directory holds machine specific state produced at runtime.
+#   root.json           the resolved workspace root and drive letter of the
+#                       last run. A mismatch with the current root is what
+#                       triggers the relocation repair routine.
+#   leak-baseline.json  snapshot of external cache sizes, written by
+#                       ws-doctor.ps1 -Baseline.
+# The files are intentionally git-ignored because their content is per machine.

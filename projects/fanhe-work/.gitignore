@@ -1,0 +1,22 @@
+# 项目级忽略规则。工作区根级规则负责通用项，本文件负责本项目特有的运行时数据。
+
+# 运行时数据，逐机不同，不纳入版本控制
+data/*
+!data/.gitkeep
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# 本地环境变量
+.env
+.env.local
+.env.*.local
+
+# 编辑器与系统噪声
+.DS_Store
+Thumbs.db

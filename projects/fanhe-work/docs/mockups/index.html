@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>梵禾 Work UI 方案对比</title>
+<link rel="icon" type="image/png" href="logo.png">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: #09090b;
+    background: #f5f5f5;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 36px 24px 60px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  header img { height: 40px; width: auto; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .lead { color: #52525b; margin: 0 0 28px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .opt {
+    background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px;
+    display: flex; flex-direction: column; text-decoration: none; color: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .opt:hover { border-color: #a1a1aa; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+  .opt .top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .opt .badge {
+    font-size: 11.5px; font-weight: 500; width: 24px; height: 24px; flex: 0 0 24px;
+    border-radius: 7px; display: flex; align-items: center; justify-content: center;
+    background: #18181b; color: #fff;
+  }
+  .opt h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .opt .dir { font-size: 12.5px; color: #71717a; margin-bottom: 10px; }
+  .opt p { margin: 0 0 14px; font-size: 13px; color: #52525b; flex: 1; }
+  .opt .go { font-size: 13px; color: #18181b; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; margin-top: 32px; background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #f1f1f3; vertical-align: top; }
+  th { background: #fafafa; font-weight: 500; color: #52525b; font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  .note { margin-top: 24px; font-size: 12.5px; color: #71717a; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="logo.png" alt="梵禾">
+    <h1>梵禾 Work UI 方案对比</h1>
+  </header>
+  <p class="lead">四版方案使用同一份内容，差异只在视觉语言与信息密度。点击任意一版查看完整排版。</p>
+
+  <div class="grid">
+    <a class="opt" href="main-frame.html">
+      <div class="top"><span class="badge">A</span><h2>企业级中后台</h2></div>
+      <div class="dir">Ant Design 5 配 Pro 布局骨架</div>
+      <p>浅色侧栏，蓝色主色，圆角 8px。组件覆盖最全，中文文档最完善，权限与路由骨架现成。开发速度最快。</p>
+      <span class="go">查看方案 A</span>
+    </a>
+
+    <a class="opt" href="option-b-minimal.html">
+      <div class="top"><span class="badge">B</span><h2>现代极简</h2></div>
+      <div class="dir">中性灰阶，产品感优先</div>
+      <p>几乎不用彩色，强调留白与排版层级。圆角 12px，极细边框，无阴影。视觉上限最高，需要自行维护组件规范。</p>
+      <span class="go">查看方案 B</span>
+    </a>
+
+    <a class="opt" href="option-c-fluent.html">
+      <div class="top"><span class="badge">C</span><h2>桌面原生</h2></div>
+      <div class="dir">Fluent 设计语言，Windows 11 观感</div>
+      <p>Segoe UI 字体族，圆角 4px，双层描边与浅投影，选中项带左侧强调条。桌面端原生感最强，中文资料相对少。</p>
+      <span class="go">查看方案 C</span>
+    </a>
+
+    <a class="opt" href="option-d-dark.html">
+      <div class="top"><span class="badge">D</span><h2>深色导航高密度</h2></div>
+      <div class="dir">经典企业形态，信息密度最高</div>
+      <p>深色侧栏配白色内容区，顶栏压缩到 50px，行高收紧，增加指标卡带与操作人列。同屏可见条目最多。</p>
+      <span class="go">查看方案 D</span>
+    </a>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:96px">维度</th><th>A 企业级</th><th>B 现代极简</th><th>C 桌面原生</th><th>D 深色高密度</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>侧栏宽度</td><td>224 / 64</td><td>232 / 68</td><td>228 / 66</td><td>216 / 64</td></tr>
+      <tr><td>顶栏高度</td><td>56</td><td>60</td><td>56</td><td>50</td></tr>
+      <tr><td>主色</td><td>蓝色 #1677ff</td><td>近黑 #18181b</td><td>Fluent 蓝 #0f6cbd</td><td>蓝色 #1677ff</td></tr>
+      <tr><td>圆角</td><td>8px</td><td>12px</td><td>4px</td><td>8px</td></tr>
+      <tr><td>阴影</td><td>无</td><td>无</td><td>极浅</td><td>无</td></tr>
+      <tr><td>信息密度</td><td>中</td><td>低</td><td>中</td><td>高</td></tr>
+      <tr><td>开发速度</td><td>最快</td><td>较慢</td><td>中</td><td>快</td></tr>
+      <tr><td>主要代价</td><td>视觉同质化</td><td>需自建规范</td><td>中文资料少</td><td>观感偏传统</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note">四版均为视觉近似，用于判断方向，不是最终实现。方案 D 的 logo 为白底图，在深色侧栏上加了白色底托，若采用该方向建议另做透明底或反白版标识。</p>
+</div>
+</body>
+</html>
