@@ -170,8 +170,12 @@ infra\portable\ws-repair.ps1 -CheckOnly
 在 Windows 上，所有操作都从入口脚本进入，环境才会生效。
 
 ```bat
-infra\portable\ws-run.cmd npm install
-infra\portable\ws-run.cmd python -m pytest
+rem 在项目目录下调用，命令就在该目录执行
+cd projects\fanhe-work
+..\..\infra\portable\ws-run.cmd pnpm install
+
+rem 在任何目录下都可以只查看环境
+infra\portable\ws-run.cmd --version
 infra\portable\ws-run.cmd -Shell
 ```
 
@@ -179,8 +183,12 @@ infra\portable\ws-run.cmd -Shell
 
 ```bash
 source infra/portable/ws-env.sh
-./infra/portable/ws-run.sh npm install
+./infra/portable/ws-run.sh pnpm install
 ```
+
+**入口脚本保留调用者的工作目录。** 命令在哪个目录执行，取决于调用入口时所处的目录；只有当调用者在工作空间之外时，才回退到工作空间根。
+
+重定向全部通过进程级环境变量实现，与工作目录无关，因此不需要强制切换目录。此前入口会无条件切到根，在项目位于 `projects/<名称>/` 之下时就不再成立：根目录没有 `package.json`，`pnpm install` 一类命令会在错误目录执行，而且不打印任何提示 —— 包管理器会改用默认缓存位置，把本该落在工作空间内的东西写到别处。`node_modules/.modules.yaml` 里记着 store 的绝对路径，一旦被写成别处，后续经入口运行时会因 store 不匹配而要求重建整个 `node_modules`。
 
 换到新电脑之后的标准动作。
 

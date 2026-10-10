@@ -2,7 +2,8 @@
 # =============================================================================
 #  ws-run.sh
 #  bash / Git Bash entry point. Applies the portable environment, then runs the
-#  command inside the workspace root.
+#  command in the caller's directory. Falls back to the workspace root only when
+#  invoked from outside the workspace.
 #
 #  Usage:
 #      ./portable/ws-run.sh npm install
@@ -22,5 +23,19 @@ if [ "$#" -eq 0 ]; then
   exit 0
 fi
 
-cd "$WS_ROOT"
+# Keep the caller's working directory when it is already inside the workspace,
+# and fall back to the root only when invoked from outside. The redirection is
+# applied through process-level environment variables, so the working directory
+# has nothing to do with it.
+#
+# Forcing a cd to the root used to be harmless because projects lived at the top
+# level. Once they moved under projects/<name>/ it stopped being harmless: the
+# root has no package.json, so `pnpm install` and friends ran in the wrong
+# directory without printing anything about it.
+_ws_cwd="$(pwd -P)"
+case "$_ws_cwd" in
+  "$WS_ROOT_POSIX" | "$WS_ROOT_POSIX"/*) ;;
+  *) cd "$WS_ROOT_POSIX" ;;
+esac
+
 exec "$@"

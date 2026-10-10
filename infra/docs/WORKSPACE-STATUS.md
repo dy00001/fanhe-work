@@ -40,8 +40,8 @@
 | `ws-env.ps1` | PowerShell 环境解析与重定向 | `-NoRepair`、`-Quiet` |
 | `ws-env.sh` | bash 环境解析，以子进程调用状态管理器 | `WS_NO_REPAIR`、`WS_QUIET` |
 | `ws-run.cmd` | cmd 入口，转发到 `ws-run.ps1` | 透传参数 |
-| `ws-run.ps1` | 主入口，在进程内应用环境后执行命令 | `-Shell` |
-| `ws-run.sh` | bash 入口 | 无参数时打印环境 |
+| `ws-run.ps1` | 主入口，在进程内应用环境后执行命令，保留调用者目录 | `-Shell` |
+| `ws-run.sh` | bash 入口，保留调用者目录 | 无参数时打印环境 |
 | `ws-state.ps1` | 状态管理器，双信号比较的唯一实现 | `-Root`、`-NoRepair`、`-Quiet` |
 | `ws-repair.ps1` | 修复例程与工具链健康检查 | `-Reason`、`-CheckOnly` |
 | `ws-doctor.ps1` | 审计，扫硬编码盘符、统计体积、比对泄漏 | `-Baseline`、`-Leak` |

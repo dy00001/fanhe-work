@@ -417,12 +417,12 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T1-01 数据模型与首个迁移 | 已完成 | 六张账号权限表与首个迁移，已应用到 PostgreSQL 16.15 并确认无漂移；连接自检 `pnpm db:ping` 通过 |
 | T1-02 数据库连接与种子 | 已完成 | 连接封装 `src/db/prisma.ts` 与种子 `src/db/seed.ts`；库中 11 个权限点、4 个角色、29 条授权关联，重跑无副作用；发现并修正 `matchesGrant` 缺陷，详见 9.8 |
 | T1-03 密码哈希 | 已完成 | `src/auth/password.ts`，Argon2id 参数可配置、可判定重算；12 项测试通过。依赖选型受本机无编译器约束，见 9.9 |
+| 机制修正：入口保留调用者目录 | 已完成 | `ws-run.sh` 与 `ws-run.ps1` 不再无条件切到工作空间根，三种场景在两个入口上实测通过。详见 9.9 |
 
 ### 9.2 待办
 
 1. 进入 T1-04，实现登录接口与访问令牌、刷新令牌签发。
 2. 阶段二开始前，按方案 B 整理组件清单与设计令牌，作为 T2-01 的输入。
-3. **待确认**：入口脚本强制切换工作目录的缺陷，详见 9.9。
 
 开发者模式已于 2026-10-10 开启，两个环境脚本与仓库本地配置中的 `core.symlinks` 已改为 true，原先列在这里的这一项已完成。实测确认 git 与 node 均可在不提权的情况下创建符号链接；PowerShell 5.1 的 `New-Item -ItemType SymbolicLink` 仍会失败，因为它不传 `SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE`，属该版本的自身限制，不影响 git。
 
@@ -534,12 +534,21 @@ personal.*.read   非末尾通配 → 只匹配 personal.<对象>.read
 
 本次的后果：`pnpm --filter @fanhe/api add` 在根目录执行，pnpm 未能按预期定位 workspace 根，virtual store 落到了子包目录下。用 `pnpm install` 归位后，残留的 666K 目录要手工清除；删掉之后 pnpm 又因非交互环境拒绝重建 modules 目录（`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`），需加 `CI=true` 才能继续。
 
-**环境重定向全部通过进程级环境变量实现，与工作目录无关**，所以切目录并非重定向所必需。合理做法是保留调用者的目录，仅当调用者在工作空间之外时才回退到根。这处改动涉及 `ws-run.sh` 与 `ws-run.ps1`，属机制变更，**待确认后再动**。
+**环境重定向全部通过进程级环境变量实现，与工作目录无关**，所以切目录并非重定向所必需。**已修正**：两个入口改为保留调用者的目录，仅当调用者在工作空间之外时才回退到根。三种场景（在根调用、在项目目录调用、在工作空间之外调用）在两个入口上均已实测。
 
-在此之前，在项目子目录下工作必须显式带上目录：
+修正过程中还牵出一个更深的问题。当时为了归位，用**未经入口**的 pnpm 跑了几次 `install` —— 环境变量未设，pnpm 退回默认 store，把 `node_modules` 重建到了 U 盘根目录的 `F:\.pnpm-store`。而 `node_modules/.modules.yaml` 记着 store 的绝对路径，于是后续经入口运行时又因 store 不匹配而要求重建整个 `node_modules`。
+
+**这恰好证明了为什么所有包管理操作都必须经入口。** 少走一次，写入内聚就破了，而且当场没有任何提示 —— 命令正常成功，只有对比 `.modules.yaml` 里的 `storeDir` 才看得出来。判断 store 是否落在正确位置，可以直接查这一项，不必推断：
+
+```powershell
+Select-String -Path node_modules/.modules.yaml -Pattern storeDir
+```
+
+修复后经入口执行即可，入口会保留调用者目录：
 
 ```bash
-bash infra/portable/ws-run.sh bash -c 'cd "projects/fanhe-work" && pnpm install'
+cd projects/fanhe-work
+bash ../../infra/portable/ws-run.sh pnpm install
 ```
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
