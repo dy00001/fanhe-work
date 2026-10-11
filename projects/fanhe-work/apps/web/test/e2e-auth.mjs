@@ -4,7 +4,8 @@
  * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除 →
  * 启动通道的新增、编辑、排序、启动与删除，以及路径失效的提示、重新指定入口与
  * 启动记录的摘要 → 工作纪要的编写、Markdown 预览、置顶、归档与删除，以及中文关键词
- * 检索与检索和视图的正交性。
+ * 检索与检索和视图的正交性 → 事件记录的新增、四要素齐备、逾期标记、未完成与已完成
+ * 分组、已完成默认折叠、编辑回填与删除。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -22,11 +23,13 @@
  *   1. 数据库处于「未初始化」状态，即 users 表为空。否则首次初始化页不会出现，
  *      第 1 项必然失败。重置方法：
  *        docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \
- *          "delete from notes; delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
- *      启动配置与工作纪要要一起清掉：两者的删除都是软删除，跑完之后 `launch_profiles`
- *      与 `notes` 里会留下几行 `deletedAt` 非空的记录，不清的话下一次跑会带着这些行
- *      进来。启动记录跟着配置走（外键级联），显式写出来是因为它才是那张会不断增长的
- *      表；`notes` 排在 `users` 之前是因为它的外键指向 users，反过来会撞约束。
+ *          "delete from event_logs; delete from events; delete from notes; delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
+ *      启动配置、工作纪要与事件都要一起清掉：三者的删除都是软删除，跑完之后
+ *      `launch_profiles`、`notes`、`events` 里会留下几行 `deletedAt` 非空的记录，
+ *      不清的话下一次跑会带着这些行进来（事件列表会因为多出几行旧数据而「空态不可达」）。
+ *      启动记录跟着配置走（外键级联），显式写出来是因为它才是那张会不断增长的表；
+ *      `event_logs` 跟着事件走，显式写出来是同一条理由 —— 它是只追加的流水。
+ *      `notes` 排在 `users` 之前是因为它的外键指向 users，反过来会撞约束。
  *   2. 启动 API 时把访问令牌有效期压短，否则续期要等 15 分钟才发生，观察窗口
  *      内什么也看不到：
  *        ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api
@@ -122,6 +125,36 @@ const NOTE_ROW_TEXTS = `[...document.querySelectorAll('main ul li button')].map(
 const NOTE_DRAFT = {
   title: 'zz_e2e_草稿',
   body: '# 草稿标题\n\n还没提交的正文。\n',
+}
+
+/**
+ * 事件记录验证用的两条事件（T3-10）。
+ *
+ * 甲与乙的名字互不包含 —— 行定位用的是 `includes`，名字互相包含会让「找到的那一行」
+ * 取决于 DOM 顺序。甲会被**接口**置为已完成，用来验证分组与默认折叠；乙带一个已经
+ * 过去的截止时间，用来验证逾期标记。
+ *
+ * 截止时间在界面上是 `datetime-local` 的本地时间串，因此按本地时刻构造 —— 与
+ * `event-display.ts` 里那条「不能用 UTC 切片」是同一件事的两侧。
+ */
+const EVENT_A = {
+  title: 'zz_e2e_事件甲',
+  description: '由接口置为已完成，用来验证分组与默认折叠。',
+  tag: 'zz_e2e_事件标签',
+}
+const EVENT_B = {
+  title: 'zz_e2e_事件乙',
+  renamed: 'zz_e2e_事件乙改名',
+  description: '带一个已经过去的截止时间，用来验证逾期标记。',
+}
+
+/** 造一个 `datetime-local` 需要的本地时间串：相对今天偏移若干天的某个整点。 */
+function localDateTimeValue(offsetDays, hour) {
+  const at = new Date()
+  at.setDate(at.getDate() + offsetDays)
+  at.setHours(hour, 0, 0, 0)
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
 
 /**
@@ -501,6 +534,40 @@ function rowBadgeFinder(rowName, text) {
 }
 
 /**
+ * 事件列表某一行的几个事实：整段文本、勾选框状态、徽标文字。行不存在时返回空串。
+ *
+ * 「行内四要素齐备」这条验收要点必须是**看见**的，而不是「代码里写了」—— 因此逐项
+ * 取出元素来断言，而不是只看整行文本里有没有某几个字：行文本里本来就含着标题，
+ * 拿它去判断等于什么都没测。
+ *
+ * 勾选框是 Radix 的 `role="checkbox"`（渲染成 `button`，不是 `input`），只读态落在
+ * `disabled` 属性上 —— 本轮它是不可点的，见 `EventRow` 的说明。
+ */
+function eventRowFacts(title) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(title)}))
+    if (!row) return ''
+    const box = row.querySelector('[role="checkbox"]')
+    return JSON.stringify({
+      text: row.textContent,
+      checked: box ? box.getAttribute('aria-checked') : null,
+      disabled: box ? box.hasAttribute('disabled') : null,
+      badges: [...row.querySelectorAll('[data-slot="badge"]')].map((item) => item.textContent.trim()),
+    })
+  })()`
+}
+
+/**
+ * 事件列表里有没有标题匹配的那一行。
+ *
+ * 与 `eventRowFacts` 分开：这个只回答「在不在」，适合放进 `waitFor` 里轮询，也不会在
+ * 行不存在时因为解析空串而抛错。
+ */
+function eventRowPresence(title) {
+  return `[...document.querySelectorAll('main ul li')].some((item) => item.textContent.includes(${JSON.stringify(title)}))`
+}
+
+/**
  * 在内容区里按文字点一个按钮。
  *
  * **范围限定在 `main` 内。** 对话框走 portal 挂到 body 上，因此确认类按钮不在 `main`
@@ -618,6 +685,49 @@ async function openRowMenu(client, rowName) {
     client,
     waitFor(`document.querySelector('[role="menuitem"]') !== null`, 5000, '操作菜单展开'),
   )
+}
+
+/**
+ * 用接口登录取一个访问令牌。
+ *
+ * **只在事件那一段里用。** 事件列表要展示「已完成」那一组，而勾选切换属 T3-11、
+ * 界面上还没有入口 —— 于是这里从接口把一条置为已完成，好让分组与折叠有东西可验。
+ * 这不算绕开验证：本任务要验的是「拿到数据之后怎么分组与显示」，而状态是怎么变过去
+ * 的属于下一轮。会话与令牌那条线仍由界面自己走（本脚本前面已完整覆盖）。
+ *
+ * 走 `APP_URL` 而不是直连 8787：前端 dev server 把 `/api` 代理到后端，从 Node 这一侧
+ * 走同一个地址，与界面上发出去的是同一条链路。
+ */
+async function apiAccessToken() {
+  const response = await fetch(`${APP_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ username: OWNER.username, password: OWNER.password }),
+  })
+  if (!response.ok) throw new Error(`接口登录失败：HTTP ${response.status}`)
+  const payload = await response.json()
+  return payload.accessToken
+}
+
+/** 把标题对应的那一条置为已完成。见 `apiAccessToken` 的说明。 */
+async function apiCompleteEvent(token, title) {
+  const headers = { accept: 'application/json', authorization: `Bearer ${token}` }
+
+  const listResponse = await fetch(`${APP_URL}/api/events`, { headers })
+  if (!listResponse.ok) throw new Error(`接口取事件列表失败：HTTP ${listResponse.status}`)
+  const { events } = await listResponse.json()
+  const target = events.find((item) => item.title === title)
+  if (!target) throw new Error(`接口里找不到事件：${title}`)
+
+  const statusResponse = await fetch(
+    `${APP_URL}/api/events/${encodeURIComponent(target.id)}/status`,
+    {
+      method: 'PUT',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    },
+  )
+  if (!statusResponse.ok) throw new Error(`置为已完成失败：HTTP ${statusResponse.status}`)
 }
 
 /** 启动通道列表里各行的文本，用于判断顺序。 */
@@ -2516,7 +2626,249 @@ async function main() {
       `还剩 ${clearedDrafts} 个草稿槽`,
     )
 
-    // 10. 渲染层无错误。这是本脚本存在的理由。
+    // 10. 事件记录（T3-10）。
+    //
+    //     三件事：分组正确（未完成在上、已完成在下**且默认折叠**）、行内四要素齐备
+    //     （勾选框、标签、截止时间、优先级）、以及新增/编辑/删除真的把列表改对。
+    //
+    //     **为了看到「已完成」那一组，得先有一条已完成的事件，而勾选切换属 T3-11、
+    //     界面上还没有入口** —— 因此这里用接口把它置为已完成（见 `apiCompleteEvent`）。
+    //     这不是绕开验证：本任务要验的是「拿到数据之后怎么分组与显示」，而状态是怎么
+    //     变过去的属下一轮。
+    await evaluate(client, clickNavByLabel('事件记录'))
+    await evaluate(
+      client,
+      waitFor(`location.pathname === '/workbench/events'`, 10000, '地址切到 /workbench/events'),
+    )
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('还没有事件')`, 10000, '事件空态'),
+    )
+    record('工作台可切到事件记录板块，空库时空态给出新增入口', true, '')
+    await screenshot(client, '10a-events-empty')
+
+    // 甲：带标签、高优先级、三天后的截止时间。
+    await evaluate(client, clickMainButton('新增事件'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-title') !== null`, 5000, '新增事件对话框'),
+    )
+    await evaluate(client, fillInput('#event-title', EVENT_A.title))
+    await evaluate(client, fillInput('#event-description', EVENT_A.description))
+    await evaluate(client, fillInput('#event-tags', `${EVENT_A.tag}，`))
+    await evaluate(client, clickDialogButton('高'))
+    await evaluate(client, fillInput('#event-due', localDateTimeValue(3, 18)))
+    await evaluate(client, clickDialogButton('保存'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_A.title), 10000, '甲条出现在列表'))
+    record('新增事件：保存后列表出现该条', true, '')
+
+    const factsA = JSON.parse(await evaluate(client, eventRowFacts(EVENT_A.title)))
+    record(
+      '行内勾选框齐备，且如实反映状态（未完成：未勾上）',
+      factsA.checked === 'false',
+      `aria-checked=${factsA.checked}`,
+    )
+    record(
+      '勾选框本轮是只读的（disabled），不给人「点了没反应」的错觉',
+      factsA.disabled === true,
+      `disabled=${factsA.disabled}`,
+    )
+    record(
+      '一行的四要素齐备：标签、截止时间、优先级',
+      factsA.text.includes(EVENT_A.tag) &&
+        /\d+月\d+日 \d{2}:\d{2}/.test(factsA.text) &&
+        factsA.badges.includes('高'),
+      factsA.text,
+    )
+
+    // 乙：截止时间落在两天前，用来验证逾期标记。
+    await evaluate(client, clickMainButton('新增事件'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-title') !== null`, 5000, '新增事件对话框'),
+    )
+    await evaluate(client, fillInput('#event-title', EVENT_B.title))
+    await evaluate(client, fillInput('#event-description', EVENT_B.description))
+    await evaluate(client, fillInput('#event-due', localDateTimeValue(-2, 9)))
+    // 显式选「低」而不是吃默认值：这样「非高优先级也有文字」这条断言才真的在验映射，
+    // 而不是在验默认值恰好也是它期望的那个。默认值单独在下面那条断言里验。
+    await evaluate(client, clickDialogButton('低'))
+    await evaluate(client, clickDialogButton('保存'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_B.title), 10000, '乙条出现在列表'))
+
+    const factsB = JSON.parse(await evaluate(client, eventRowFacts(EVENT_B.title)))
+    record('截止时间已过且未完成时标出「已逾期」', factsB.text.includes('已逾期'), factsB.text)
+    record(
+      '低优先级也有文字（不会因为「不是高」就不显示）',
+      factsB.badges.includes('低'),
+      JSON.stringify(factsB.badges),
+    )
+    await screenshot(client, '10b-events-created')
+
+    // 检索。走的是与纪要同一条链路（同一个共享函数做归一、同样的服务端 ILIKE），
+    // 因此这里只验「它确实接上了事件列表」，不重复纪要那一段的细节。
+    await evaluate(client, fillInput('#event-search', EVENT_A.title))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li')].length === 1 && (${eventRowPresence(EVENT_A.title)})`,
+        8000,
+        '检索后只剩甲条',
+      ),
+    )
+    record('检索把列表收窄到匹配的那一条（关键词在标题里）', true, '')
+    await evaluate(client, clickSelector('main button[aria-label="清空搜索"]'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li')].length === 2`,
+        8000,
+        '清空后两条都回来',
+      ),
+    )
+    record('清空检索后恢复完整列表', true, '')
+
+    // 用接口把甲置为已完成，再整页重载 —— 界面不会感知接口上的改动，而重载同时也验证了
+    // 「分组是从服务端拿到的那份数据算出来的」，不是留在本地的判断。
+    const token = await apiAccessToken()
+    await apiCompleteEvent(token, EVENT_A.title)
+
+    const eventsReload = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await eventsReload
+    // 重载后要走一次「初始化状态 + 静默续期」的往返，列表不是立刻就在的。
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-search') !== null`, 20000, '重载后事件板块挂回'),
+    )
+    await evaluate(client, waitFor(eventRowPresence(EVENT_B.title), 20000, '重载后列表出现乙条'))
+
+    record(
+      '已完成的默认折叠：它的行此刻不在页面上',
+      (await evaluate(client, `!(${eventRowPresence(EVENT_A.title)})`)) === true,
+      '',
+    )
+    const doneGroupText = await evaluate(
+      client,
+      `(() => {
+        const button = [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '已完成')
+        return button ? button.parentElement.textContent : null
+      })()`,
+    )
+    record(
+      '已完成组显示条数（1 条）',
+      typeof doneGroupText === 'string' && doneGroupText.includes('1'),
+      String(doneGroupText),
+    )
+    await screenshot(client, '10c-events-grouped')
+
+    await evaluate(client, clickMainButton('已完成'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_A.title), 8000, '展开后出现甲条'))
+    const factsDone = JSON.parse(await evaluate(client, eventRowFacts(EVENT_A.title)))
+    record(
+      '展开后出现已完成的那条，且勾选框是勾上的',
+      factsDone.checked === 'true',
+      `aria-checked=${factsDone.checked}`,
+    )
+
+    // 编辑：改标题。走行内「更多操作」菜单。
+    await openRowMenu(client, EVENT_B.title)
+    await mouseClick(client, menuItemFinder('编辑'), '编辑菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-title') !== null`, 5000, '编辑对话框'),
+    )
+    // 对话框里应当带着原来的值，而不是一张空表。
+    const titleBeforeEdit = await evaluate(client, `document.querySelector('#event-title').value`)
+    record('编辑对话框回填原值', titleBeforeEdit === EVENT_B.title, `标题「${titleBeforeEdit}」`)
+    record(
+      '编辑对话框回填截止时间，且是本地时间而不是 UTC',
+      (await evaluate(client, `document.querySelector('#event-due').value`)) ===
+        localDateTimeValue(-2, 9),
+      await evaluate(client, `document.querySelector('#event-due').value`),
+    )
+    // 优先级也要回填。新增时选的是「低」，此刻按下的就该还是「低」—— 只验文字在不在
+    // 是不够的：三个按钮里任何一个都会渲染出文字，按下态才说明它带着原值。
+    const priorityPressed = await evaluate(
+      client,
+      `(() => {
+        const button = [...document.querySelectorAll('#event-priority button')].find((item) => item.textContent.trim() === '低')
+        return button ? button.getAttribute('aria-pressed') : null
+      })()`,
+    )
+    record(
+      '编辑对话框回填优先级（选中的仍是原来那一档）',
+      priorityPressed === 'true',
+      `低.aria-pressed=${priorityPressed}`,
+    )
+    await evaluate(client, fillInput('#event-title', EVENT_B.renamed))
+    await evaluate(client, clickDialogButton('保存'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_B.renamed), 10000, '改名后出现在列表'))
+    record('编辑事件：改标题后列表更新', true, '')
+
+    // 删除乙。确认框必须说明删的是哪一条。
+    await openRowMenu(client, EVENT_B.renamed)
+    await mouseClick(client, menuItemFinder('删除'), '删除菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    const eventDeleteConfirm = await evaluate(
+      client,
+      `document.querySelector('[role="dialog"]').innerText`,
+    )
+    record('删除前先出确认框并说明删的是哪一条', eventDeleteConfirm.includes(EVENT_B.renamed), '')
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`!(${eventRowPresence(EVENT_B.renamed)})`, 10000, '乙条从列表消失'),
+    )
+    record('删除后该条从列表消失', true, '')
+
+    // 删除甲。它在「已完成」组里，而那一组的展开状态是组件状态 —— 重拉列表不会重置它，
+    // 但这里不依赖那个细节：先确认它在，不在就展开一次。
+    if ((await evaluate(client, eventRowPresence(EVENT_A.title))) !== true) {
+      await evaluate(client, clickMainButton('已完成'))
+      await evaluate(client, waitFor(eventRowPresence(EVENT_A.title), 8000, '展开后出现甲条'))
+    }
+    await openRowMenu(client, EVENT_A.title)
+    await mouseClick(client, menuItemFinder('删除'), '删除菜单项')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('还没有事件')`, 10000, '回到空态'),
+    )
+    record('删空后回到空态', true, '')
+
+    // 顺带把优先级取值域的第三档验掉。前两档已经在上面两条事件上验过（高、低），
+    // 缺的是「新建时默认停在哪一档」—— 默认值落错的表现是「没动过优先级的事件全都
+    // 显示成别的档」，而那种事在单测里查不出来（单测只验映射表本身）。
+    await evaluate(client, clickMainButton('新增事件'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-priority') !== null`, 5000, '新增事件对话框'),
+    )
+    const defaultPriority = await evaluate(
+      client,
+      `(() => {
+        const buttons = [...document.querySelectorAll('#event-priority button')]
+        const pressed = buttons.filter((item) => item.getAttribute('aria-pressed') === 'true')
+        return JSON.stringify({ total: buttons.length, pressed: pressed.map((item) => item.textContent.trim()) })
+      })()`,
+    )
+    const defaultPriorityFacts = JSON.parse(defaultPriority)
+    record(
+      '三档优先级都摆出来了，新建时默认停在「普通」',
+      defaultPriorityFacts.total === 3 && defaultPriorityFacts.pressed.join() === '普通',
+      defaultPriority,
+    )
+    await evaluate(client, clickDialogButton('取消'))
+
+    // 11. 渲染层无错误。这是本脚本存在的理由。
     record(
       '渲染过程未产生未捕获异常或 console.error',
       pageErrors.length === 0,

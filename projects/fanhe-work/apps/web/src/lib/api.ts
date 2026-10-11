@@ -1,9 +1,14 @@
 import type {
   ApiErrorResponse,
+  CreateEventRequest,
   CreateLaunchProfileRequest,
   CreateNoteRequest,
+  DeleteEventResponse,
   DeleteLaunchProfileResponse,
   DeleteNoteResponse,
+  EventListResponse,
+  EventResponse,
+  EventTagListResponse,
   InitializeOwnerResponse,
   LaunchProfileListResponse,
   LaunchProfileResponse,
@@ -20,6 +25,7 @@ import type {
   SetNoteArchivedRequest,
   SetNotePinnedRequest,
   SetupStatusResponse,
+  UpdateEventRequest,
   UpdateLaunchProfileRequest,
   UpdateNoteRequest,
 } from '@fanhe/shared'
@@ -399,6 +405,93 @@ export function setNoteArchivedRequest(
   return request<NoteResponse>(`/api/notes/${encodeURIComponent(id)}/archive`, {
     method: 'PUT',
     body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 事件记录的五条接口（T3-10 用到的那几条）。
+ *
+ * 与上面两个板块同一条分工：这一层只拼地址、发请求、把失败规范化成 `ApiError`；
+ * 令牌由 `lib/events.ts` 经 `withAccessToken` 附加。**id 同样一律过
+ * `encodeURIComponent`**，理由与启动配置那一段完全相同。
+ *
+ * **状态切换（`PUT /api/events/:id/status`）与变更历史（`GET /api/events/:id/logs`）
+ * 不在这一批里。** 它们分别属于 T3-11 与 T3-12，本轮界面上一行都不会用到 —— 把包装
+ * 函数提前写出来，只会留下两个无人调用的导出，而它们是否该有别的签名，要等真正接线
+ * 的那一轮才知道。
+ */
+export type EventListQuery = {
+  /** 只看某一状态。省略即两组都返回，由界面分组。 */
+  status?: 'todo' | 'done' | undefined
+  /** 只看带这个标签的事件。空串不发送。 */
+  tag?: string | undefined
+  from?: string | undefined
+  to?: string | undefined
+  /** 关键词，服务端同时匹配标题与描述。空串不发送（服务端也按不检索处理）。 */
+  q?: string | undefined
+}
+
+/**
+ * 列表。
+ *
+ * **只把真正给了的条件拼进查询串。** 服务端那份 querystring schema 是
+ * `additionalProperties: false`，多带一个它不认识的参数会直接 400。与 `notesRequest`
+ * 是同一条约定，也同样是「只在非空时发送」——两处都拦反而多一条要同步的规则
+ * （`normalizeSearchQuery` 才是「什么叫空」的唯一出处）。
+ */
+export function eventsRequest(
+  accessToken: string,
+  query: EventListQuery = {},
+): Promise<EventListResponse> {
+  const search = new URLSearchParams()
+  if (query.status !== undefined) search.set('status', query.status)
+  if (query.tag !== undefined && query.tag !== '') search.set('tag', query.tag)
+  if (query.from !== undefined && query.from !== '') search.set('from', query.from)
+  if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  if (query.q !== undefined && query.q !== '') search.set('q', query.q)
+  const queryString = search.toString()
+  return request<EventListResponse>(`/api/events${queryString === '' ? '' : `?${queryString}`}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/**
+ * 标签清单。供标签输入框给出候选，与列表分开一次请求 —— 列表将来分页之后前端手上
+ * 只有一页，推不出全量，而候选恰恰需要全量。理由与 `noteTagsRequest` 相同。
+ */
+export function eventTagsRequest(accessToken: string): Promise<EventTagListResponse> {
+  return request<EventTagListResponse>('/api/events/tags', { method: 'GET', accessToken })
+}
+
+export function createEventRequest(
+  accessToken: string,
+  input: CreateEventRequest,
+): Promise<EventResponse> {
+  return request<EventResponse>('/api/events', { method: 'POST', body: input, accessToken })
+}
+
+export function updateEventRequest(
+  accessToken: string,
+  id: string,
+  input: UpdateEventRequest,
+): Promise<EventResponse> {
+  return request<EventResponse>(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 删除。服务端是**软删除且幂等**，响应里的 `removed` 表示本次是否真的改动了一行。
+ * 界面不区分「删掉了」与「本来就不在」（两者对它都是「这条已经不在列表里」），
+ * 这个布尔值留作排查用，与另外两个板块一致。
+ */
+export function deleteEventRequest(accessToken: string, id: string): Promise<DeleteEventResponse> {
+  return request<DeleteEventResponse>(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
     accessToken,
   })
 }

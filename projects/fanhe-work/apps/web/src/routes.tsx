@@ -24,7 +24,7 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  * 「有哪些模块、谁看得见」，两者不该混在一起。
  */
 const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
-  [NAV_CODES.WORKBENCH]: ['notes'],
+  [NAV_CODES.WORKBENCH]: ['notes', 'events'],
 }
 
 /**

@@ -2,6 +2,7 @@ import { NAV_CODES, navPath, type NavItem } from '@fanhe/shared'
 import { NavLink, useLocation, type NavLinkRenderProps } from 'react-router'
 
 import { ModuleHeader } from '../components/ModuleHeader'
+import { EventsPanel } from '../components/events/EventsPanel'
 import { LaunchPanel } from '../components/launch/LaunchPanel'
 import { NotesPanel } from '../components/notes/NotesPanel'
 import { cn } from '../lib/utils'
@@ -10,9 +11,9 @@ import { cn } from '../lib/utils'
  * 个人工作台的落地内容。
  *
  * 三个板块（一键登录通道、工作纪要、事件记录）在阶段三逐个落地：T3-03 落启动通道，
- * T3-06 落工作纪要，事件记录尚未开始。本页从阶段二起承担的两项诊断内容（当前账号、
- * 展开后的权限点）在 T3-03 那一版移除 —— 它们当初的存在理由就是「随三板块落地后
- * 移除」。
+ * T3-06 落工作纪要，T3-10 落事件记录的列表视图。本页从阶段二起承担的两项诊断内容
+ * （当前账号、展开后的权限点）在 T3-03 那一版移除 —— 它们当初的存在理由就是「随三
+ * 板块落地后移除」。
  *
  * **板块由 URL 决定，不由组件状态决定。** 这不是风格偏好：地址栏能表达「我在哪」
  * 意味着刷新不丢位置、地址可以直接发给别人，也与 `ModuleRoute` 那条「重定向而不是
@@ -41,6 +42,12 @@ const WORKBENCH_SECTIONS = [
     path: `${navPath(NAV_CODES.WORKBENCH)}/notes`,
     label: '工作纪要',
     summary: 'Markdown 记录的与标签分类',
+    end: false,
+  },
+  {
+    path: `${navPath(NAV_CODES.WORKBENCH)}/events`,
+    label: '事件记录',
+    summary: '未完成与已完成分组的待办',
     end: false,
   },
 ] as const
@@ -72,7 +79,7 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
 
       {/* 板块由路由分派，不用一个数组 + 索引去取组件 —— 组件与路径的对应关系写在
           路由表（`routes.tsx` 的 `MODULE_SUB_ROUTES`）里，这里只按地址分支，避免
-          同一件事有两处定义。事件记录落地时在这里补一支即可。 */}
+          同一件事有两处定义。 */}
       <SectionBody />
     </div>
   )
@@ -87,10 +94,13 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
  */
 function SectionBody() {
   const { pathname } = useLocation()
-  const notesPath = `${navPath(NAV_CODES.WORKBENCH)}/notes`
+  const base = navPath(NAV_CODES.WORKBENCH)
 
   // 末尾斜杠归一。`/workbench/notes/` 与 `/workbench/notes` 在路由上匹配同一个页面，
   // 若不归一，手输地址带一个尾斜杠就会落回启动通道那一板块 —— 而且地址栏与内容不一致。
-  if (pathname.replace(/\/+$/, '') === notesPath) return <NotesPanel />
+  const normalized = pathname.replace(/\/+$/, '')
+
+  if (normalized === `${base}/notes`) return <NotesPanel />
+  if (normalized === `${base}/events`) return <EventsPanel />
   return <LaunchPanel />
 }

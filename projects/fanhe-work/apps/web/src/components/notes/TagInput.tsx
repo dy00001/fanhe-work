@@ -27,11 +27,15 @@ import { Label } from '../ui/label'
  *   2. **超长标签照样进列表，标红而不是丢掉。** 丢掉的话用户会以为是自己没打进去，
  *      而界面又无法指出是哪一个被吃掉了。标出来之后，编辑器的保存按钮会连带被拦下，
  *      用户知道该删哪一个。
- *   3. **超出数量上限时拒绝新增并说明。** 服务端对超过 `TAGS_MAX_COUNT` 的提交直接
- *      400，与其等提交后失败，不如在加的那一下就说清楚。
+ *   3. **超出数量上限时拒绝新增并说明。** 服务端对超过上限的提交直接 400，与其等提交
+ *      后失败，不如在加的那一下就说清楚。
  *
- * 候选来自 `GET /api/notes/tags`（全量标签及其条数），不是从当前列表页聚合出来的 ——
- * 列表将来分页之后就推不出全量了，而候选恰恰需要全量。
+ * 候选来自标签清单接口（全量标签及其条数），不是从当前列表页聚合出来的 —— 列表将来
+ * 分页之后就推不出全量了，而候选恰恰需要全量。
+ *
+ * **事件板块复用这个控件**（见 `event.ts` 顶部关于标签的说明：标签在两个板块里是同一个
+ * 概念）。数量上限因此从 props 进来：`NOTE_LIMITS` 与 `EVENT_LIMITS` 的取值刻意保持
+ * 一致，但它们是两份独立定义的常量，控件里写死哪一份都会让另一边的上限改动悄悄失效。
  */
 export function TagInput({
   id,
@@ -39,12 +43,15 @@ export function TagInput({
   candidates,
   onChange,
   disabled = false,
+  maxTags = NOTE_LIMITS.TAGS_MAX_COUNT,
 }: {
   id: string
   value: readonly string[]
   candidates: readonly NoteTagCount[]
   onChange: (tags: string[]) => void
   disabled?: boolean
+  /** 数量上限。缺省用纪要那一份，事件板块显式传入 `EVENT_LIMITS.TAGS_MAX_COUNT`。 */
+  maxTags?: number
 }) {
   const [draft, setDraft] = useState('')
   const [warning, setWarning] = useState<string | null>(null)
@@ -60,17 +67,15 @@ export function TagInput({
     const parsed = parseNoteTagInput(raw)
     if (parsed.length === 0) return
 
-    const remaining = NOTE_LIMITS.TAGS_MAX_COUNT - value.length
+    const remaining = maxTags - value.length
     if (remaining <= 0) {
-      setWarning(`最多 ${NOTE_LIMITS.TAGS_MAX_COUNT} 个标签，先删掉一个再加。`)
+      setWarning(`最多 ${maxTags} 个标签，先删掉一个再加。`)
       return
     }
 
     const accepted = parsed.slice(0, remaining)
     if (accepted.length < parsed.length) {
-      setWarning(
-        `最多 ${NOTE_LIMITS.TAGS_MAX_COUNT} 个标签，本次只加进了前 ${accepted.length} 个。`,
-      )
+      setWarning(`最多 ${maxTags} 个标签，本次只加进了前 ${accepted.length} 个。`)
     } else {
       setWarning(null)
     }
