@@ -1,242 +1,500 @@
-# 任务记录与换机续接指南（梵禾 Work）
+# 梵禾 Work · 完整工作总结与换机续接指南
 
-> 本文档是一份**自包含的任务记录 + 换机续接手册**。目标是：在另一台机器上重新配置环境后，能凭此文档顺利接续开发，而无需依赖对话历史。
-> 深度设计、架构判断与逐任务验收以 `DEVELOPMENT-PLAN.md`（第九章）为准；环境踩坑细节以 `.workbuddy-ai/memory/ENVIRONMENT.md` 为准。本文是它们的**索引与当日快照**。
+> **本文档是单文件自包含的交接主文档。** 换一台电脑后，只读这一份就能把开发环境恢复起来并接着往下做：
+> 项目是什么、做到哪了、哪些功能已经能用、下一步做什么、当初为什么这么定、环境怎么搭、有哪些坑不能踩，全部在这一份里。
 >
-> 生成时间：2026-10-11。记录时工作树干净、与 `origin/main` 同步（领先 0）。
+> | 项 | 值 |
+> | -- | -- |
+> | 生成时间 | 2026-10-11 17:55 |
+> | 对应提交 | `3c402fa`（代码为 `95bdcf2`），`main` 与 `dev` 同在此提交，工作树干净 |
+> | 当前阶段 | 阶段三进行中，**7/12**（T3-01 ~ T3-07 已完成），下一项 T3-08 |
+> | 最后验证 | 四道门禁全绿（238 项），浏览器 e2e 85 项全通过 |
 >
-> 更新 2026-10-11 15:40。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
-> 其一，远端仓库已由私有改为公开，绑定与两条访问链路见 `WORKSPACE-BINDING.md`。
-> 其二，`dev` 与 `main` **已对齐**在同一提交（`2cfdb42`）并各自推送，不再是「dev 落后 4 个提交」。
-> 其三，数据库五个迁移全部应用，十张业务表齐备（另加 `_prisma_migrations`）。
-> 其四，四道门禁本日实跑多次，`test`、`lint`、`typecheck`、`format:check` 全部通过。
-> 其五，`node_modules.old` 此前未被忽略规则覆盖，会污染 lint 与 format，已修复。
-> 其六，首个 owner 账号已创建（登录名 `fanhe`，口令写入被忽略的 `.tmp/owner-credentials.txt`）；由此 `apps/api/test/setup.test.ts` 的 5 项首次初始化用例转为设计性跳过。
-> 其七，T3-05 纪要模型与接口已完成并提交（模型 + 八条接口 + 共享类型 + 31 项新测试），**界面尚未接上，属 T3-06**。
-> 其八，`.tmp` 里的诊断脚本已归档到 `projects/fanhe-work/tools/`（盘符改为向上查找 `.ws-root`，`.ps1` 补 UTF-8 BOM）；`.tmp` 内 99% 的可重建缓存已清理，体积 73.6 MB → 0.4 MB。
-> 其九，四处 `node_modules.old` **经分析确认应当删除但暂未删除**（约 489 MB、23802 个文件、软链接 100% 悬空于已不存在的 `E:` 盘），完整依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。
-> 其十，**T3-06 Markdown 编辑与预览已完成并提交**：纪要界面接通（编辑器 / 预览 / 标签 / 置顶 / 归档 / 删除），一级导航补上二级路径这一层（`/workbench/notes`），依赖新增 `react-markdown` 与 `remark-gfm`；四道门禁全绿，三包合计 **227 项**（shared 58 + api 159 + web 10）；另用真实 owner 跑通八条接口冒烟 **23 项**。**浏览器 e2e 已执行：78 项全通过**（原 62，新增 16），首轮的 3 项失败已逐一归因修掉，其中一项是编辑器草稿同步的真 bug —— 该 bug 单测、类型检查、接口冒烟全都拦不住，只有浏览器验证能抓到。
-> 其十一，**T3-07 全文检索已完成并提交（代码 `95bdcf2`）**：中文关键词可命中标题与正文，界面在列表上方接了检索框；四道门禁全绿，三包合计 **238 项**（shared 63 + api 165 + web 10）。**浏览器 e2e 85 项全通过**（原 78，新增 7）。检索**用 `ILIKE` 而不建索引**是实测后的选择：`tsvector` 对连续中文只产出一个词位（搜不到），`pg_trgm` 的 GIN 索引对两个字的关键词仍走全表扫描（而那正是最常用的长度）。理由、已知边界与升级路径见 `DEVELOPMENT-PLAN.md` 9.34。
+> 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.34），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
-## 一、项目背景
+## 零、五分钟速览
 
-**梵禾 Work** 是一个桌面端个人工作台（实验版），按「账号权限 → 主框架 → 个人工作台三板块（纪要 / 事件 / 启动）→ 桌面外壳」分阶段实现。
+**这个项目是什么**：一个桌面端个人工作台（实验版），用来管自己的软件启动通道、工作纪要、事件记录，后面会包成 Electron 外壳、并支持局域网/远程两种服务地址。
 
-- **仓库**：整个工作空间根（可移动介质）整体推 `main`，远端 `https://github.com/dy00001/fanhe-work`（公开），凭据走 GCM。
-- **提交身份**：`梵禾 <dev@fanhe.local>`（仅本仓库局部配置）。
-- **项目目录**：`projects/fanhe-work/` 是代码主体；`infra/` 是工作空间机制；`.workbuddy-ai/` 被 Git 忽略（本地记忆，不随仓库走）。
+**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」与「工作纪要」两个板块已经完成并可用；工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除与**中文全文检索**。剩下纪要的「草稿自动保存」，以及整个「事件记录」板块，再往后是桌面外壳。
 
-### 技术栈
+**最短三条路径**（假定已按第七节把环境装好）：
+
+```bash
+# 1. 跑起来（两个终端；注意 API 要开短令牌，端到端验证才等得到续期）
+cd projects/fanhe-work/apps/api && ../../infra/portable/ws-run.cmd pnpm dev:api   # 或 pnpm dev:all 一起起
+# 另开一个终端
+cd projects/fanhe-work && infra/portable/ws-run.cmd pnpm dev
+
+# 2. 验证没被你改坏（四道门禁）
+cd projects/fanhe-work && ../../infra/portable/ws-run.cmd pnpm test && \
+  ../../infra/portable/ws-run.cmd pnpm lint && \
+  ../../infra/portable/ws-run.cmd pnpm typecheck && \
+  ../../infra/portable/ws-run.cmd pnpm format:check
+
+# 3. 推到远端（必须走代理，详见 6.6）
+GIT_TERMINAL_PROMPT=0 HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 \
+ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push origin main
+```
+
+**四条不能忘的事**：① 包管理**一律经 `infra/portable/ws-run.cmd`**，裸跑 pnpm 会静默把 store 落到宿主机磁盘；② 数据库在容器里、**不随 U 盘走**，换机必重建；③ 受版本控制的文件**禁止写死盘符**；④ 浏览器 e2e 跑一次 = 清一次库 + 重建一次 owner，不是随便能跑的。
+
+---
+
+## 一、项目概况
+
+### 1.1 项目定位
+
+**梵禾 Work** 是桌面端个人工作台（实验版），按「账号权限 → 主框架 → 个人工作台三板块（纪要 / 事件 / 启动）→ 桌面外壳 → 服务端化 → 更新通道」分七个阶段实现。七个阶段共 50 项任务，编号为「T + 阶段号 + 连字符 + 序号」。
+
+### 1.2 技术栈
 
 | 层 | 选型 |
 | -- | -- |
 | 桌面外壳 | Electron（阶段四，尚未实现） |
-| 前端 | React 19 + TypeScript + Vite 8 + Tailwind 4（方案 B 现代极简） |
+| 前端 | React 19 + TypeScript 6.0.3 + Vite 8 + Tailwind 4（方案 B 现代极简，shadcn/ui） |
 | 后端 | Node 22.22.2 + Fastify 5 + Prisma 7.10.0 |
 | 数据库 | PostgreSQL `postgres:16-alpine`（容器，数据在命名卷，**不随 U 盘移动**） |
 | 共享包 | `packages/shared`（跨进程类型与收窄函数，构建型包，输出到 `dist`） |
+| 路由 / 图标 / Markdown | `react-router@8.4.0`、`lucide-react`、`react-markdown` + `remark-gfm` |
+| 密码哈希 | `@node-rs/argon2`（Argon2id） |
 
-### 工作区包结构
+### 1.3 仓库与提交身份
+
+- **仓库根 = 工作空间根 = 可移动介质根**，整体推 `main`。注意不是 `projects/fanhe-work`。
+- 远端：`https://github.com/dy00001/fanhe-work`（**公开**，2026-10-11 由私有改公开）。
+- 提交身份：`梵禾 <dev@fanhe.local>`（**仅本仓库局部配置**，换机后要重设）。
+- 分支约定：`main` 为主线、保持可交付；`dev` 为开发分支。**实际执行的是「dev 跟随 main」** —— 有实际分叉需求前，每次推完 main 就把 dev 快进并推送。两条分支本地均已建立跟踪。
+- 两条访问链路：**本地 git 可读写**（细粒度 PAT 经 GCM 存于 `~/.gitconfig`，逐机逐用户，换机必重配）；**WorkBuddy 的 GitHub 连接器只读**（只能读公开仓库，写入返回 403，GitHub 侧无可调项）。**凡需要写入远端，一律走本地 git。**
+- 仓库内另有 `.git/info/exclude`（本地排除，不进版本控制），`.workbuddy/` 与 `.workbuddy-ai/` 都不进仓库。
+
+### 1.4 工作区目录结构
 
 ```
-projects/fanhe-work/
-├── apps/
-│   ├── api/        Fastify 后端 + Prisma + 迁移
-│   ├── web/        React 前端（Vite）
-│   └── desktop/    Electron 外壳（阶段四）
-├── packages/
-│   └── shared/     跨应用共享类型与工具（构建型）
-├── docs/           规划与交接文档（本文所在处）
-├── data/           本地数据目录（已忽略）
-├── docker-compose.yml
-└── package.json    pnpm 工作区根
+<工作空间根>/                       ← git 仓库根，整盘走
+├── .ws-root                       ← 根定位标记，脚本向上查找它推导根，不写死盘符
+├── infra/                         ← 工作空间机制（唯一入口）
+│   ├── portable/
+│   │   ├── ws-run.cmd / .ps1 / .sh    ← 唯一入口（cmd 是 Windows 上的首选）
+│   │   ├── ws-env.ps1 / .sh           ← 只设置环境，不转交命令
+│   │   ├── ws-locate.ps1 / ws-state.ps1 / ws-doctor.ps1 / ws-repair.ps1
+│   │   ├── ws-enable-devmode.cmd/.ps1
+│   │   ├── config/
+│   │   └── state/root.json
+│   └── docs/PORTABLE-WORKSPACE.md
+├── projects/fanhe-work/           ← 代码主体
+│   ├── apps/
+│   │   ├── api/                   ← Fastify 后端 + Prisma + 迁移 + 测试
+│   │   ├── web/                   ← React 前端（Vite）
+│   │   └── desktop/               ← Electron 外壳（阶段四，目前基本为空）
+│   ├── packages/shared/           ← 跨应用共享类型与工具（构建型，先构建后用）
+│   ├── docs/                      ← 规划与交接文档（本文所在处）
+│   ├── tools/                     ← 诊断脚本归档（checks/ prisma/ oneoff/）
+│   ├── data/                      ← 本地数据目录（已忽略）
+│   ├── docker-compose.yml
+│   └── package.json               ← pnpm 工作区根
+├── docs/                          ← 工作空间级文档
+├── .tmp/                          ← 被忽略，临时产物与凭据落在这里
+├── .cache/ .cargo/ .m2/ .nuget/ .rustup/ .venv/ ...  ← 各类工具链缓存，随盘
+└── .workbuddy/ .workbuddy-ai/     ← 本地记忆（不进版本控制）
 ```
 
 ---
 
-## 二、当前进度总览
+## 二、当前进度
+
+### 2.1 阶段进度总览
 
 | 阶段 | 范围 | 状态 |
 | -- | -- | -- |
-| 阶段零 | 目录骨架 | ✅ 完成 |
-| 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见第六节） |
-| 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾，阶段二收口） |
-| 阶段三 | 个人工作台三板块（T3-01 ~ T3-07） | 🔄 T3-01~T3-07 已完成并提交，T3-06 与 T3-07 均已过浏览器验证（e2e 85 项全通过）；草稿恢复 T3-08 未做，事件板块 T3-09 起未开始 |
-| 阶段四 | Electron 外壳 | ⬜ 未开始 |
+| 阶段零 | 目录骨架（T0-01 ~ T0-07） | ✅ 完成 |
+| 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
+| 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾） |
+| 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | 🔄 **7/12**：T3-01 ~ T3-07 已完成并推送；下一项 T3-08；事件板块 T3-09 起未开始 |
+| 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ⬜ 未开始 |
+| 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
+| 阶段六 | 更新通道 | ⬜ 未开始 |
 
-**阶段三验收清单**：
+> 阶段三的分母口径（12 项）见 `PROGRESS-REVIEW-2026-10-11.md` 第 28 行。
+
+### 2.2 阶段三验收清单
+
 - [x] 第一项：启动配置可新增、编辑、排序，可一键唤起
-- [x] 第二项：路径失效有提示与重新指定入口（T3-04；整套浏览器 e2e 现为 85/85 全通过）
-- [ ] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **编辑预览、标签、置顶已在 T3-06 完成，检索已在 T3-07 完成，两者均已过浏览器验证**；草稿恢复属 T3-08，未做，故整项不勾
-- 其余验收项（折叠记忆、占位页、子路由等）随阶段二已落定
+- [x] 第二项：路径失效有提示与重新指定入口（T3-04）
+- [ ] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **前四项均已完成并过浏览器验证**，只差「草稿恢复」（T3-08），故整项不勾
+- [ ] 第四~六项：事件列表分组与勾选切换、撤销入口、已完成详情 —— 事件板块未开始
 
-**最近提交**：
-- `95bdcf2` feat(阶段三): T3-07 纪要全文检索
-- `122931d` docs(阶段三): 回填 T3-06 浏览器 e2e 验证结果并修正实施判断
-- `19c08a2` fix(阶段三): 修复新建纪要后编辑器草稿被初始化成空白
-- `42963b4` docs(阶段三): 回填 T3-06 实施判断与验证结果
-- `eb4992b` feat(阶段三): T3-06 纪要 Markdown 编辑与预览
+### 2.3 最近提交
 
----
+| 提交 | 说明 |
+| -- | -- |
+| `3c402fa` | docs(阶段三): 回填 T3-07 实施判断与验证结果 |
+| `95bdcf2` | feat(阶段三): T3-07 纪要全文检索 |
+| `122931d` | docs(阶段三): 回填 T3-06 浏览器 e2e 验证结果并修正实施判断 |
+| `19c08a2` | fix(阶段三): 修复新建纪要后编辑器草稿被初始化成空白 |
+| `42963b4` | docs(阶段三): 回填 T3-06 实施判断与验证结果 |
+| `eb4992b` | feat(阶段三): T3-06 纪要 Markdown 编辑与预览 |
+| `5d1883a` | feat(阶段三): T3-05 纪要模型与接口 |
 
-## 三、已完成任务明细（阶段三）
+### 2.4 当前验证基线（改完东西应与这些数字对照）
 
-- **T3-01 启动配置模型与接口**：`LaunchProfile` 模型、配置 CRUD 接口、按所有者隔离（`where` 恒带 `userId`）。
-- **T3-02 本机代理与进程启动**：`apps/api/src/launch/agent.ts` 不依赖数据库/认证/HTTP，入参为已取好的 `LaunchProfile`，便于阶段四搬进 Electron 主进程。
-- **T3-03 启动配置管理界面**：前端 `lib/api.ts`（只拼地址、不认会话）+ `lib/launch.ts`（`withAccessToken` 包一层、拆信封、按服务端错误码分流 `launchRunRecovery`）；界面三态走 `components/StateView.tsx`。
-- **T3-04 启动记录与路径失效提示**（已提交 `bb29055`，含文档回填 `dba6198`）：
-  - 新增 `launch_history` 表与第四迁移 `20261010180508_launch_history`。
-  - `history.ts`：记录真实启动尝试（成功 / `executable_missing` / `spawn_failed`），去重命中不记；按用户保留最近 500 条；`loadLastRuns` / `loadLastSuccessAt` 分组查询。
-  - `status.ts`：独立 `GET /api/launch/profiles/status`（挂 `read`，与列表分开），并发做文件系统检查 + 历史摘要。
-  - 前端：行内「路径失效」徽标 + 「重新指定路径」入口（复用编辑对话框并聚焦路径字段）；表头「重新检查路径」。
-  - 只读角色：`LaunchProfileRow` 的 `canWrite: false` 隐藏整行操作。
-  - 相对时间：`lib/relative-time.ts`（`Intl.RelativeTimeFormat('zh-CN')`），前端零依赖单测 10 项。
-
-- **T3-05 纪要模型与接口**（**只落模型与接口，界面属 T3-06**，已于 T3-06 接上）：
-  - 新增 `notes` 表与第五迁移 `20261011064829_add_notes`。至此五个迁移、十张业务表（另加 `_prisma_migrations`）。
-  - 标签用 `text[]` 加 **GIN 索引**，不另开 `tags` / `note_tags` 关联表；归档用 `archivedAt` 记时刻而非布尔；沿用 `deletedAt` 软删除；两处复合索引覆盖列表与归档视图。
-  - `packages/shared/src/note.ts`：纪要跨进程类型、`NOTE_LIMITS` 上限、`normalizeNoteTags` 归一（去空白 + 精确去重，不做大小写折叠）、`isValidNoteTag` 判定。
-  - `apps/api/src/note/notes.ts`：所有权在 service 层强制（`where` 恒带 `userId`），归属不符与不存在**统一返回 404**（不用 403，避免 UUID 存在性试探）；标题 trim、**正文不 trim**（Markdown 前导空白有意义）；先归一去重再判数量上限；列表排序三级键（置顶 → 更新时间 → 创建时间）；标签清单走 `unnest` 原生 SQL，**已归档计入、已删除不计**。
-  - `apps/api/src/routes/notes.ts`：八条路由 —— 列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档，读写分挂 `personal.note.read` 与 `personal.note.write`；`PATCH` 体要求 `minProperties: 1`；置顶与归档各自一条幂等 `PUT`。**不写审计**（私有用量，与启动配置同判）。
-  - 测试：api 新增 21 项（`note.test.ts`）、shared 新增 10 项（`note.test.mjs`）。
-
-- **T3-06 Markdown 编辑与预览**（本次重点，纪要界面已接通）：
-  - 新增 `apps/web/src/components/notes/`：`NotesPanel`（四态分派容器，照 `LaunchPanel`）、`NoteList`（只按服务端顺序渲染）、`NoteEditor`（草稿态 + 提交前校验）、`MarkdownPreview`（`react-markdown` + `remark-gfm`，**不引 `rehype-raw`**）、`TagInput`（芯片 + 候选，拆分规则来自共享包）。
-  - 新增 `apps/web/src/lib/notes.ts`：八条接口的会话感知封装、剥掉 `{notes}` / `{note}` / `{tags}` 信封、`noteFailureExit` 把 404 与其余失败分开。
-  - `lib/api.ts` 补八条传输函数；`NoteListQuery` 只把真正给了的条件拼进查询串（服务端 schema 是 `additionalProperties: false`）。
-  - **预览读草稿而不是已保存值** —— 这是验收要点「编辑与预览内容一致」的落点；草稿同步**不能只靠父组件的 `key`**：新建成功时 `key` 早于数据变化，重挂那一刻 `note` 还是 `null`，草稿被初始化成空白且此后再无同步时机。修法是加 `syncedNoteId`，按 note 的 **id** 变化补一次同步（用 id 而非整个对象，才不会冲掉正在输入的内容）。**这是浏览器 e2e 抓出来的真 bug**，见 9.33。
-  - **路由补上二级路径这一层**：`routes.tsx` 由精确 `path={item.code}` 改为「父路由 + `index` 子路由 + `MODULE_SUB_ROUTES` 的子路由」，`/workbench/notes` 因此可达；`WorkbenchPage` 加板块切换（`NavLink` 激活态驱动，不用组件状态）并按地址分派。
-  - **共享包新增 `parseNoteTagInput`**：中英文逗号 + 换行三种分隔符，拆完复用 `normalizeNoteTags`；超长标签不丢弃、只标红。
-  - **修掉一个空库死角**：编辑器原先只画在「列表非空」分支里，导致全新库上「新建」点了没反应、第一条纪要永远建不出来；改为可写角色一律渲染「左列表 + 右编辑器」，只读角色空库时才回落空态。
-  - 依赖新增 `react-markdown@10.1.0` 与 `remark-gfm@4.0.1`（无 postinstall，`onlyBuiltDependencies: []` 不动）。
-  - 测试：shared 新增 8 项（`parseNoteTagInput` 的分隔符与边界）；**前端本轮未加单测**（界面逻辑已下沉共享包或由传输/数据层承担，其余用浏览器 e2e 覆盖更划算）。
-  - 接口冒烟：`.tmp/note-smoke.mjs` 以真实 owner 跑通 23 项（含「标题 trim / 正文不 trim」「空 body 的 PATCH 被 400 拒」「不存在 id 返回 404」「重复删除返回 `removed:false`」），跑完已清理残留。
-  - **浏览器 e2e 已执行：78 项全通过**（原 62，新增 16 项纪要断言）。首轮 3 项失败：1 项真 bug（编辑器草稿同步死角）、1 项断言作用域过宽（`nav a` 应为 `aside nav a`）、1 项环境残留（上一轮的 `tsx watch` 占着 8787，导致接口以 900 秒令牌运行）。跑完已重建 owner 并把库回到基线，见第七节。
-
-- **T3-07 全文检索**（本次重点，验收要点「中文关键词可命中」已达成）：
-  - `packages/shared/src/note.ts`：增 `NOTE_LIMITS.SEARCH_MAX = 64` 与 `normalizeSearchQuery`。后者把 `undefined` 与全空白**一律归一为 `null`**（含义是「不检索」）—— `null` 与 `''` 的区别是承重的，Prisma 的 `contains: ''` 会匹配每一行。
-  - `apps/api/src/note/notes.ts`：`NoteListFilter` 增 `search`，条件为 `title` / `content` 的 `contains` 加 `mode: 'insensitive'`（即 `ILIKE`）。**本轮不建索引**，理由见下。
-  - `apps/api/src/routes/notes.ts`：列表查询串增 `q`，`maxLength` 取共享包上限。`apps/web/src/lib/api.ts` 的 `NoteListQuery` 增 `q`，且**只在非空时拼参**。
-  - `apps/web/src/components/notes/NotesPanel.tsx`：检索框放在面板标题下、内容之上（**不随列表状态出现或消失**，否则一次请求失败后输入框会被卸载、关键词再也清不掉）。防抖 250ms，并复用既有加载 effect 的 `cancelled` 标志丢弃过期响应。空态分两种说法：只读角色搜不到时给「没有匹配的纪要」，不再拿「请联系管理员」误导他；可写角色把关键词回显出来。**切换视图不清空关键词**。
-  - **为什么用 `ILIKE` 而不上全文检索或 trgm 索引**（先量后定，不是凭印象）：实测 `to_tsvector('simple','衣柜门板安装说明')` 只产出**一个**词位，`@@ to_tsquery('simple','衣柜')` 为 `false` —— 中文关键词在 `tsvector` 下一条也搜不到，且返回的是「正常结果为空」；本机容器可用的扩展只有 `pg_trgm` / `btree_gin` / `unaccent`，没有中文分词器。又实测（30 000 行、索引已建）：两字模式 `'%衣柜%'` 仍走 **Seq Scan**，三字以上才走 Bitmap Index Scan —— 而两个字恰是最常用的关键词长度。单用户纪要量级是几百到几千条，全表扫描足够，故不引入第六个迁移与一个扩展依赖。
-  - **已知边界（有意不修）**：`LIKE` 的元字符没转义（Prisma 的 `contains` 不提供 `ESCAPE`），搜 `%` 会命中全部记录。不是安全问题（查询是参数化的），只是「结果比预期多」；要修就得换成原生 `$queryRaw`，不划算。
-  - 测试：api 新增 6 项（`note.test.ts`：中文命中标题 / 命中正文 / 与标签筛选取交集 / 归档视图同样能搜 / 空与全空白按不检索 / 超长被 schema 拒 / 搜不到别人的纪要）、shared 新增 5 项。
-  - **浏览器 e2e 已执行：85 项全通过**（原 78，新增 7 项检索断言，含「关键词只出现在正文里同样命中」与「检索与视图正交」）。首轮跑崩于第 7 项主题切换（Radix 下拉菜单关闭动画期间的点击被忽略），**与本轮改动无关**，已抽出 `openThemeMenu` 修掉；另因 9222 被一个非 CDP 的监听者占用，给调试端口加了 `E2E_CDP_PORT` 覆盖。跑完已重建 owner 并把库回到基线，见第七节。
-  - **留给 T3-08 的残留**：检索会缩小可见集合，被搜掉的那条退出列表、选中落到第一条匹配上，编辑器重挂、**正在编辑的草稿随之丢失**。这是既有行为（归档、删除、切视图早已如此），正是 T3-08 要解决的那件事。
-
-> 详细判断见 `DEVELOPMENT-PLAN.md` 9.28 ~ 9.34。
+| 项 | 基线 | 说明 |
+| -- | -- | -- |
+| `pnpm test` | **238 项，0 失败** | `packages/shared` 63 + `apps/api` 165（**160 通过 / 5 跳过**）+ `apps/web` 10 |
+| 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
+| `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
+| 浏览器 e2e | **85 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」 |
+| 数据库 | 5 个迁移、**10 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行 |
 
 ---
 
-## 四、进行中开发
+## 三、已完成的功能
 
-**无。** T3-07 已实现、提交并完成浏览器验证（e2e 85 项全通过），下一项 T3-08 草稿自动保存尚未启动。验证期间起过 API（8787）与前端（5173）两个进程，验完均已停止，连同调试端口 19222 一起确认释放；也确认没有 `tsx watch` / `vite` 残留（上一轮遗留的 `pnpm --filter @fanhe/api dev` 曾静默占着 8787，见第七节第 1 条）。
+### 3.1 阶段零 · 目录骨架（T0-01 ~ T0-07）
+
+一次性把工程地基打完：`apps/{web,api,desktop}` + `packages/shared` + `data` 的目录骨架（T0-01）；pnpm workspace 与根脚本（T0-02）；Electron 缓存变量名缺陷的修正与镜像补全（T0-03，判断见 9.4）；约定文档 `README.md`（T0-04）；ESLint 10 扁平配置 + Prettier + Tailwind 类名排序（T0-05）；忽略规则（T0-06）；git 仓库与提交身份（T0-07）。另有界面方案四选一对比页（`docs/mockups/index.html`，选定方案 B）与品牌标识入库。
+
+### 3.2 阶段一 · 账号与权限（T1-01 ~ T1-12）
+
+**这一阶段的产品能力：能登录、能记住账号密码、能按角色看到不同的导航。**
+
+| 能力 | 交付 | 关键文件 |
+| -- | -- | -- |
+| 数据模型与首个迁移 | 六张账号权限表，已应用并确认无漂移 | `apps/api/prisma/schema.prisma`、`migrations/20261010150103_init` |
+| 数据库连接与种子 | 11 个权限点、4 个角色、29 条授权关联，重跑无副作用 | `src/db/prisma.ts`、`src/db/seed.ts` |
+| 密码哈希 | Argon2id，参数可配置、可判定重算，12 项测试 | `src/auth/password.ts` |
+| 登录与令牌签发 | `POST /api/auth/login`，四种失败共用同一响应（不给枚举用户名的机会） | `src/auth/tokens.ts`、`src/auth/login.ts` |
+| 令牌轮换与撤销 | `refresh` / `logout`，并发轮换用行锁串行化，重放按 `familyId` 整链撤销，撤销分 session / device / all 三层 | `src/auth/session.ts` |
+| 登录限速 | 账号 + IP 双维度，阈值与窗口全部配置化，落库 `login_attempts`，超限返回 429 | `src/auth/login.ts` |
+| 权限中间件 | `requireAuth` / `requirePermission`，**授权每次查库不缓存** | `src/auth/guard.ts` |
+| 首次初始化引导 | 并发初始化用咨询锁串行化，owner 被误删有 `pnpm db:create-owner` 恢复通道 | `packages/shared/src/account.ts`、`src/auth/setup.ts` |
+| 审计日志 | 动作码词表 + `recordAudit`，已接入登录 / 登出 / 刷新重放 / 首次初始化四条路径 | `packages/shared/src/audit.ts`、`src/audit/audit.ts` |
+| 登录页与会话管理 | 访问令牌只放内存、刷新令牌持久化，续期单飞收敛并发，401 续期一次后重试 | `apps/web/src/lib/{api,session}.ts`、`auth/`、`pages/` |
+| 前端路由守卫 | 一级导航清单 + 模块级可见性判定，14 项测试钉住四种角色的可见范围 | `packages/shared/src/navigation.ts`、`components/NavRail.tsx` |
+| 记住账号密码 | AES-GCM 加密，密钥存 IndexedDB 且不可导出；只在登录成功后写、取消勾选即清 | `apps/web/src/lib/credential.ts` |
+
+### 3.3 阶段二 · 主框架与 UI 骨架（T2-01 ~ T2-07）
+
+**这一阶段的产品能力：一个应用式外壳（侧栏 + 顶栏 + 内容区），可折叠、可切主题、有完整的空/错/404 页。**
+
+- **T2-01 shadcn/ui 与设计令牌**：`components.json` + `src/lib/utils.ts` + `components/ui/` 下 14 个官方组件源码；`index.css` 改为两层令牌结构并统一到 shadcn 语义命名，现有界面 60 余处类名同步迁移。
+- **T2-02 布局骨架**：`Sidebar`（224px / 折叠 64px，折叠态用气泡提示补名称）、`TopBar`（56px，面包屑 + 账号下拉）、`AppShell`（`h-screen` 应用式外壳，内容区独立滚动、最大宽度 1080px）。
+- **T2-03 路由体系**：路由表由 `NAV_ITEMS` 派生，模块守卫复用 `resolveActiveNav`；共享包新增 `navPath` 与 `navCodeFromPath`。
+- **T2-04 占位页**：统一「功能开发中」页（模块图标、标题、规划范围、返回入口）；导航图标表抽出共用。
+- **T2-05 错误与空状态**：`EmptyState`（`card` / `plain` 两形态，收敛到一处）、`NotFoundPage`（404，保留原地址不重定向）、`ErrorPage`（500，不展示异常原文）、`ErrorBoundary`。
+- **T2-06 折叠偏好记忆**：`lib/preferences.ts` 读写本机偏好（键 `fanhe-work.ui.sidebar-collapsed`），读写失败静默降级。
+- **T2-07 主题令牌**：`index.css` 新增 `@custom-variant dark` 与 `.dark` 块（覆盖 `:root` 全部颜色原始值），`index.html` 内联脚本在样式生效前定下主题初值，`lib/theme.ts` 提供三档（含跟随系统）与系统配色变化监听。
+
+### 3.4 阶段三 · 个人工作台（T3-01 ~ T3-07，进行中）
+
+**已经能用的两块：启动通道、工作纪要。**
+
+#### 启动通道（T3-01 ~ T3-04）
+
+- **T3-01 模型与接口**：`launch_profiles` 表 + 五条路由（列表 / 新增 / 重排 / 修改 / 删除），所有权在 service 层强制，重名检查不用数据库约束。启动参数用 `String[]` 而不是拼接字符串。
+- **T3-02 本机代理与进程启动**：`src/launch/agent.ts` 是**代理核心**，`buildLaunchCommand` 纯函数 + `runLaunchProfile`，**不认识数据库、认证与 HTTP**（阶段四要原样搬进外壳主进程）；只接受回环来源。
+- **T3-03 管理界面**：列表 + 新增/编辑对话框 + 删除确认 + 排序，四态分派容器照 `LaunchPanel` 的形态。
+- **T3-04 启动记录与路径失效提示**：`launch_history` 表记录真实启动尝试（成功 / `executable_missing` / `spawn_failed`），去重命中不记；独立的状态接口提供路径状态与近期历史；界面有失效徽标、「重新指定路径」入口与启动摘要。
+
+#### 工作纪要（T3-05 ~ T3-07）
+
+- **T3-05 模型与接口**：`notes` 表 + 八条路由（列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档）。标签用 `text[]` + GIN 索引，归档用 `archivedAt` 记时刻而非布尔，沿用软删除。
+- **T3-06 Markdown 编辑与预览**：`NotesPanel`（四态分派）/ `NoteList` / `NoteEditor` / `MarkdownPreview` / `TagInput`；**预览读的是草稿而不是已保存值**；一级导航补上二级路径这一层，`/workbench/notes` 因此可达。
+- **T3-07 全文检索**：中文关键词可命中**标题与正文**；界面检索框防抖 250ms、丢弃过期响应、空态分「库里没有」与「没搜到」两种说法、关键词跨视图保留。**这就是本阶段最后一项已完成的交付**（详见 5.4）。
+
+> 界面入口：`/workbench` 是启动通道，`/workbench/notes` 是工作纪要，靠 `WorkbenchPage` 顶部的板块切换按地址分派。
 
 ---
 
-## 五、未提交的代码改动
+## 四、待办事项
 
-**无。** T3-07 的代码 + 测试随 `95bdcf2` 提交，本轮文档回填随后一提交。提交后推送见第八节 8.5（必须走本地代理）。
+### 4.1 下一项：T3-08 草稿自动保存（P1，可直接开工）
+
+- **验收要点**：关闭后重进可恢复未提交内容。
+- **依赖**：T3-06（已具备）。
+- **落点**：`NoteEditor` 的草稿态加一层本机存储，照 `lib/preferences.ts` 的读写与静默降级模式。
+- **它要顺带解决的具体场景**：检索会缩小可见集合，被搜掉的那条退出列表、选中落到第一条匹配上，编辑器随之重挂，**正在编辑的草稿丢失**。归档、删除、切视图也早已如此 —— 这是既有行为，不是 T3-07 引入的，已在组件注释里标为交接项。
+- **注意**：`NotesPanel` 的编辑器用 `key={selectedId ?? 'new'}` 表达「换了一条」，草稿恢复要在这个前提下做，别把「换 id 就重挂」改成 effect 同步 —— 那会引入「数据到达时冲掉正在输入的内容」这个更难复现的 bug（T3-06 踩过，见 5.5）。
+
+### 4.2 阶段三剩余的链
+
+事件记录（**T3-09 ~ T3-12**，四块：事件模型与接口、事件列表视图、勾选切换与撤销、已完成详情面板）。
+
+- 需要**新增第六个迁移**建 `events` 与 `event_logs` **两张目前不存在的表**。
+- `event_logs` 是**只追加不修改**的流水，设计时要与既有实体表的 `createdAt` / `updatedAt` / `deletedAt` 三件套区分开。
+- 建议等 T3-08 收口后再开，**不要与纪要链并行**。
+
+### 4.3 后三个阶段
+
+- **阶段四 Electron 外壳（T4-01 ~ T4-04）**：外壳脚手架、本机/远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程（它已经为此设计好了）、启动自检；另把 `credential.ts` 的存储后端换成主进程 `safeStorage`。
+- **阶段五 服务端化（T5-01 ~ T5-05）**：Docker Compose 编排 web/api/db、数据库容器化与连接切换、数据迁移与校验、Cloudflare Tunnel 仅出站、访问策略。
+- **阶段六 更新通道**：版本清单接口、客户端版本比对、外壳升级通道、安装包签名校验。
+
+### 4.4 长期遗留（跨阶段，待排期）
+
+- `users.passwordChangedAt` 接入访问令牌载荷（目前改密**不会**让已签发的访问令牌失效）。
+- 改名复用 `normalizeUsername`，并在改名前用归一后的值查一次冲突（否则「只差大小写」的改名会绕过唯一约束）。目前唯一用得上冲突检测的入口是首次初始化。
+- 账号与角色管理的审计挂钩（「授权变更」与「删除」两个事件族还**没有接口可挂**）。
+- 客户信息平台 / 运营信息平台的权限点定义；当前 11 个权限点只有 `system` 与 `personal` 两段。
+- 三个占位导航项的 `module` 由 `null` 改为各自模块段，并同步改 `navigation.test.mjs` 的断言（否则它们会一直对所有人可见）。
+- `projects/fanhe-work/`、`apps/api/`、`apps/web/`、`packages/shared/` 四处 `node_modules.old`：**已分析确认应当删除，但用户 2026-10-11 决定暂不删**。约 489 MB、23802 个文件，顶层软链接 100% 悬空于已不存在的 `E:` 盘，且与现役树重复、会污染 lint/format（现靠三处忽略规则压住）。依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。**将来删的时候不要连带删 `node_modules/`。**
+
+### 4.5 已知边界与有意留白（不是缺陷）
+
+**纪要**
+- **列表分页未做**：`GET /api/notes` 一次返回该用户全部未删除纪要，没有分页参数。**检索也是全表扫描**，分页与索引应当一起排期。
+- **检索有三条边界**：① 走 `ILIKE` 全表扫描、不建索引；② `LIKE` 元字符 `%` / `_` 未转义（搜 `%` 命中全部记录，有意不修）；③ 两个字的关键词即使将来建了 trgm 索引也仍走全表扫描。
+- `PATCH` **不接受** `pinned` / `archivedAt` —— 这两个状态各有独立幂等 `PUT`，是有意设计。
+- 标签无独立元数据（没有颜色、描述，也不跨用户共享），「标签重命名」目前要逐条改标签数组。
+- 正文上限 10 万字符是**防超大请求体的闸门**而非业务约束；列类型是 `text` 不设宽度，改上限只需改 `NOTE_LIMITS.CONTENT_MAX` 与 schema 注释，**不需要迁移**。
+- `@updatedAt` 副作用：置顶 / 归档都会刷新 `updatedAt`，取消置顶后该条会落到「最近修改」首位 —— 有意保留。
+
+**启动通道**
+- `canWrite: false` 已隐藏整行操作，但**浏览器级验证只覆盖 owner**；其他角色的真实渲染不能算作已验收。
+- 路径 `stat` 的 5 秒超时**只结束等待、不取消底层文件系统调用**。
+- 历史按用户保留最近 500 条，**不永久保证「上次成功」可得**。
+- 状态重查**没有「检查中」状态、也没有失败反馈**，失败时保留上次快照。
+
+**账号与权限**
+- 阶段一验收「关键操作在 `audit_logs` 有记录」**未勾选**：写入链路与四类事件已完成，但缺「授权变更」与「删除」两类事件的接口。
 
 ---
 
-## 六、遗留问题与已知边界
+## 五、关键决策清单
 
-### T3-05 的明确边界（非缺陷，是有意留白）
-- **界面已接上**（原边界「本轮只落模型与接口」已由 T3-06 解除）：`/workbench/notes` 是入口，编辑器 / 预览 / 标签 / 置顶 / 归档 / 删除六项都可用，检索由 T3-07 补上。
-- **列表分页未做**：`GET /api/notes` 目前一次返回该用户全部未删除纪要，没有分页参数；数据量上来后需要补。**检索也是全表扫描**（见 9.34），分页与索引应当一起排期。
-- **检索已实现（T3-07），但有三条已知边界**：① 走 `ILIKE` 全表扫描、**不建索引**，量级上来才需要升级（升级形态见 9.34）；② `LIKE` 元字符 `%` / `_` 未转义，搜 `%` 会命中全部记录（有意不修）；③ 两个字的关键词即使将来建了 trgm 索引也仍走全表扫描。中文分词器在本机容器里不可用，这是选 `ILIKE` 的前提。
-- **`PATCH` 不接受 `pinned` / `archivedAt`**：这两个状态各有独立幂等 `PUT`，是有意设计而非遗漏。
-- **标签无独立元数据**：没有颜色、描述，也不跨用户共享；「标签重命名」目前需要逐条改标签数组。
-- **正文上限 10 万字符是防超大请求体的闸门**，不是业务约束。列类型是 `text` 不设宽度，改上限只需改 `NOTE_LIMITS.CONTENT_MAX` 与 schema 注释，**不需要迁移**。
-- **`@updatedAt` 副作用**：置顶 / 归档都会刷新 `updatedAt`，取消置顶后该条会落到「最近修改」首位 —— 有意保留，与用户「我刚操作过它」的直觉一致。
+> 每条只给结论与**为什么**，需要完整推演时按编号翻 `DEVELOPMENT-PLAN.md`。这一节的存在意义是：**别把已经论证过的事再论证一遍**。
 
-### T3-04 的明确边界（非缺陷，是有意留白）
-- `canWrite: false` 已隐藏 `LaunchProfileRow` 全行操作，但**浏览器级验证只覆盖 owner**；其他角色的真实渲染与状态重查失败反馈仍属后续边界，不能把服务端 403 或代码隐藏逻辑算作多角色浏览器验收。
-- 路径 `stat` 的 5 秒超时**仅结束等待、不取消底层文件系统调用**；并发检查不逐条累加，但不保证整个 API 恰在 5 秒内返回。
-- 历史按用户保留最近 500 条，**不永久保证「上次成功」可得**；无近期记录时文案是「暂无近期启动记录」。
-- 状态重查**没有「检查中」状态，也没有失败反馈**；失败保留上次快照。
+### 5.1 技术选型
 
-### 阶段一剩余验收项
-- 「关键操作在 `audit_logs` 有记录」一项**未勾选**：写入链路与四类事件已完成，但「授权变更」与「删除」两类事件**尚无对应接口**（账号与角色管理功能未实现），待其 service 里接 `recordAudit`。
+| 决策 | 结论与理由 | 出处 |
+| -- | -- | -- |
+| TypeScript **6.0.3** | 不用 7.x：`typescript-eslint` 8.71.1 的 peer 是 `>=4.8.4 <6.1.0`，遇 TS 7 是**导入即抛错**。官方出路是并存两套类型系统，不值得 | 9.3 |
+| Vite **显式绑 IPv4 回环** | Windows 上 `localhost` 只解析到 IPv6 `::1`，与后端 `127.0.0.1:8787` 不在同一协议栈 | 9.3 |
+| Prisma **钉 7.10.0** | 两个包同版本，不要 `@latest` | 8.4 |
+| 数据库**容器 + 命名卷** | PostgreSQL 随机 IO 重，而工作空间在闪存 U 盘上（慢且有写入寿命）；代价是换机后库不在 | `docker-compose.yml` 注释 |
+| 排序规则 **ICU `zh-CN`** | 默认 `C` 按 UTF-8 字节序比较，中文相当于按码位排，列表里的中文姓名不会按拼音顺序出现。建库时定死，事后改要重建 | 同上 |
+| 密码哈希用 **`@node-rs/argon2`** | 本机**没有 C++ 编译器**，node-gyp 源码编译走不通；装带二进制的包优先 napi-rs 系 | 9.9 |
+| Argon2id 用 **OWASP 最低推荐档**（m=19456 / t=2 / p=1） | PHC 编码串自带生成时的参数，**改参数不会让已有密码失效** | `.env.example` 注释 |
+| **不引 `rehype-raw`** | Markdown 一旦放行原始 HTML，一段 `<img onerror=…>` 就能在读到它的人那里执行；要支持 HTML 必须同时加 `rehype-sanitize`，而那不该由一个预览组件顺手决定 | 9.33 |
+| Web 端**不引 `@tailwindcss/typography`** | 项目排版规格出自方案 B，覆盖插件带来的整套字位与间距，成本高于直接写十几个标签 | 9.33 |
 
-### 长期遗留（跨阶段，待排期）
-- `users.passwordChangedAt` 接入令牌载荷。
-- 改名复用 `normalizeUsername`（避免「只差大小写」的命名冲突绕过唯一约束）。
-- 账号与角色管理的审计挂钩。
-- 客户 / 运营平台的权限点定义。
-- 三个占位导航项的 `module` 由 `null` 改为各自模块段，并同步改 `navigation.test.mjs` 断言。
-- 阶段四将 `credential.ts` 存储后端换成主进程 `safeStorage`。
+### 5.2 安全与认证
+
+- **访问令牌只放内存，刷新令牌持久化**；续期用**单飞**收敛并发，401 续期一次后重试。出处 9.17。
+- **四类登录失败共用同一响应**，不给人枚举用户名的机会。出处 9.10。
+- **登录限速双维度**（账号 + IP），阈值与窗口全部配置化，超限 429。出处 9.12。
+- **权限每次查库、不缓存** —— 账号停用或删除后令牌立即失效。出处 9.13。
+- **归属不符与不存在统一返回 404**，不用 403 —— 用 403 会让任何一种响应都变成「这个 UUID 存在」的探针。因此前端那一侧也无从区分，文案统一。出处 9.32。
+- **刷新令牌重放按 `familyId` 整链撤销**，撤销分 session / device / all 三层。出处 9.11。
+- 记住账号密码用 **AES-GCM**，密钥存 IndexedDB 且不可导出；凭据只在登录成功后写入，取消勾选即清。出处 9.20。
+
+### 5.3 数据与数据库
+
+- **软删除统一用 `deletedAt`**；**归档用 `archivedAt` 记时刻而不是布尔**（「什么时候归档的」本身有信息，且布尔改不动历史）。
+- **标签用 `text[]` + GIN，不另开 `tags` / `note_tags` 关联表**。出处 9.32。
+- **所有权的强制在 service 层**（`where` 恒带 `userId`），不用数据库约束兜。
+- **重名检查不用数据库唯一约束**（启动配置），因为软删除之后那个「唯一」的含义会变。出处 9.28。
+- **`PATCH` 体要求 `minProperties: 1`**，空 body 被 400 拒。
+- **正文不 trim、标题 trim**：Markdown 的前导空白有意义。
+- **迁移的目录名字典序 ≠ 实际创建顺序**（`login_rate_limit` 比 `init` 排得靠前但创建得更晚）。当前字典序**恰好**满足依赖，**不能宣称全部迁移互相独立**；新增迁移若引用更晚创建的对象，要查的是迁移间是否真的独立。出处 9.16。
+- **不写审计**：纪要属私有用量，与启动配置同判（服务端不记录读写的审计流水）。
+
+### 5.4 中文全文检索（T3-07 的核心结论）
+
+**选择：`ILIKE` 覆盖标题与正文，不建索引。这是实测后的决定，不是绕开。**
+
+| 候选方案 | 实测结果 | 结论 |
+| -- | -- | -- |
+| `tsvector` + GIN | `to_tsvector('simple','衣柜门板安装说明')` 只产出**一个**词位，`@@ to_tsquery('simple','衣柜')` 为 **false**。返回的是「正常结果为空」而不是报错，很容易被误读成数据没写进去 | **否决**。本机容器 `pg_available_extensions` 只有 `pg_trgm` / `btree_gin` / `unaccent`，**没有中文分词器** |
+| `pg_trgm` GIN + `ILIKE` | 30 000 行中文数据、索引已建并 ANALYZE：**两个字**的 `'%衣柜%'` 仍走 **Seq Scan**，三个字以上才走 Bitmap Index Scan | **否决**。两个字恰是中文最常用的关键词长度，这条路在最需要它的地方不生效 |
+| **`ILIKE` 全表扫描** | 单用户纪要量级是几百到几千条，全表扫描在此量级是**毫秒级** | **采用** |
+
+**升级路径已备好**（真出现性能问题再上）：迁移里 `CREATE EXTENSION IF NOT EXISTS pg_trgm;`，模型上加
+`@@index([title(ops: raw("gin_trgm_ops")), content(ops: raw("gin_trgm_ops"))], type: Gin)` —— Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prisma validate`（已实测）。**但那时只有三字以上的关键词会变快。**
+
+**「什么叫空检索词」只有一处定义**：共享包 `normalizeSearchQuery`，`undefined` 与全空白**一律归 `null`（含义是不检索）**。`null` 与 `''` 的区别是**承重**的 —— Prisma 的 `contains: ''` 会匹配每一行。上限 `NOTE_LIMITS.SEARCH_MAX = 64` 也放共享包，前端拿它做 `maxLength`。
+
+**边界**：`LIKE` 的 `%` / `_` 未转义（Prisma 的 `contains` 不提供 `ESCAPE`），搜 `%` 命中全部记录。不是安全问题（查询参数化、无注入面），**有意不修** —— 要修得换成原生 `$queryRaw`。完整判断见 **9.34**。
+
+### 5.5 前端约定
+
+- **令牌唯一来源是 `apps/web/src/index.css` 的两层结构**（`:root` 原始值 + `@theme inline` 映射），不要在组件里写死颜色。
+- **新增颜色令牌要同时在 `:root` 与 `.dark` 各写一份** —— 只写一处会得到一个只在亮色（或只在暗色）下正确的界面，而这类缺陷在默认配色下完全看不出来。
+- **不改 shadcn 组件源码**；方案 B 与 shadcn 默认风格的差异**在令牌层消化**（`--shadow-xs/sm` 归零、只覆盖 `--radius-md` 到 8px）。
+- **组件一律从 `apps/web/src/components/ui/` 取，不手写等价元素**：同一件东西两种实现时，差异只会在改令牌或换主题时才暴露。
+- **前端分层固定为三层**：`lib/api.ts`（只拼地址、不认会话）→ `lib/session.ts` 的 `withAccessToken` → `lib/<模块>.ts`（会话感知 + 拆信封 + 按错误码分流）。界面三态走 `components/StateView.tsx`。
+- **`pnpm --filter @fanhe/shared build` 必须先跑**：根脚本的 `dev` / `build` / `typecheck` / `test` 都会先构建共享包，直接调用子包脚本会跳过这一步。
+- **受控组件的「数据后到」死角**（实战踩过，见 5.6）：靠父组件 `key` 重挂来初始化草稿或表单状态时，**key 的变化可能与数据到达脱钩**。
+
+### 5.6 两处踩过的真 bug（这类 bug 只有浏览器验证能抓到）
+
+1. **新建纪要后编辑器被初始化成空白**（T3-06）。父组件先 `setSelectedId(created.id)` 再重拉列表，于是 `key` 由 `'new'` 变成新 id、编辑器重挂，而重挂那一刻列表里还没有这一条、`note` 仍是 `null` —— 草稿被初始化成空白且此后再无同步时机。现象是「左侧列表里有条目，右侧编辑器一片空白、标题计数 0/200」，而保存按钮还亮着。**修法**：记一个 `syncedNoteId`，只在 note 的 **id** 变化时补一次同步（判据用 id 而不是整个对象，否则列表重拉换了引用会把用户正在输入的内容冲掉）。见 9.33。
+2. **空库时第一条纪要永远建不出来**（T3-06）。编辑器原先只画在「列表非空」分支里，空库走空态，而空态里的「新建」只是把选中项设回 `null` —— 渲染分支不变，点按钮毫无反应。**修法**：可写角色在加载完成后一律渲染「左列表 + 右编辑器」，只读角色空库时才回落空态。见 9.33。
+
+**这两条与「四道门禁全绿」并存**：单测、类型检查、接口冒烟全都拦不住它们。
+
+### 5.7 工作空间与工程约定
+
+- **根靠向上查找 `.ws-root` 定位，不写死盘符**；**受版本控制的文件禁止硬编码盘符**，需要根时用 `WS_ROOT`；路径含空格时变量一律加引号。
+- **诊断脚本归档在 `projects/fanhe-work/tools/`**（`checks/` 门禁与探针、`prisma/` 数据库、`oneoff/` 一次性），由工作区根的 `.tmp/` 归档而来。
+- **`.ps1` 必须带 UTF-8 BOM**（硬性约束）：Windows PowerShell 5.1 解析无 BOM 文件时按系统 ANSI（GBK）解码，GBK 尾字节会吃掉落在其范围内的 ASCII 字符（含单引号），报「字符串缺少终止符」而**整个脚本一行都不执行**。推论：**任何要被 PS 5.1 执行的 `.ps1`，要么带 BOM，要么全文只用 ASCII。**
+- **提交完整、别用 `git add -A`**：工作区里有并发会话产生的未跟踪目录（本次为 `UI合并方案/` 与 `星尘AIGC-UI解析/`），`add -A` 会把它们一起提交进去。**显式列出路径。**
+- **推送要给足时间并落盘日志**：凭据阶段会停滞约 70 秒（git 先查 `credential.helper=helper-selector` → `credential.helperselector.selected` → 才落到 GCM 绝对路径），**超时给到 ≥150 秒**；**不要把推送输出接管道**（`| tail` 的缓冲会把日志全吞掉，表现为「无输出卡死」），改用 `> .tmp/push.log 2>&1` 落盘再读。
 
 ---
 
-## 七、后续计划
+## 六、依赖环境与配置
 
-1. **浏览器 e2e 已跑完（85 项全通过），这件事的代价要记住。** `test/e2e-auth.mjs` 以「数据库未初始化（`users` 表为空）」为前置条件，所以**每跑一次都要先清库、跑完重建 owner**（`pnpm db:create-owner`，用户名 / 口令从 `OWNER_USERNAME` / `OWNER_PASSWORD` / `OWNER_DISPLAY_NAME` 环境变量读，不走命令行参数）并更新被忽略的 `.tmp/owner-credentials.txt`。重置语句见该文件头部注释（含 `notes`）。
-   - **跑之前先确认端口上的监听者是谁。** 本轮踩到：上一轮遗留的 `pnpm --filter @fanhe/api dev`（`tsx watch src/index.ts`）一直占着 8787，新启动的 API 直接 `EADDRINUSE` 退出，于是浏览器全程访问的是旧进程、带着旧的 900 秒令牌，`静默续期` 一项因此失败而根因完全不在被测代码里。判据最省事的是量 JWT 的 `exp - iat`（应为 60 秒：`ACCESS_TOKEN_TTL_SECONDS=60`）。另注意 `pnpm --filter <pkg> exec` 会把工作目录切到该包，在仓库根 `exec tsx apps/api/src/index.ts` 会因 `.env` 不在当前目录而报「缺少环境变量 DATABASE_URL」。
-   - **调试端口现在可以换。** 脚本默认用 9222，可被别的进程占着；T3-07 这一轮实测 9222 被一个**非 CDP 的监听者**占住（任何路径都返回 `Content-Length: 0` 的 404），而脚本自带的占用检查判的是 `response.ok`，因此**这项检查不会拦住你**，症状是 30 秒后的「CDP 页面目标未就绪」。现已支持 `E2E_CDP_PORT=<端口>` 换端口，本轮跑在 19222 上。
-   - **菜单类控件要点之前先等上一个菜单关干净。** Radix 的下拉菜单在关闭动画期间仍在 DOM 里，此间的点击会被触发器忽略，脚本会直接抛「等待超时：主题菜单展开」而中断整轮。`openThemeMenu` 与 `openRowMenu` 都已按这个模式封好，新增菜单交互时照抄。
-   - T3-06 那一轮 3 项失败里有一项是**真 bug**：新建成功后编辑器草稿被初始化成空白（见 9.33）。**这正说明「四道门禁全绿」不能替代浏览器验证。**
+### 6.1 唯一入口：工作空间机制
 
-2. **下一项 T3-08 草稿自动保存（P1）**：依赖 T3-06（现已具备）。落点是 `NoteEditor` 的草稿态加一层本机存储（照 `lib/preferences.ts` 的读写与静默降级），验收要点是「关闭后重进可恢复未提交内容」。它要顺带解决的问题在 T3-07 里被再次确认：**检索会缩小可见集合，被搜掉的那条退出列表、选中落到第一条匹配上，编辑器重挂、草稿随之丢失**；归档、删除、切视图早已如此，属既有行为而不是检索引入的。
-3. **中文检索的结论已经落地**（T3-07）：走 `ILIKE` 全表扫描、不建索引，`tsvector` 与 `pg_trgm` 两条路都实测过否决，理由与升级路径见 `DEVELOPMENT-PLAN.md` 9.34。**后续不要在不读 9.34 的情况下「顺手补一个中文全文检索」** —— 那会让同一件事被重新论证一遍，而结论大概率还是这三条。
-4. 阶段三收尾：T3-08 完成后开事件记录（T3-09 起）。事件板块需要**新增第六个迁移**建 `events` 与 `event_logs` 两张表（目前不存在），且 `event_logs` 是只追加不修改的流水，设计时要与既有实体表的 `createdAt` / `updatedAt` / `deletedAt` 三件套区分开。
-5. 阶段四 Electron 外壳（含 `agent.ts` 搬入主进程、凭据换 `safeStorage`）。
-
----
-
-## 八、环境依赖与配置（换机必读）
-
-### 8.1 唯一入口：工作空间机制
-- **所有包管理（install / add / build / test / lint / format）一律经 `infra/portable/ws-run.cmd`**。直接裸跑 `pnpm` 会让 store 落到宿主机磁盘且当场无提示。
+- **所有包管理（install / add / build / test / lint / format）一律经 `infra/portable/ws-run.cmd`。** 直接裸跑 `pnpm` 会让 store 落到宿主机磁盘，且当场无提示。
   - 工作空间根调用：`infra/portable/ws-run.cmd pnpm <cmd>`
   - 从 `projects/fanhe-work` 调用：`../../infra/portable/ws-run.cmd pnpm <cmd>`
   - 从 `apps/web` 深处调用：四层 `../../../../infra/portable/ws-run.cmd pnpm <cmd>`
 - **并行调用入口会撞车**（同时写 `state/root.json` 抛 `IOException`），串行执行即可。
-- 根靠向上查找 `.ws-root` 定位，不写死盘符；**受版本控制的文件禁止硬编码盘符**，需要根用 `WS_ROOT`；路径含空格时变量一律加引号。
-- 入口下 `TEMP`/`TMP` 被重定向到 U 盘 `.tmp/`，`os.tmpdir()` 不可信；要让产物落系统盘需从 `LOCALAPPDATA` 推。
+- 入口下 `TEMP` / `TMP` 被重定向到 U 盘的 `.tmp/`，**`os.tmpdir()` 不可信**；要让产物落系统盘需从 `LOCALAPPDATA` 推。
+- **本机没装编译器**（无 MSVC / node-gyp 走不通），装依赖优先选带预编译二进制的包。
+- **`ws-env.sh` 的正确用法**（在会话里临时用）：`cd <repo> && WS_NO_REPAIR=1 WS_QUIET=1 . "<工作区根>/infra/portable/ws-env.sh" && <命令>`，**必须在同一条命令内完成**，因为 shell 状态不跨调用保留。
 
-### 8.2 Node 与包管理
-- Node 22.22.2（受管运行时）。包管理用 **pnpm**（corepack 垫片，`package.json` 已声明 `packageManager`）。
-- `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: []` 刻意禁掉生命周期脚本；装带二进制的包优先 napi-rs 系（如 `argon2` → `@node-rs/argon2`），避免 node-gyp 源码编译。
-- `.npmrc` 固定 registry 为 npmmirror；装依赖按分钟到十分钟量级预留。
+### 6.2 Node 与包管理
 
-### 8.3 数据库（不随盘，换机必重建）
-- 根 `docker-compose.yml` → 容器 `fanhe-work-db`，`postgres:16-alpine`，数据在宿主机命名卷 `fanhe-work-pgdata`（**不随 U 盘移动**），端口绑 `127.0.0.1`，排序规则建库时固定 ICU `zh-CN`。
-- 换机重建步骤（经入口）：
-  ```bash
-  docker compose up -d --wait
-  cp apps/api/.env.example apps/api/.env      # 填 JWT_SECRET
-  ../../infra/portable/ws-run.cmd pnpm db:deploy
-  ../../infra/portable/ws-run.cmd pnpm db:seed
-  ../../infra/portable/ws-run.cmd pnpm db:ping   # 自检：列出表与行数
-  ```
-- **迁移目录名字典序 ≠ 实际创建顺序**：现有五个迁移中 `launch_profiles` 依赖 `init` 的 `users`，`launch_history` 依赖 `users` 与 `launch_profiles`，`add_notes` 只依赖 `init` 的 `users` 和自身外键；当前字典序恰好满足这几组依赖，**不能宣称全部迁移互相独立**。新增迁移若引用更晚创建的对象，要查的是迁移间是否真的独立。当前共**十个业务表**（`users` / `roles` / `permissions` / `role_permissions` / `refresh_tokens` / `login_attempts` / `audit_logs` / `launch_profiles` / `launch_history` / `notes`），另加 `_prisma_migrations`。
-- **owner 账号**：本机已于 2026-10-11 创建首个 owner（登录名 `fanhe`，显示名「梵禾」，状态 active），强随机口令写在被忽略的 `.tmp/owner-credentials.txt`（`.gitignore` 第 3 行 `.tmp/` 覆盖）。换机后该文件不随盘走，需重新执行 `pnpm db:create-owner` 或走首次初始化引导。
+- Node **22.22.2**（受管运行时）。包管理用 **pnpm**（版本在 `package.json` 的 `packageManager` 声明，`corepack enable pnpm`）。
+- `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: []` **刻意禁掉生命周期脚本**。
+- `.npmrc` 固定 registry 为 `registry.npmmirror.com`；**装依赖按分钟到十分钟量级预留**（实测装两个 Markdown 包解出 593 个包、耗时 5 分 25 秒，伴随 `ERR_PNPM_TARBALL_EXTRACT` 重试最终成功 —— 别把 5 分钟当卡死）。
+- **store 有重定向**：`node_modules` 链到 `F:/fanhe Work/.cache/pnpm-store/v10`，而裸跑 pnpm 想用 `F:\.pnpm-store\v10`，于是报 `ERR_PNPM_UNEXPECTED_STORE`。重定向来自 `infra/portable/ws-env.sh` 导出的 `npm_config_store_dir` 与 `config/.npmrc` 的 `store-dir=${WS_ROOT}/.cache/pnpm-store`。
 
-### 8.4 Prisma 7 三处硬性差异（钉 7.10.0，两包同版本，不要 `@latest`）
-1. 强制驱动适配器：`@prisma/adapter-pg` + `pg`。
-2. 连接串与迁移配置移到 `prisma.config.ts`；生成器改名 `prisma-client`，`output` 必填。
-3. `.env` 不再自动加载，需 `import 'dotenv/config'` 且置于首行。
+### 6.3 数据库（不随盘，换机必重建）
 
-### 8.5 GitHub 与代理（推送必看）
-- **GitHub 直连不通，必须走本地代理 `http://127.0.0.1:7897`**（不是 17897，也不是会话里的 59642）。
-- **代理不对的症状是「卡住」而不是「报错」**：`git push` 会无限等待、无任何输出，易被误读成凭据过期。判定：`git credential fill` 带 / 不带 `HTTPS_PROXY=http://127.0.0.1:7897` 各跑一次，带了立刻返回、不带就超时，即确认是代理。
-- 推送时三个变量一起给，并加 `GIT_TERMINAL_PROMPT=0`：
-  ```bash
-  GIT_TERMINAL_PROMPT=0 HTTPS_PROXY=http://127.0.0.1:7897 \
-  HTTP_PROXY=http://127.0.0.1:7897 ALL_PROXY=http://127.0.0.1:7897 \
-  git -c http.proxy=http://127.0.0.1:7897 push origin main
-  ```
+- 容器 **`fanhe-work-db`**，镜像 `postgres:16-alpine`，库 `fanhe_work`，用户 `fanhe`，端口绑 `127.0.0.1:5432`。
+- 数据在宿主机**命名卷 `fanhe-work-pgdata`**，不随介质移动。
+- 排序规则在建库时定死 **ICU `zh-CN`**，事后更改需重建数据库。
+- 健康检查让 `docker compose up -d --wait` 真正等到可连接（迁移脚本依赖这一点）。
+- **当前 5 个迁移、10 张业务表**（另加 `_prisma_migrations`）：
 
-### 8.6 编码与其他陷阱
+  | 迁移目录 | 建的对象 |
+  | -- | -- |
+  | `20261010082118_login_rate_limit` | `login_attempts` |
+  | `20261010150103_init` | `users` / `roles` / `permissions` / `role_permissions` / `refresh_tokens` / `audit_logs` |
+  | `20261010165220_launch_profiles` | `launch_profiles` |
+  | `20261010180508_launch_history` | `launch_history` |
+  | `20261011064829_add_notes` | `notes` |
+
+- **种子数据**：11 个权限点、4 个角色、29 条授权关联；重跑无副作用。
+- **owner 账号**：登录名 `fanhe`，显示名「梵禾」，状态 active。口令为 24 位强随机，写在被忽略的 `.tmp/owner-credentials.txt`（**该文件不随盘走**）。
+- **owner 存在之后，`apps/api/test/setup.test.ts` 的 5 项首次初始化用例会自动跳过**（前置条件是「库里无 owner」）。看到 api 测试 `skipped=5` 是**设计行为，不是失效**。
+- 常用脚本：`pnpm db:deploy`、`pnpm db:ping`、`pnpm db:seed`、`pnpm db:create-owner`、`pnpm db:generate`、`pnpm db:studio`。
+
+### 6.4 Prisma 7 的三处硬性差异（两个包同版本 7.10.0，不要 `@latest`）
+
+1. **强制驱动适配器**：`@prisma/adapter-pg` + `pg`。
+2. **连接串与迁移配置移到 `prisma.config.ts`**；生成器改名 `prisma-client`，`output` 必填。
+3. **`.env` 不再自动加载**，需 `import 'dotenv/config'` 且置于首行。
+
+### 6.5 环境变量
+
+`apps/api/.env`（由 `.env.example` 复制，**不进版本控制、不随盘走**）：
+
+| 变量 | 说明 |
+| -- | -- |
+| `DATABASE_URL` | **`schema=public` 不能省**（Prisma 默认把表建在 public 下，缺了它部分命令会走错搜索路径） |
+| `SHADOW_DATABASE_URL` | 迁移用影子库。留空时 Prisma 会在目标实例上临时建/删一个库，要求账号有 `CREATEDB` |
+| `JWT_SECRET` | **必填，至少 32 字节，没有默认值**。生成：`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`。每套部署用自己的，不要跨机复用 |
+| `ACCESS_TOKEN_TTL_SECONDS` | 默认 900（15 分钟）。**验证「静默续期」时要压到 60** |
+| `REFRESH_TOKEN_TTL_DAYS` | 默认 30 |
+| `ARGON2_MEMORY_KIB` / `ARGON2_TIME_COST` / `ARGON2_PARALLELISM` | 默认即 OWASP 对 Argon2id 的最低推荐档 |
+| `OWNER_USERNAME` / `OWNER_PASSWORD` / `OWNER_DISPLAY_NAME` | **只被 `pnpm db:create-owner` 读取**，走环境变量不走命令行参数（避免口令留在进程列表里） |
+
+### 6.6 GitHub 与代理（推送必看）
+
+- **GitHub 直连不通，必须走本地代理 `http://127.0.0.1:7897`**（不是 17897，不是会话里的临时端口）。
+- **代理不对的症状是「卡住」而不是「报错」**：`git push` 无限等待、无任何输出，极易被误读成凭据过期。判定方法：`git credential fill` 带 / 不带 `HTTPS_PROXY=http://127.0.0.1:7897` 各跑一次，带了的立刻返回、不带就超时，即确认是代理问题。
+- 推送时三个变量一起给并加 `GIT_TERMINAL_PROMPT=0`（见第零节的命令），**把输出重定向到文件**再读。
+- 判连通性用 `git ls-remote origin HEAD`（秒回即网络与凭据都正常），比反复重推更快定位问题。
+- **凭据是逐机逐用户的**（细粒度 PAT 经 GCM 存于 `~/.gitconfig`），**换机必须重配**；WorkBuddy 的 GitHub 连接器只读，写不了。
+
+### 6.7 编码与其他陷阱
+
 - **编码**：bash 写 UTF-8 无 BOM；PowerShell 5.1 的 `Get-Content` 无 BOM 时按系统 ANSI 解码。跨环境传中文清单，读取侧必须显式 `-Encoding UTF8`。
-- 原生命令 stderr 被包成 `ErrorRecord`；点源 `ws-env.ps1`（设 `$ErrorActionPreference='Stop'`）后更危险，调用会写 stderr 的工具（如 Prisma）前改回 `Continue`。
-- Docker 客户端配置**不重定向**：`DOCKER_CONFIG` 指向空目录会让 `docker compose` 变未知命令。
-- 跑 `prisma generate` / 门禁会打断正在跑的 `tsx watch`（删文件导致整进程退出）；先停 dev，或跑完门禁后重启 dev。
-- `EADDRINUSE` 通常意味着「已有另一个自己在跑」；清残留要对着命令行按整条链杀，或直接杀 `tsx watch`。
+- 原生命令的 stderr 被 PowerShell 包成 `ErrorRecord`；点源 `ws-env.ps1`（设 `$ErrorActionPreference='Stop'`）后更危险 —— 调用会写 stderr 的工具（如 Prisma）前要先改回 `Continue`。
+- **Docker 客户端配置不重定向**：`DOCKER_CONFIG` 指向空目录会让 `docker compose` 变成未知命令。
+- **跑 `prisma generate` 或门禁会打断正在跑的 `tsx watch`**（删文件导致整个进程退出）。先停 dev，或跑完门禁后重启 dev。
+- **`EADDRINUSE` 通常意味着「已有另一个自己在跑」**。清残留要对着命令行按整条链杀，或直接杀 `tsx watch`。
+- **本地端口请求一律加 `--noproxy '*'`**：不带它时 `curl http://127.0.0.1:8787` 会被送到系统代理，返回 `HTTP 000`，看起来像服务没起来。取当前代理端口：`env | grep -i proxy`。
+- **`pnpm --filter <pkg> exec` 会把工作目录切到该包**：在仓库根 `exec tsx apps/api/src/index.ts` 会因为 `.env` 不在当前目录而报「缺少环境变量 DATABASE_URL」。要跑 api 就在 `apps/api` 下用 `./node_modules/.bin/tsx src/index.ts`。
+- **PowerShell 里不要拿 `$pid` 当循环变量**：它是只读自动变量，赋值会静默失败，于是 `Stop-Process -Id $pid` 杀掉的是**运行脚本的 PowerShell 自己**（表现为输出截半、目标进程没死）。换名如 `$procId`。
+
+---
+
+## 七、换机续接步骤（照做即可 100% 恢复）
+
+> 每一步后面都给了**验证判据**。判据不通过就别往下走 —— 后面几步的失败现象会互相掩盖。
+
+| # | 步骤 | 命令 / 动作 | 验证判据 |
+| -- | -- | -- | -- |
+| 1 | **介质就位** | 整盘带 U 盘到新机，或 `git clone` **整个工作空间根**（仓库根即工作空间根，**不是** `projects/fanhe-work`） | 根目录下有 `.ws-root`、`infra/`、`projects/` |
+| 2 | **pnpm 就位** | `corepack enable pnpm` | `pnpm -v` 等于 `package.json` 里 `packageManager` 声明的版本 |
+| 3 | **Git 信任与身份** | `git config --global --add safe.directory "<工作空间根>"`；确认提交身份为 `梵禾 <dev@fanhe.local>` | `git config user.name` / `user.email`；`git log -1` 能正常显示（不报 dubious ownership） |
+| 4 | **凭据重配** | 重配 GitHub 细粒度 PAT 到 GCM（`~/.gitconfig` 是逐机的） | `GIT_TERMINAL_PROMPT=0 HTTPS_PROXY=http://127.0.0.1:7897 git ls-remote origin HEAD` 秒回 |
+| 5 | **依赖重建** | 经入口 `ws-run.cmd pnpm install` | 无 `ERR_PNPM_UNEXPECTED_STORE`；`node_modules` 链到 `<根>/.cache/pnpm-store` |
+| 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **10 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
+| 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
+| 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **238 项、0 失败**（shared 63 + api 165 含 5 跳过 + web 10）；其余三条全绿 |
+| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **85 项全通过** |
+
+**换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
+
+- `.tmp/owner-credentials.txt`（owner 口令）
+- `apps/api/.env`（含 `JWT_SECRET`）
+- 数据库容器与命名卷
+- 四处 `node_modules/` 与 pnpm store（store 随盘符失效）
+- GCM 里的 GitHub 凭据、git 的 `safe.directory` 与提交身份
+
+---
+
+## 八、后续开发的注意事项
+
+### 8.1 改代码前必读
+
+1. **改前端**先看 5.5：令牌只从 `index.css` 取、新增令牌要在 `:root` 与 `.dark` 各写一份、组件只从 `components/ui/` 取、不改 shadcn 源码。
+2. **改数据模型**先看 5.3：新增迁移要检查迁移间是否真的独立，序列与字典序不保证一致。
+3. **碰检索**先看 5.4 —— 那两条路已经实测否决过，重做只会得到同样三个结论。
+4. **新增界面板块**不要手写 `StateView` 的等价物；四态（加载 / 失败 / 空 / 列表）照 `LaunchPanel` / `NotesPanel` 的分派形态写。
+
+### 8.2 跑测试与浏览器验证
+
+- **四道门禁依次为** `pnpm test`、`pnpm lint`、`pnpm typecheck`、`pnpm format:check`。`test` 与 `typecheck` 会先构建共享包，`test` 还依赖数据库容器在跑。
+- **断言失败时先分清是哪一类，别默认去改产品代码。** T3-06 首轮 3 项失败的性质是：1 项真 bug（产品代码）、1 项**断言作用域过宽**（`nav a` 应为 `aside nav a` —— 尺子变长了，界面本身正确）、1 项**环境残留**（旧 `tsx watch` 占着 8787）。三类在脚本输出里长得一模一样。
+- **浏览器 e2e 的代价必须记住**（`apps/web/test/e2e-auth.mjs`）：
+  - 它以**数据库未初始化（`users` 表为空）**为前置条件 → **每跑一次都要先清库，跑完重建 owner** 并更新 `.tmp/owner-credentials.txt`。重置语句见该文件头部注释（**`notes` 要排在 `users` 之前**，外键）。
+  - 想在不破坏数据的前提下验证接口，用 `.tmp/note-smoke.mjs` 那类脚本（以现有 owner 登录，只碰自己创建的数据，跑完清理）。
+  - 用法：`node test/e2e-auth.mjs <应用地址> <截图目录>`，截图目录给 `.tmp/` 下的路径，**别落进仓库**。
+- **三个启动前置**：① API 用 `ACCESS_TOKEN_TTL_SECONDS=60` 起（否则等不到续期，「静默续期」那项必失败）；② 前端 dev server 在 5173；③ 调试端口上**没有别的监听者**。
+- **调试端口现在可以换**：脚本默认 9222，实测可能被一个**非 CDP 的监听者**占住（任何路径都返回 `Content-Length: 0` 的 404），而脚本自带的占用检查判的是 `response.ok`，**因此拦不住你**，症状是 30 秒后的「CDP 页面目标未就绪」。**用 `E2E_CDP_PORT=<端口>` 换一个端口跑。**
+- **菜单类控件（Radix 下拉）点之前先等上一个菜单从 DOM 里消失**：关闭动画期间它仍在 DOM 里，此间的点击会被触发器忽略，脚本**直接抛错中断整轮**（不是记一条 FAIL 继续）。`openThemeMenu` 与 `openRowMenu` 都已按这个模式封好，**新增菜单交互照抄**。
+- **起服务前先确认端口上的监听者是谁** ——「上一轮遗留的进程」是这里最常见的坑。判据最省事：量 JWT 的 `exp - iat`（应为启动时给的 TTL）。
+
+### 8.3 提交与推送
+
+- 提交粒度照现有风格：`feat/docs/fix(阶段X): 中文说明`，一段说清「做了什么 + 为什么」。**同一功能的代码与文档回填分两笔提交**（便于查证）。
+- **不要 `git add -A`**（工作区里有并发会话产生的未跟踪目录），**显式列路径**。
+- 推送后**把 `dev` 快进到 `main` 并一起推**（当前约定是 dev 跟随 main）。
+- 推送走 6.6 的命令，超时 ≥150 秒，日志落盘。
+
+### 8.4 别做这些事（反模式）
+
+- ❌ **裸跑 `pnpm`**（不经入口）—— 会静默把 store 落到宿主机磁盘，事后很难发现。
+- ❌ **在受版本控制的文件里写死盘符**（工作空间会在 `E:` / `F:` 之间变）。
+- ❌ **删 `.workbuddy/` 或 `.workbuddy-ai/`** —— 那是项目数据与本地记忆。
+- ❌ **`git add -A`** —— 见上。
+- ❌ **把 `.tmp/owner-credentials.txt` 提交进仓库** —— 它是被忽略的凭据文件。
+- ❌ **在没有读 5.4 的情况下「顺手补一个中文全文检索」**。
+- ❌ **给 `notes` 表加 `LIKE` 元字符转义**（除非你打算把它换成原生 `$queryRaw`）。
+- ❌ **改动 shadcn 组件源码来适配本项目风格** —— 差异在令牌层消化。
+- ❌ **忘了 `pnpm --filter @fanhe/shared build`** —— 共享包是构建型包，改了不构建，下游看到的是旧 `dist`。
 
 ---
 
@@ -244,50 +502,65 @@ projects/fanhe-work/
 
 | 用途 | 路径（相对工作空间根） |
 | -- | -- |
-| 工作空间唯一入口 | `infra/portable/ws-run.cmd` |
+| 工作空间唯一入口 | `infra/portable/ws-run.cmd`（另有 `.ps1` / `.sh`） |
 | 工作空间机制说明 | `infra/docs/PORTABLE-WORKSPACE.md` |
-| 项目根 | `projects/fanhe-work/` |
-| 后端代码 | `projects/fanhe-work/apps/api/src/` |
-| 启动相关 | `apps/api/src/launch/{agent,profiles,status,history}.ts`、`apps/api/src/routes/launch.ts` |
-| 纪要相关 | `apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`packages/shared/src/note.ts` |
-| 共享包 | `packages/shared/src/`（类型）、`packages/shared/test/` |
-| 前端启动 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,relative-time}.ts` |
-| Prisma 配置 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
-| 迁移目录 | `apps/api/prisma/migrations/`（5 个） |
+| 根定位标记 | `.ws-root` |
+| 项目根 / pnpm 工作区根 | `projects/fanhe-work/` |
+| 后端入口与代码 | `apps/api/src/index.ts`、`apps/api/src/` |
+| 认证相关 | `apps/api/src/auth/{password,tokens,login,session,guard,setup}.ts` |
+| 审计 | `apps/api/src/audit/audit.ts`、`packages/shared/src/audit.ts` |
+| 启动通道（含代理核心） | `apps/api/src/launch/{agent,profiles,status,history}.ts`、`apps/api/src/routes/launch.ts` |
+| 工作纪要（含检索） | `apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`packages/shared/src/note.ts` |
+| 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
+| 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
+| 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
+| 前端工作纪要 UI | `apps/web/src/components/notes/`（`NotesPanel` / `NoteList` / `NoteEditor` / `MarkdownPreview` / `TagInput`）、`apps/web/src/lib/notes.ts` |
+| 前端偏好与主题 | `apps/web/src/lib/{preferences,theme,credential}.ts`、`apps/web/src/index.css` |
+| Prisma 配置与模型 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
+| 迁移目录 | `apps/api/prisma/migrations/`（**5 个**） |
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
-| 环境样例 | `apps/api/.env.example` |
-| 测试 | `apps/api/test/{note,launch-history}.test.ts`、`packages/shared/test/{note,launch}.test.mjs`、`apps/web/test/relative-time.test.mjs`、`apps/web/test/e2e-auth.mjs` |
-| 诊断脚本 | `projects/fanhe-work/tools/`（`README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
-| 规划与交接 | `docs/DEVELOPMENT-PLAN.md`、`docs/HANDOFF-2026-10-10.md`、`docs/HANDOFF-2026-10-11.md`、`docs/IMPLEMENTATION-PLAN.md` |
+| 环境变量样例 | `apps/api/.env.example` |
+| 种子 | `apps/api/src/db/seed.ts` |
+| 测试 | `apps/api/test/{note,launch-history,setup,…}.test.ts`、`packages/shared/test/{note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/relative-time.test.mjs`、`apps/web/test/e2e-auth.mjs` |
+| 诊断脚本归档 | `projects/fanhe-work/tools/`（其 `README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
+| 规划与交接 | `projects/fanhe-work/docs/`（本文所在处） |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
-| 测试 / 界面令牌 | `.workbuddy-ai/memory/TESTING.md`、`.workbuddy-ai/memory/UI-TOKENS.md` |
+| 测试 / 界面令牌约定 | `.workbuddy-ai/memory/TESTING.md`、`.workbuddy-ai/memory/UI-TOKENS.md` |
+| 临时产物与凭据 | `.tmp/`（被忽略，不进版本控制） |
 
 ---
 
-## 十、换机续接当日 Checklist
+## 十、文档索引
 
-1. **介质就位**：整盘携带 U 盘到新机，或 `git clone` 整个工作空间根（仓库根即工作空间根，不是 `projects/fanhe-work`）。
-2. **pnpm 就位**：`corepack enable pnpm`（用 `package.json` 声明的版本）。
-3. **Git 信任**：`git config --global --add safe.directory "<工作空间根>"`（卷根 ACL 放宽会导致 `detected dubious ownership`）；确认提交身份为 `梵禾 <dev@fanhe.local>`。
-4. **数据库重建**（不随盘）：按 8.3 跑 `docker compose up -d --wait` → 复制 `.env.example` 填 `JWT_SECRET` → `db:deploy` → `db:seed` → `db:ping`。
-5. **依赖重建**：经入口 `ws-run.cmd pnpm install`（store 随盘符失效会要求重建，非交互需 `CI=true`）。
-6. **构建**：经入口 `pnpm --filter @fanhe/shared build` → `pnpm db:generate`。
-7. **首次初始化**：启动后走引导建超级管理员，或 `pnpm db:create-owner` 恢复 owner。
-8. **门禁确认**：`ws-run.cmd pnpm test` / `lint` / `typecheck` / `build` / `format:check`；`test` 预期 **238 项**（shared 63 + api 165 + web 10），其中 api 有 **5 项因库里已存在 owner 而设计性跳过**（`setup.test.ts` 的首次初始化用例，属正常，不是失效）；浏览器级 `pnpm --filter @fanhe/web test:e2e` **必须先清库**（脚本要求 `users` 表为空），且跑完要重建 owner —— 做法、前置端口检查与代价见第七节第 1 条。**T3-06 与 T3-07 都已跑过：85 项全通过**，不要把它与上面 238 项混为一谈（那是两套不同的覆盖）。
-9. **接着做 T3-08 草稿自动保存**：验收要点是「关闭后重进可恢复未提交内容」，落点与既有坑见第七节第 2 条。
+**本文档（`docs/WORK-STATUS.md`）是交接主文档**，自包含。其余文档按其职责查阅：
+
+| 文档 | 职责 |
+| -- | -- |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.34）**。9.34 专门记录中文检索的选型。 |
+| `docs/IMPLEMENTATION-PLAN.md` | 实施层面的方案对照 |
+| `docs/HANDOFF-2026-10-10.md` | 阶段一收口时的交接（当日成果、决策、未解决问题、逐文件清单、换机步骤 7.x） |
+| `docs/HANDOFF-2026-10-11.md` | T3-04 当日补记 |
+| `docs/PROGRESS-REVIEW-2026-10-11.md` | 任务进度盘点（完成 / 进行中 / 未开始、九条风险 R1~R9、下一步优先级）。**数字已过期，以本文为准** |
+| `docs/SYNC-COMPARE-2026-10-11.md` | 工作空间与远端仓库逐项对比（含 `node_modules.old` 的完整分析，第十一节） |
+| `docs/SYNC-AUDIT-*.md` | 仓库同步审计 |
+| `docs/PROJECT-SURVEY-*.md` | 项目结构与依赖现状扫描 |
+| `docs/WORKSPACE-BINDING.md` | 工作空间与远端仓库绑定登记、两条访问链路 |
+| `infra/docs/PORTABLE-WORKSPACE.md` | 工作空间机制、入口、重定向、换机修复 |
+| `projects/fanhe-work/README.md` | 项目说明、起步步骤、强制约定、迁移表、数据库与 Prisma 7 说明 |
+| `.workbuddy-ai/memory/*.md` | 逐机环境事实与踩坑（ENVIRONMENT）、测试约定（TESTING）、界面令牌规格（UI-TOKENS） |
 
 ---
 
-## 十一、权威文档索引
+## 十一、本次（2026-10-11）工作留痕
 
-- `docs/DEVELOPMENT-PLAN.md` — 总体方案、任务表、阶段验收、**第九章逐任务实施判断（9.28~9.34 为阶段三）**。其中 **9.34 专门记录中文检索为什么用 `ILIKE` 而不上 `tsvector` / trgm 索引**，连同实测数据、已知边界与升级路径。
-- `docs/HANDOFF-2026-10-10.md` — 整体进度、设计决策、迁移核验、换机步骤 7.x。
-- `docs/HANDOFF-2026-10-11.md` — T3-04 当日补记（已验证、已提交状态）。
-- `docs/PROGRESS-REVIEW-2026-10-11.md` — 任务进度盘点（完成 / 进行中 / 未开始、九条风险 R1~R9、下一步优先级）。
-- `docs/SYNC-COMPARE-2026-10-11.md` — 工作空间与远端仓库逐项对比（文件结构 / 内容 / 版本状态 / 变更记录四维度）。
-- `docs/WORKSPACE-BINDING.md` — 工作空间与远端仓库绑定登记、两条访问链路（本地 git 可读写 / 连接器只读）。
-- `docs/IMPLEMENTATION-PLAN.md` — 实施层面的方案对照。
-- `infra/docs/PORTABLE-WORKSPACE.md` — 工作空间机制、入口、重定向、换机修复。
-- `.workbuddy-ai/memory/ENVIRONMENT.md` — 逐机环境事实与踩坑（代理、编码、TEMP、Docker）。
-- `.workbuddy-ai/memory/TESTING.md` / `UI-TOKENS.md` — 测试约定、界面令牌规格。
-- `README.md` — 项目说明、迁移表、数据库与 Prisma 7 说明。
+| 时间 | 事项 | 结果 |
+| -- | -- | -- |
+| 上午 | T3-05 纪要模型与接口收口 | 5 迁移 / 10 表；八条接口；三包 219 项 |
+| 下午 | T3-06 Markdown 编辑与预览 | 界面接通，路由补二级路径；三包 227 项；**e2e 首跑 78/78** |
+| 下午 | T3-06 收尾归因 | 首轮 3 项失败 → 1 项真 bug（草稿同步死角，已修）+ 1 项断言过宽 + 1 项旧 `tsx watch` 残留 |
+| 17:0x | T3-07 定方案前实测 | 一次性库验证 `tsvector` 与 `pg_trgm` 两条路均不可用，结论落 9.34 |
+| 17:2x | T3-07 实施 | shared 63 + api 165 + web 10 = 238 项；e2e 新增 7 项 |
+| 17:4x | T3-07 浏览器验证 | 首跑崩于主题菜单时序（与本次改动无关，已修 `openThemeMenu`）；换 `E2E_CDP_PORT=19222` 后 **85/85 全通过** |
+| 17:5x | 提交推送 | `95bdcf2`（代码）+ `3c402fa`（文档），`main` 与 `dev` 同步；库回基线，端口释放 |
+
+**本次新增/修改的关键文件**：`packages/shared/src/note.ts`、`apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/NotesPanel.tsx`、`apps/web/test/e2e-auth.mjs`（新增 `openThemeMenu` 与 `E2E_CDP_PORT`）、三个测试文件、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
