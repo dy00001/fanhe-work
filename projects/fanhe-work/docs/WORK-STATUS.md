@@ -5,13 +5,13 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**） |
-> | 对应提交 | 代码基线 `a5370b0`（T3-12 收口，**阶段三结束**）；本文档定稿于 `db7bc77`，之后只做回填。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
-> | 当前阶段 | **阶段三已完成（12/12，T3-01 ~ T3-12 全绿，验收六项全勾）**，下一项是阶段四的 T4-01 Electron 外壳脚手架 |
-> | 最后验证 | 四道门禁全绿（**328 项**）；浏览器 e2e **146 项**全通过（T3-12 本轮实跑，**连跑两次**） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填） |
+> | 对应提交 | 代码基线 `2576388`（**最终 UI 集成**：导航 18 项 + 首页三段式 + 版本号；阶段三代码基线为 `a5370b0`）；本文档定稿于 N-01 提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
+> | 当前阶段 | **阶段三已完成（12/12，验收六项全勾）；UI 集成两批已完成并推送。** 下一项是阶段四的 T4-01 Electron 外壳脚手架 |
+> | 最后验证 | 四道门禁全绿（**350 项**）；浏览器 e2e **149 项**全通过（UI 集成后实跑，0 失败） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
-> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.39），本文已把结论汇总，需要细节时再翻过去。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.40），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
@@ -19,7 +19,9 @@
 
 **这个项目是什么**：一个桌面端个人工作台（实验版），用来管自己的软件启动通道、工作纪要、事件记录，后面会包成 Electron 外壳、并支持局域网/远程两种服务地址。
 
-**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」「工作纪要」「事件记录」三个板块**全部完成并可用**。工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。事件记录（`events` 与 `event_logs` 两张表、八条接口、状态变更一律追加流水）能未完成 / 已完成分组、已完成默认折叠、行内四要素（勾选框 / 标签 / 截止时间 / 优先级）、检索与增删改；**勾一下即完成、再点提示条上的「撤销」即恢复**（乐观更新、失败回滚都在）；**点标题打开详情面板** —— 完整描述（Markdown 渲染）、创建 / 截止 / 完成时间、完成用时、完成人，以及来自 `event_logs` 的**完整变更历史时间线**。**阶段三到此收口。** 再往后是桌面外壳。
+**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」「工作纪要」「事件记录」三个板块**全部完成并可用**。工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。事件记录（`events` 与 `event_logs` 两张表、八条接口、状态变更一律追加流水）能未完成 / 已完成分组、已完成默认折叠、行内四要素（勾选框 / 标签 / 截止时间 / 优先级）、检索与增删改；**勾一下即完成、再点提示条上的「撤销」即恢复**（乐观更新、失败回滚都在）；**点标题打开详情面板** —— 完整描述（Markdown 渲染）、创建 / 截止 / 完成时间、完成用时、完成人，以及来自 `event_logs` 的**完整变更历史时间线**。**阶段三到此收口。**
+
+**界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。再往后是桌面外壳（阶段四）。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -112,7 +114,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | -- | -- | -- |
 | 阶段零 | 目录骨架（T0-01 ~ T0-07） | ✅ 完成 |
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
-| 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾） |
+| 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾）；**UI 集成两批已完成**（导航 18 项 + 首页三段式 + 版本号），见 `UI-INTEGRATION-2026-10-11.md` |
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ⬜ 未开始 |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
@@ -135,6 +137,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `9502591` | docs: 梳理下一步任务（N-01 与阶段四主线） |
+| `b5c0e7f` | docs(阶段四): 补充 T4-01 开工准备清单 |
+| `fe92cb4` | docs(UI集成): 回填最终态集成记录（`UI-INTEGRATION-2026-10-11.md`） |
+| `2576388` | feat(UI集成): 落地最终 UI —— 导航 18 项、首页三段式、版本号（**界面层整合代码基线**） |
+| `278059d` | docs(阶段三): 回填 T3-12 实施判断与验证结果，阶段三收口 |
 | `a5370b0` | feat(阶段三): T3-12 已完成详情面板（详情 + 耗时 + 操作人 + `event_logs` 变更历史时间线） |
 | `29752ea` | docs(阶段三): 回填 T3-11 实施判断与验证结果 |
 | `a3c08bf` | feat(阶段三): T3-11 勾选切换与撤销（乐观更新 + 失败回滚 + 撤销入口） |
@@ -156,10 +163,10 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **328 项，0 失败** | `packages/shared` **69** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **62**（T3-10 起由 23 → 40，T3-11 → 45，T3-12 再 → 62，新增 17 项详情展示规则用例） |
+| `pnpm test` | **350 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70**。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
-| 浏览器 e2e | **146 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 T3-12 时的结果**（原 135，本轮新增 11 项），**连跑两次均全绿**。T3-12 首轮曾在 T3-11 的乐观更新断言上概率性超时，根因是 CDP 合成指针事件偶发整组丢失（修法见 8.2 与 9.39）；T3-10 那次的首轮 115/116 与归因过程见 9.37 |
+| 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39；UI 集成期间又抓到并修掉三类渲染层时序问题（主题子菜单改 hover 展开、坐标点击在入场动画中漂移、`openHomeSection` 调用形态写错），修法见 8.2 的新增两条 |
 | 数据库 | 6 个迁移、**12 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行（跑完 e2e 已清库并重建 owner） |
 
 ---
@@ -186,7 +193,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 首次初始化引导 | 并发初始化用咨询锁串行化，owner 被误删有 `pnpm db:create-owner` 恢复通道 | `packages/shared/src/account.ts`、`src/auth/setup.ts` |
 | 审计日志 | 动作码词表 + `recordAudit`，已接入登录 / 登出 / 刷新重放 / 首次初始化四条路径 | `packages/shared/src/audit.ts`、`src/audit/audit.ts` |
 | 登录页与会话管理 | 访问令牌只放内存、刷新令牌持久化，续期单飞收敛并发，401 续期一次后重试 | `apps/web/src/lib/{api,session}.ts`、`auth/`、`pages/` |
-| 前端路由守卫 | 一级导航清单 + 模块级可见性判定，14 项测试钉住四种角色的可见范围 | `packages/shared/src/navigation.ts`、`components/NavRail.tsx` |
+| 前端路由守卫 | 导航清单（**UI 集成后 18 项 / 4 分组**）+ 模块级可见性判定，32 项测试钉住四种角色的可见范围与分层路径 | `packages/shared/src/navigation.ts`、`components/Sidebar.tsx` |
 | 记住账号密码 | AES-GCM 加密，密钥存 IndexedDB 且不可导出；只在登录成功后写、取消勾选即清 | `apps/web/src/lib/credential.ts` |
 
 ### 3.3 阶段二 · 主框架与 UI 骨架（T2-01 ~ T2-07）
@@ -257,7 +264,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **外壳第一件事是把 `launch/agent.ts` 原样搬进主进程**：那个文件从 T3-02 起就**刻意不认识数据库、认证与 HTTP**、只接受回环来源，就是为了这一刻。搬的时候不要给它加依赖。
 - **阶段四的既定范围**（T4-01 ~ T4-04）：外壳脚手架、本机 / 远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程、启动自检；另把 `credential.ts` 的存储后端换成主进程 `safeStorage`。**这一轮别顺手做阶段五的容器化。**
 - **`apps/desktop` 目录已在阶段零建好**，但里面只有空壳；真正开工前先读 `DEVELOPMENT-PLAN.md` 第四章的任务定义，确认当前 Electron 版本与打包目标（历史版本选择有坑，见 9.4）。
-- **改界面就会让 e2e 失效**：外壳接入会动到 dev server 与路由，届时基线不再是 146 项，见 2.4 的口径。
+- **改界面就会让 e2e 失效**：外壳接入会动到 dev server 与路由，届时基线不再是 149 项，见 2.4 的口径。
 
 ### 4.2 阶段三已无待办
 
@@ -274,8 +281,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - `users.passwordChangedAt` 接入访问令牌载荷（目前改密**不会**让已签发的访问令牌失效）。
 - 改名复用 `normalizeUsername`，并在改名前用归一后的值查一次冲突（否则「只差大小写」的改名会绕过唯一约束）。目前唯一用得上冲突检测的入口是首次初始化。
 - 账号与角色管理的审计挂钩（「授权变更」与「删除」两个事件族还**没有接口可挂**）。
-- 客户信息平台 / 运营信息平台的权限点定义；当前 11 个权限点只有 `system` 与 `personal` 两段。
-- 三个占位导航项的 `module` 由 `null` 改为各自模块段，并同步改 `navigation.test.mjs` 的断言（否则它们会一直对所有人可见）。
+- 客户信息平台 / **运维信息平台**（UI 集成时由「运营信息平台」改名）的权限点定义；当前 11 个权限点只有 `system` 与 `personal` 两段。
+- **16 个占位导航项的 `module` 目前为 `null`**（对已认证用户一律可见）：除「首页」与「系统设置」外，其余 16 项（含 11 个预留槽位）都还没绑模块段。模块落地时改成对应模块段并同步改 `navigation.test.mjs` 的断言（否则它们会一直对所有人可见）。UI 集成里新加的 14 个子项与顶层「资产 / 搜索」同属这一类。
 - `projects/fanhe-work/`、`apps/api/`、`apps/web/`、`packages/shared/` 四处 `node_modules.old`：**已分析确认应当删除，但用户 2026-10-11 决定暂不删**。约 489 MB、23802 个文件，顶层软链接 100% 悬空于已不存在的 `E:` 盘，且与现役树重复、会污染 lint/format（现靠三处忽略规则压住）。依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。**将来删的时候不要连带删 `node_modules/`。**
 
 ### 4.5 已知边界与有意留白（不是缺陷）
@@ -505,8 +512,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **12 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **328 项、0 失败**（shared 69 + api 197 含 5 跳过 + web 62）；其余三条全绿 |
-| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **146 项全通过**（T3-12 时的结果；改界面就要重跑） |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **350 项、0 失败**（shared 83 + api 197 含 5 跳过 + web 70）；其余三条全绿 |
+| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **149 项全通过**（UI 集成后的结果；改界面就要重跑） |
 
 **换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
 
@@ -548,7 +555,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **调试端口现在可以换**：脚本默认 9222，实测可能被一个**非 CDP 的监听者**占住（任何路径都返回 `Content-Length: 0` 的 404），而脚本自带的占用检查判的是 `response.ok`，**因此拦不住你**，症状是 30 秒后的「CDP 页面目标未就绪」。**用 `E2E_CDP_PORT=<端口>` 换一个端口跑。**
   - **菜单类控件（Radix 下拉）点之前先等上一个菜单从 DOM 里消失**：关闭动画期间它仍在 DOM 里，此间的点击会被触发器忽略，脚本**直接抛错中断整轮**（不是记一条 FAIL 继续）。`openThemeMenu` 与 `openRowMenu` 都已按这个模式封好，**新增菜单交互照抄**。
   - **CDP 合成的指针事件（`mouseMoved` / `mousePressed` / `mouseReleased`）会概率性整组丢失** —— T3-12 首轮两次在 T3-11 的乐观更新断言上超时，根因就是这个（`dispatchMouseEvent` 三条都发出去了、界面却没收到）。**症状是「上一轮稳定的断言这轮超时」，重跑又好了。** 判据：CDP 返回值一切正常但 DOM 无反应，且同一段脚本换个时候就通。
-  - **因此按控件类型分两档**：**Radix 下拉菜单仍走真实指针事件**（`openRowMenu` / `openThemeMenu`，菜单依赖 hover 与指针捕获，合成的 `element.click()` 不触发定位）；**Radix Checkbox 与普通标题按钮改用 `element.click()`** —— 同步、无动画依赖，稳定性明显更好。改法是让 finder 返回元素句柄后在页面里直接调 `.click()`，不再走 CDP 三件套。T3-12 改完后**连跑两次 146/146 全绿**。
+  - **因此按控件类型分两档**：**Radix 下拉菜单仍走真实指针事件**（`openRowMenu` / `openThemeMenu`，菜单依赖 hover 与指针捕获，合成的 `element.click()` 不触发定位）；**Radix Checkbox 与普通标题按钮改用 `element.click()`** —— 同步、无动画依赖，稳定性明显更好。改法是让 finder 返回元素句柄后在页面里直接调 `.click()`，不再走 CDP 三件套。T3-12 改完后**连跑两次 146/146 全绿**；UI 集成后基线升到 **149/149**。
+  - **二级菜单（`DropdownMenuSub`）靠 `pointermove` 展开，不是 `pointerdown`**：UI 集成把「外观」改成头像菜单下的二级菜单后，合成 `mousePressed` / `mouseReleased` 与 `element.click()` 都不触发它 —— 必须发一次**真实指针移动**（`mouseMove` 辅助函数，`Input.dispatchMouseEvent` 的 `mouseMoved`）。**判据**：菜单能靠手点开、脚本点不开，且 `pointerdown` 类事件都试过无效。
+  - **「上一个菜单关好了」要等父菜单，不是子菜单**：Radix 的子菜单先于父菜单卸载。等 `[role="menuitemradio"]`（子菜单项）归零时父菜单仍在关闭动画里，紧接着的点击会被父级忽略、**直接抛错中断整轮**。**改等 `[role="menuitem"]` 归零**。
+  - **坐标点击会在入场动画里漂移**：菜单项入场有动画，量中心点与真正可点之间差几像素，点偏一点就落到菜单外、菜单被关掉而选项没选中。**两条应对**：① 让 `elementCenter` 等位置稳定再取（60ms 两次采样、最多 8 次）；② 能走合成 `click` 的控件就走合成 `click`（Radix 菜单项把选择挂在 `onClick` 上，`selectThemeOption` 即此）。
+  - **别把 `async` 辅助函数包进 `evaluate`**：`openHomeSection` 是 `async (client, href)`，误写成 `evaluate(client, openHomeSection(...))` 会把 Promise 当表达式，报 `client.send is not a function`。直接 `await openHomeSection(client, href)`。
   - **不要因为一次超时就断言「功能有 bug」**：先分类（见上）。概率性丢包的表现是「同一断言时好时坏」，与真 bug 的「稳定失败」正好相反 —— **跑第二次是最便宜的判据**。
   - **起服务前先确认端口上的监听者是谁** ——「上一轮遗留的进程」是这里最常见的坑。判据最省事：量 JWT 的 `exp - iat`（应为启动时给的 TTL）。
 
@@ -589,6 +600,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 事件记录（T3-09 模型与接口、T3-10 列表视图、T3-11 勾选切换、T3-12 详情面板） | 后端：`apps/api/src/event/events.ts`、`apps/api/src/routes/events.ts`、`packages/shared/src/event.ts`；前端：`apps/web/src/components/events/`（`EventsPanel` / `EventList` / `EventRow` / `EventFormDialog` / `EventDetailDialog`）、`apps/web/src/lib/events.ts`、`apps/web/src/lib/event-display.ts`（展示规则、乐观改状态、动作码映射与耗时的纯函数，可被 Node 单测直跑） |
 | 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
 | 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
+| 前端首页三段式与版本号（**UI 集成新增**） | `apps/web/src/components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`、`apps/web/src/pages/HomePage.tsx`、`apps/web/src/lib/{nav-icons,version}.ts`；版本常量由 `apps/web/vite.config.ts` 的 `define` 注入 |
 | 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
 | 前端工作纪要 UI | `apps/web/src/components/notes/`（`NotesPanel` / `NoteList` / `NoteEditor` / `MarkdownPreview` / `TagInput`）、`apps/web/src/lib/notes.ts` |
 | 前端本机草稿暂存（T3-08） | `apps/web/src/lib/note-draft.ts`（槽名、带版本号的序列化、过期与容量清理、写失败重试；接口注入 storage 以便单测） |
@@ -598,7 +610,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
 | 环境变量样例 | `apps/api/.env.example` |
 | 种子 | `apps/api/src/db/seed.ts` |
-| 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft,event-display}.test.mjs`、`apps/web/test/e2e-auth.mjs`（`apps/web` 的 `test` 脚本是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
+| 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft,event-display,version}.test.mjs`、`apps/web/test/e2e-auth.mjs`（`apps/web` 的 `test` 脚本是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
 | 诊断脚本归档 | `projects/fanhe-work/tools/`（其 `README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
 | 规划与交接 | `projects/fanhe-work/docs/`（本文所在处） |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
@@ -613,7 +625,10 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.38）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了）。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，**9.40 记录本次 UI 集成的实施判断**。 |
+| `docs/UI-INTEGRATION-2026-10-11.md` | **本次 UI 集成记录（最终态）**：18 项导航信息架构与分层路径、两批边界、改动文件清单、四个关键对接点、五项用户裁决、版本号的展示与更新方式、验证结果与实跑中修掉的六个渲染层问题。 |
+| `docs/NEXT-TASK-PREP-阶段四-2026-10-11.md` | 阶段四开工准备（T4-01 开工清单；§八 为阶段三收口后的收尾更新）。**下一阶段执行前先读这份**。 |
+| `docs/NEXT-TASKS-2026-10-12.md` | 下一步任务清单：**N-01（回填本文档）+ 阶段四主线 T4-01 ~ T4-04**，含优先级、先后顺序、预期产出与并行的长期线。 |
 | `docs/T3-08-IMPLEMENTATION-PLAN.md` | T3-08 的施工图（含开工前的环境复位记录）。**任务已完成，此文档作为实施依据留档**。 |
 | `docs/NEXT-TASK-PREP-2026-10-11.md` | 2026-10-11 的进度核对与开工清单（当时面向 T3-08）。**数字已过期，以本文为准**。 |
 | `docs/IMPLEMENTATION-PLAN.md` | 实施层面的方案对照 |
@@ -630,7 +645,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ---
 
-## 十一、本次（2026-10-11）工作留痕
+## 十一、本次（2026-10-11 ~ 10-12）工作留痕
 
 | 时间 | 事项 | 结果 |
 | -- | -- | -- |
@@ -659,6 +674,15 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 22:4x | T3-12 浏览器验证（首轮） | e2e 段新增 11 项，146 项**两次在 T3-11 的乐观更新断言上超时**。诊断为 CDP 合成指针事件（`mouseMoved` / `mousePressed` / `mouseReleased`）**概率性整组丢失** —— 返回值正常但界面无响应，重跑即过 |
 | 22:5x | T3-12 浏览器验证（修复后） | 改法是**按控件类型分两档**：Radix 下拉菜单仍走真实指针事件（依赖 hover 与指针捕获），**Radix Checkbox 与普通标题按钮改用 `element.click()`**（同步、无动画依赖）。随后 **146/146 连跑两次全通过**，0 失败 |
 | 22:5x | 提交与收尾 | `a5370b0`（代码）+ 文档回填。**阶段三收口**；库回基线（6 迁移 / 12 表、`users` 1、种子 11 / 4 / 29）、owner 第六次重建、8787 / 5173 / 9222 释放、无残留进程 |
+| 10-12 0x:xx | **UI 集成（第一批 · 骨架层）** | 导航结构、令牌层、侧栏、顶栏、内容区通栏按最终原型改造；业务逻辑一行未动 |
+| 10-12 0x:5x | **UI 集成（第二批 · 首页三段式 + 导航重构）** | 导航扩为 **18 项 / 4 分组**（分层路径、纯折叠分组头、11 个预留槽位、页脚系统设置）；首页替换为三段式并保留三个子路由；头像菜单补齐五项 + **版本号**行；「运营信息平台」→「运维信息平台」 |
+| 10-12 0x:xx | UI 集成门禁 | 四道门禁全绿：**350 项 0 失败**（shared 83 + api 197 含 5 跳过 + web 70）；`lint` / `typecheck` / `format:check` 通过 |
+| 10-12 0x:xx | UI 集成浏览器验证 | e2e **149/149 全通过、一次跑通**；实跑中抓到并修掉六个渲染层问题（导航计数漏页脚项、顶层项文本含「开发中」、二级菜单靠 hover 展开、关闭判据要等父菜单、`openHomeSection` 误包进 `evaluate`、入场动画导致坐标漂移），修法见 8.2 与 `UI-INTEGRATION-2026-10-11.md` 第 7.3 节。库回基线（`pg_dump` 备份恢复） |
+| 10-12 0x:xx | UI 集成提交推送 | `2576388`（代码）+ `fe92cb4`（文档回填）；`main` 与 `dev` 同步 |
+| 10-12 0x:xx | 阶段四准备与任务梳理 | `b5c0e7f`（T4-01 开工准备清单）、`9502591`（下一步任务 N-01 与阶段四主线） |
+| 10-12 0x:xx | **N-01 回填本文档** | 头部与 §0/§2.1/§2.3/§2.4/§3.2/§4.1/§4.4/§7/§8.2/§9/§10 同步至最终态：验证基线 328 → **350**、e2e 146 → **149**、导航口径统一为 **18 项**、`NavRail.tsx` → `Sidebar.tsx`、「三个占位导航项」→ **16 项**；`DEVELOPMENT-PLAN.md` 追加 9.40 |
+
+**§十一 新增/修改的关键文件（UI 集成）**：`packages/shared/src/navigation.ts`（18 项 / 分组 / `slug` / `buildNavSections` / `navCodeFromPath` 重写）、`packages/shared/src/permissions.ts`（运维信息平台改名）、`packages/shared/test/navigation.test.mjs`（重写，32 项）；`apps/web/src/components/Sidebar.tsx`（重写）、`TopBar.tsx`（五项菜单 + 版本号行）、`AppShell.tsx`（外层 `relative`）、`components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`（新）、`pages/HomePage.tsx`（新）、`pages/WorkbenchPage.tsx`（按地址分派）、`routes.tsx`（`routePath` + `MODULE_SUB_ROUTES`）、`lib/nav-icons.ts`（重写）、`lib/version.ts`（新）、`vite-env.d.ts`、`index.css`（hero 令牌族）、`vite.config.ts`（`define` 注入构建常量）、根 `package.json`（`0.0.0` → `0.1.0`）；`apps/web/test/e2e-auth.mjs`（新外壳同步 + `mouseMove` / `elementCenter` / `selectThemeOption` / `openHomeSection`）、`apps/web/test/version.test.mjs`（新，8 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS,UI-INTEGRATION-2026-10-11}.md`。**业务逻辑（四个面板与 `lib/` 数据层）一行未改。**
 
 **§十一 新增/修改的关键文件（T3-12）**：`apps/web/src/lib/api.ts`（增 `eventLogsRequest`）、`apps/web/src/lib/events.ts`（增 `loadEventLogs`）、`apps/web/src/lib/event-display.ts`（增动作码映射 / `formatMoment` / `formatDuration`）、`apps/web/src/components/events/EventDetailDialog.tsx`（**新**）、`apps/web/src/components/events/EventRow.tsx`（标题改可点按钮）、`apps/web/src/components/events/EventList.tsx`（透传 `onOpenDetail`）、`apps/web/src/components/events/EventsPanel.tsx`（`detailId` / `detailOpen` 与对话框挂载）、`apps/web/test/event-display.test.mjs`（增 17 项）、`apps/web/test/e2e-auth.mjs`（新增 T3-12 段 11 项 + 截图等待 Dialog 完成 + Checkbox / 标题按钮改 `element.click()`）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**，**行结构（除标题变成按钮）一行未改**。
 
