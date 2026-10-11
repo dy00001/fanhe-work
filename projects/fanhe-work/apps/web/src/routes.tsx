@@ -9,6 +9,25 @@ import { PlaceholderPage } from './pages/PlaceholderPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
 /**
+ * 各模块的二级页面路径段。
+ *
+ * **只有路径段，没有页面。** 页面仍由 `ModuleRoute` 分派 —— 守卫的判据是按模块编号
+ * 而不是按路径，因此二级路径天然复用同一层权限守卫，不必为每个子页面再写一遍
+ * 「这个角色能不能进」。
+ *
+ * 之所以需要这张表：一级导航的路径是精确的 `/${code}`，它匹配 `/workbench` 但**不**
+ * 匹配 `/workbench/notes`，官方的一级导航里也没有二级页面这一层。而共享包的
+ * `navCodeFromPath` 早就只读首段、并明确写了「`/workbench/notes` 与 `/workbench`
+ * 解析出同一个编号」—— 也就是说这一层是它预期之内的事，这里只是把路由表补齐。
+ *
+ * 放在这里而不是共享包：它是**路由结构**，属于前端；共享包那份清单回答的是
+ * 「有哪些模块、谁看得见」，两者不该混在一起。
+ */
+const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
+  [NAV_CODES.WORKBENCH]: ['notes'],
+}
+
+/**
  * 已登录后的路由表。
  *
  * **路由表由 `NAV_ITEMS` 派生，不另写一份。** 导航清单的注释已经写明这条约定：
@@ -24,6 +43,11 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  * 未匹配的路径渲染 404 页，不重定向。重定向会把地址栏改写成落地页的地址，用户
  * 看不出自己输错了什么，而保留原地址能让「复制给别人看」得到同样的结果。404 页
  * 在外壳之内，侧栏与顶栏照常在位，用户可以直接切到别的模块。
+ *
+ * **模块内部还有一层。** 每个模块的路径是一个父路由，模块自身的页面挂 `index`，
+ * 二级页面挂各自的路径段（清单见 `MODULE_SUB_ROUTES`）。这样 `/workbench` 与
+ * `/workbench/notes` 是不重挂外壳的两个地址，切换板块时侧栏的折叠状态与滚动位置
+ * 都不会丢 —— 而这一点正是当初把模块写成子路由而不是平级路由的原因。
  */
 export function AppRoutes() {
   const visibleItems = useVisibleNavItems()
@@ -39,7 +63,14 @@ export function AppRoutes() {
         />
 
         {NAV_ITEMS.map((item) => (
-          <Route key={item.code} path={item.code} element={<ModuleRoute code={item.code} />} />
+          <Route key={item.code} path={item.code}>
+            {/* 模块自身的页面挂在 `index` 上，二级页面挂在各自的子路由上。父路由不写
+                `element`，默认渲染 `Outlet`，因此这一层只是路径的容器。 */}
+            <Route index element={<ModuleRoute code={item.code} />} />
+            {(MODULE_SUB_ROUTES[item.code] ?? []).map((sub) => (
+              <Route key={sub} path={sub} element={<ModuleRoute code={item.code} />} />
+            ))}
+          </Route>
         ))}
 
         <Route path="*" element={<NotFoundPage />} />

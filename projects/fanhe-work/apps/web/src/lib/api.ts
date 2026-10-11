@@ -1,7 +1,9 @@
 import type {
   ApiErrorResponse,
   CreateLaunchProfileRequest,
+  CreateNoteRequest,
   DeleteLaunchProfileResponse,
+  DeleteNoteResponse,
   InitializeOwnerResponse,
   LaunchProfileListResponse,
   LaunchProfileResponse,
@@ -9,11 +11,17 @@ import type {
   LoginResponse,
   LogoutResponse,
   MeResponse,
+  NoteListResponse,
+  NoteResponse,
+  NoteTagListResponse,
   RefreshResponse,
   ReorderLaunchProfilesRequest,
   RunLaunchProfileResponse,
+  SetNoteArchivedRequest,
+  SetNotePinnedRequest,
   SetupStatusResponse,
   UpdateLaunchProfileRequest,
+  UpdateNoteRequest,
 } from '@fanhe/shared'
 
 /**
@@ -274,6 +282,118 @@ export function runLaunchProfileRequest(
 ): Promise<RunLaunchProfileResponse> {
   return request<RunLaunchProfileResponse>(`/api/launch/profiles/${encodeURIComponent(id)}/run`, {
     method: 'POST',
+    accessToken,
+  })
+}
+
+/**
+ * 工作纪要的八条接口。
+ *
+ * 与启动配置同一条分工：这一层只拼地址、发请求、把失败规范化成 `ApiError`；令牌由
+ * `lib/notes.ts` 经 `withAccessToken` 附加。**id 同样一律过 `encodeURIComponent`**，
+ * 理由与启动配置那一段完全相同。
+ *
+ * 置顶与归档各占一条幂等 `PUT`，**不并进 `PATCH`**。这不是接口设计上的偏好，而是界面
+ * 需要它：改标题失败与置顶失败对用户是两件事，反馈位置与重试范围都不同。混在一条
+ * 路径上，界面就只能给出一个笼统的「保存失败」。
+ */
+
+/** 列表筛选。字段都可省略，服务端按「省略即不加该条件」处理。 */
+export type NoteListQuery = {
+  tag?: string | undefined
+  /** 只看已归档。省略即只看未归档 —— 归档项退出默认列表。 */
+  archived?: boolean | undefined
+  from?: string | undefined
+  to?: string | undefined
+}
+
+/**
+ * 列表。
+ *
+ * **只把真正给了的条件拼进查询串。** 服务端那份 querystring schema 是
+ * `additionalProperties: false`，多带一个它不认识的参数会直接 400；而
+ * `archived` 在字符串语境下只接受 `'true'` / `'false'` 两个字面量，
+ * 因此布尔值必须在这里转成字符串，不能靠 `String(false)` 之外的任何写法。
+ */
+export function notesRequest(
+  accessToken: string,
+  query: NoteListQuery = {},
+): Promise<NoteListResponse> {
+  const search = new URLSearchParams()
+  if (query.tag !== undefined && query.tag !== '') search.set('tag', query.tag)
+  if (query.archived === true) search.set('archived', 'true')
+  if (query.from !== undefined && query.from !== '') search.set('from', query.from)
+  if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  const queryString = search.toString()
+  return request<NoteListResponse>(`/api/notes${queryString === '' ? '' : `?${queryString}`}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/**
+ * 标签清单。供标签输入框给出候选。
+ *
+ * 单独一条请求而不是从上面那份列表里聚合：列表将来分页之后，前端手上只有一页，
+ * 推不出全量标签，而候选恰恰需要全量。共享包里该类型的注释写了同一件事。
+ */
+export function noteTagsRequest(accessToken: string): Promise<NoteTagListResponse> {
+  return request<NoteTagListResponse>('/api/notes/tags', { method: 'GET', accessToken })
+}
+
+export function noteRequest(accessToken: string, id: string): Promise<NoteResponse> {
+  return request<NoteResponse>(`/api/notes/${encodeURIComponent(id)}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function createNoteRequest(
+  accessToken: string,
+  input: CreateNoteRequest,
+): Promise<NoteResponse> {
+  return request<NoteResponse>('/api/notes', { method: 'POST', body: input, accessToken })
+}
+
+export function updateNoteRequest(
+  accessToken: string,
+  id: string,
+  input: UpdateNoteRequest,
+): Promise<NoteResponse> {
+  return request<NoteResponse>(`/api/notes/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+export function deleteNoteRequest(accessToken: string, id: string): Promise<DeleteNoteResponse> {
+  return request<DeleteNoteResponse>(`/api/notes/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+export function setNotePinnedRequest(
+  accessToken: string,
+  id: string,
+  input: SetNotePinnedRequest,
+): Promise<NoteResponse> {
+  return request<NoteResponse>(`/api/notes/${encodeURIComponent(id)}/pin`, {
+    method: 'PUT',
+    body: input,
+    accessToken,
+  })
+}
+
+export function setNoteArchivedRequest(
+  accessToken: string,
+  id: string,
+  input: SetNoteArchivedRequest,
+): Promise<NoteResponse> {
+  return request<NoteResponse>(`/api/notes/${encodeURIComponent(id)}/archive`, {
+    method: 'PUT',
+    body: input,
     accessToken,
   })
 }

@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { NOTE_LIMITS, isValidNoteTag, normalizeNoteTags } from '../dist/index.js'
+import { NOTE_LIMITS, isValidNoteTag, normalizeNoteTags, parseNoteTagInput } from '../dist/index.js'
 
 test('归一去掉首尾空白', () => {
   assert.deepEqual(normalizeNoteTags(['  工作  ', '\t周报 ']), ['工作', '周报'])
@@ -65,4 +65,45 @@ test('标签上限是一个正数且不超过 100', () => {
   // 单元测试之外只表现为「标签一个也存不进去」。
   assert.equal(NOTE_LIMITS.TAGS_MAX_COUNT > 0, true)
   assert.equal(NOTE_LIMITS.TAGS_MAX_COUNT <= 100, true)
+})
+
+test('输入拆分认半角逗号', () => {
+  assert.deepEqual(parseNoteTagInput('工作,周报,客户A'), ['工作', '周报', '客户A'])
+})
+
+test('输入拆分认全角逗号', () => {
+  // 中文输入法下打出的是全角逗号。只认半角时，这串会被存成**一个**标签，
+  // 而且在提交那一刻完全看不出问题 —— 要等到标签候选列表里出现一个长句子
+  // 才会被发现。这一条就是为它留的。
+  assert.deepEqual(parseNoteTagInput('工作，周报，客户A'), ['工作', '周报', '客户A'])
+})
+
+test('输入拆分认换行，含 CRLF', () => {
+  assert.deepEqual(parseNoteTagInput('工作\n周报\r\n客户A'), ['工作', '周报', '客户A'])
+})
+
+test('输入拆分把连续分隔符当成一个', () => {
+  // 手打时多敲一个逗号很常见。空的「标签」不该占位，否则界面上会多出一个
+  // 看不见的标签，用户点它的删除按钮也删不掉任何看得见的东西。
+  assert.deepEqual(parseNoteTagInput('工作,,  ,周报'), ['工作', '周报'])
+})
+
+test('输入拆分去空白后按首次出现去重', () => {
+  assert.deepEqual(parseNoteTagInput(' 工作 ，周报, 工作 '), ['工作', '周报'])
+})
+
+test('没有分隔符时整串是一个标签', () => {
+  assert.deepEqual(parseNoteTagInput('2026-Q4'), ['2026-Q4'])
+})
+
+test('空输入与只有分隔符的输入都得到空数组', () => {
+  assert.deepEqual(parseNoteTagInput(''), [])
+  assert.deepEqual(parseNoteTagInput(' , ，\n '), [])
+})
+
+test('输入拆分不丢弃超长标签', () => {
+  // 丢弃是这里最不该做的事：用户会以为是自己没打进去，而界面又无法指出
+  // 「是哪一个被吃掉了」。判定留给调用方，由它把超长的那一个标出来。
+  const tooLong = '中'.repeat(NOTE_LIMITS.TAG_MAX + 1)
+  assert.deepEqual(parseNoteTagInput(`工作,${tooLong}`), ['工作', tooLong])
 })

@@ -165,3 +165,22 @@ export function normalizeNoteTags(tags: readonly string[]): string[] {
 export function isValidNoteTag(value: string): boolean {
   return value.length > 0 && value.length <= NOTE_LIMITS.TAG_MAX
 }
+
+/**
+ * 把标签输入框里的一段文本拆成标签数组。
+ *
+ * 分隔符是**中英文逗号与换行**三种。中文输入法下打出的是全角 `，`，只认半角时的
+ * 结果是「看起来有分隔、实际存成了一个标签」—— 它不会报错，只表现为标签里多了一个
+ * 长得像句子的成员，往往要等到标签候选列表变难看时才被发现。换行同样算分隔，因为在
+ * 多行输入框里按回车就是新起一行的自然动作。
+ *
+ * 拆分后立刻归一，所以调用方拿到的是可以直接提交、也可以直接展示的值。**归一复用
+ * `normalizeNoteTags` 而不是再写一遍**：界面显示的标签数与库里存的对不上，是这类
+ * 功能最容易出现又最难解释的偏差。
+ *
+ * 不在这里丢弃超长标签。`isValidNoteTag` 的判定留给调用方，界面要能指出「是哪一个
+ * 太长」，而不是默默少一个 —— 用户会以为是自己没打进去。
+ */
+export function parseNoteTagInput(text: string): string[] {
+  return normalizeNoteTags(text.split(/[,，\r\n]+/))
+}

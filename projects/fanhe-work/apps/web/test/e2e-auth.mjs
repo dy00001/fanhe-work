@@ -21,10 +21,11 @@
  *   1. 数据库处于「未初始化」状态，即 users 表为空。否则首次初始化页不会出现，
  *      第 1 项必然失败。重置方法：
  *        docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \
- *          "delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
- *      启动配置要一起清掉：删除是软删除，跑完之后 `launch_profiles` 里会留下几行
- *      `deletedAt` 非空的记录，不清的话下一次跑会带着这些行进来。启动记录跟着配置
- *      走（外键级联），显式写出来是因为它才是那张会不断增长的表。
+ *          "delete from notes; delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"
+ *      启动配置与工作纪要要一起清掉：两者的删除都是软删除，跑完之后 `launch_profiles`
+ *      与 `notes` 里会留下几行 `deletedAt` 非空的记录，不清的话下一次跑会带着这些行
+ *      进来。启动记录跟着配置走（外键级联），显式写出来是因为它才是那张会不断增长的
+ *      表；`notes` 排在 `users` 之前是因为它的外键指向 users，反过来会撞约束。
  *   2. 启动 API 时把访问令牌有效期压短，否则续期要等 15 分钟才发生，观察窗口
  *      内什么也看不到：
  *        ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api
@@ -56,6 +57,17 @@ const MAX_OBSERVABLE_TTL_SECONDS = 65
 /** 本次验证创建的启动配置。名字带 zz_ 前缀，与真实配置区分。 */
 const LAUNCH_PROFILE_A = { name: 'zz_e2e_微信', renamed: 'zz_e2e_微信改名' }
 const LAUNCH_PROFILE_B = { name: 'zz_e2e_自定义' }
+
+/**
+ * 本次验证创建的纪要。
+ *
+ * 正文里同时放一个一级标题与一张 GFM 表格 —— 这两样只有在 Markdown 渲染器真的跑过
+ * 之后才会变成元素，靠「文本里有没有这几个字」是证明不了渲染的：原文里本来就有。
+ */
+const NOTE_TITLE = 'zz_e2e_纪要'
+const NOTE_BODY = '# 预览标题\n\n| 列 | 值 |\n| --- | --- |\n| 甲 | 1 |\n'
+const NOTE_TAG_A = 'zz_e2e_标签甲'
+const NOTE_TAG_B = 'zz_e2e_标签乙'
 
 /**
  * 一条形态合法但**一定不存在**的路径，用来验证「路径失效」的提示与重新指定入口。
@@ -391,6 +403,57 @@ function rowBadgeFinder(rowName, text) {
   })()`
 }
 
+/**
+ * 在内容区里按文字点一个按钮。
+ *
+ * **范围限定在 `main` 内。** 对话框走 portal 挂到 body 上，因此确认类按钮不在 `main`
+ * 里 —— 编辑器的「删除」与确认框的「删除」正好靠这条边界区分开：前者在内容区，
+ * 后者只在对话框里。不加这层限定的话，`main` 里那个会被先命中，于是「点确认」实际
+ * 点的是「打开确认框」，表现是对话框一直开着而脚本报「等待超时」。
+ *
+ * 文本用精确相等而不是包含：这些按钮都是一个词，`trim()` 后即可比较；而用包含匹配
+ * 时「未归档」会被「已归档」抢先命中 —— 后者在 DOM 里更靠前。
+ */
+function clickMainButton(text) {
+  return `(() => {
+    const button = [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === ${JSON.stringify(text)})
+    if (!button) throw new Error('内容区里找不到按钮：' + ${JSON.stringify(text)})
+    if (button.disabled) throw new Error('按钮是禁用态：' + ${JSON.stringify(text)})
+    button.click()
+    return true
+  })()`
+}
+
+/** 内容区里**有没有**指定文字的按钮。用来断言一个点不动的入口在不在。 */
+function mainHasButtonFinder(text) {
+  return `[...document.querySelectorAll('main button')].some((item) => item.textContent.trim() === ${JSON.stringify(text)})`
+}
+
+/** 按文字点对话框里的按钮。对话框在 portal 里，因此不限定在 `main` 内。 */
+function clickDialogButton(text) {
+  return `(() => {
+    const button = [...document.querySelectorAll('[role="dialog"] button')].find((item) => item.textContent.trim() === ${JSON.stringify(text)})
+    if (!button) throw new Error('对话框里找不到按钮：' + ${JSON.stringify(text)})
+    button.click()
+    return true
+  })()`
+}
+
+/**
+ * 点工作纪要列表里的一行。
+ *
+ * 行本身就是那个按钮（结构是 `<li><button>`），因此按行内文本找按钮即可。行名用
+ * `includes` 匹配而不是精确相等：行里还拼着标签与更新时间，整串比较不现实。
+ */
+function clickNoteRow(title) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li button')].find((item) => item.textContent.includes(${JSON.stringify(title)}))
+    if (!row) throw new Error('找不到纪要行：' + ${JSON.stringify(title)})
+    row.click()
+    return true
+  })()`
+}
+
 /** 按文字找到当前展开的下拉菜单项。 */
 function menuItemFinder(text) {
   return `[...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.includes(${JSON.stringify(text)}))`
@@ -538,7 +601,7 @@ async function assertUninitialized() {
     throw new Error(
       '数据库已经完成初始化，首次初始化页不会出现。先重置再跑：\n' +
         '  docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \\\n' +
-        '    "delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
+        '    "delete from notes; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
     )
   }
 }
@@ -1728,7 +1791,188 @@ async function main() {
     )
     record('失效配置删除后回到空态', true, '')
 
-    // 9. 渲染层无错误。这是本脚本存在的理由。
+    // 9. 工作纪要（T3-06）。
+    //
+    //    两件事最要紧：**预览读的是草稿**（不点保存就该看到渲染结果），以及
+    //    **空库时编辑器直接可用**（第一条纪要不会被空态挡住）。前者是本任务的验收
+    //    要点，后者是实现过程中真的踩到过的死角 —— 编辑器原先只画在「列表非空」的
+    //    分支里，于是全新库上那个「新建」按钮点下去毫无反应。
+    await evaluate(client, clickNavByLabel('个人工作台'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('一键登录通道')`,
+        10000,
+        '工作台页头',
+      ),
+    )
+    await evaluate(client, clickNavByLabel('工作纪要'))
+    await evaluate(
+      client,
+      waitFor(`location.pathname === '/workbench/notes'`, 10000, '地址切到 /workbench/notes'),
+    )
+    record('工作台可切到工作纪要板块，地址同步为 /workbench/notes', true, '')
+
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') !== null`, 10000, '纪要编辑器'),
+    )
+    record('空库时编辑器直接可用，第一条纪要不会被空态挡住', true, '')
+    await screenshot(client, '9a-notes-empty')
+
+    // 正文里放一个一级标题与一张 GFM 表格，两者都只有渲染过才会变成元素。
+    await evaluate(client, fillInput('#note-title', NOTE_TITLE))
+    await evaluate(client, fillInput('#note-content', NOTE_BODY))
+    // 结尾多打一个逗号：分隔符落下的一刻才成条，末尾没打完的那一段留在输入框里。
+    await evaluate(client, fillInput('#note-tags', `${NOTE_TAG_A}，${NOTE_TAG_B}，`))
+
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main h1')].some((item) => item.textContent.trim() === '预览标题')`,
+        8000,
+        '草稿即时渲染出标题',
+      ),
+    )
+    record('未保存的草稿就渲染出标题（预览读草稿，而非已保存值）', true, '')
+    record(
+      'GFM 表格渲染为 table 元素',
+      (await evaluate(client, `document.querySelector('main table') !== null`)) === true,
+      '',
+    )
+
+    // 只改草稿、还没保存时预览必须跟着变。这一条直接对应验收要点「编辑与预览一致」。
+    await evaluate(client, fillInput('#note-content', `${NOTE_BODY}\n## 追加的小节\n`))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main h2')].some((item) => item.textContent.trim() === '追加的小节')`,
+        8000,
+        '预览跟随草稿更新',
+      ),
+    )
+    record('正文改动后预览立即跟随', true, '')
+    await screenshot(client, '9b-notes-editing')
+
+    await evaluate(client, clickMainButton('创建'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('已创建')`, 10000, '创建提示'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_TITLE)}))`,
+        10000,
+        '列表出现新条目',
+      ),
+    )
+    record('创建成功：给出提示且列表出现该条', true, '')
+    record(
+      '编辑器转为编辑态（按钮由「创建」变为「保存」）',
+      (await evaluate(client, mainHasButtonFinder('保存'))) === true,
+      '',
+    )
+    const tagChips = await evaluate(
+      client,
+      `[...document.querySelectorAll('main button[aria-label^="移除标签"]')].map((item) => item.getAttribute('aria-label'))`,
+    )
+    record('中英文逗号都能分隔成标签芯片', tagChips.length === 2, JSON.stringify(tagChips))
+    await screenshot(client, '9c-notes-created')
+
+    // 置顶是独立的一条幂等 PUT。成功后由服务端重排列表，界面照着重绘。
+    await evaluate(client, clickMainButton('置顶'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('已置顶')`, 10000, '置顶提示'),
+    )
+    record('置顶成功并给出提示', true, '')
+    await evaluate(
+      client,
+      waitFor(
+        `(() => {
+          const first = document.querySelector('main ul li button')
+          return first !== null && first.textContent.includes(${JSON.stringify(NOTE_TITLE)})
+        })()`,
+        10000,
+        '置顶项排到最前',
+      ),
+    )
+    record('置顶后该条排在列表最前', true, '')
+
+    // 归档：退出默认视图，但仍在「已归档」里可读、可恢复。
+    await evaluate(client, clickMainButton('归档'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('已归档，可在')`,
+        10000,
+        '归档提示',
+      ),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `![...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_TITLE)}))`,
+        10000,
+        '该条退出默认列表',
+      ),
+    )
+    record('归档后退出默认列表，并说明去哪找', true, '')
+
+    await evaluate(client, clickMainButton('已归档'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_TITLE)}))`,
+        10000,
+        '归档视图可见',
+      ),
+    )
+    record('切到「已归档」能看到它', true, '')
+    await screenshot(client, '9d-notes-archived')
+
+    // 删除。确认框在 portal 里，因此确认按钮要用 clickDialogButton 找。
+    await evaluate(client, clickNoteRow(NOTE_TITLE))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') === null`, 5000, '没有残留浮层'),
+    )
+    await evaluate(client, clickMainButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    const deleteConfirm = await evaluate(
+      client,
+      `document.querySelector('[role="dialog"]').innerText`,
+    )
+    record('删除前先出确认框并说明删的是哪一条', deleteConfirm.includes(NOTE_TITLE), '')
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('已删除')`, 10000, '删除提示'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `![...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_TITLE)}))`,
+        10000,
+        '该条消失',
+      ),
+    )
+    record('删除后该条从列表消失', true, '')
+
+    // 回到基线视图。纪要走软删除，「清理」要靠在数据库里删（见文件头部注释）。
+    await evaluate(client, clickMainButton('未归档'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('还没有纪要')`, 10000, '回到空态'),
+    )
+    record('删空后回到空态', true, '')
+    await screenshot(client, '9e-notes-cleared')
+
+    // 10. 渲染层无错误。这是本脚本存在的理由。
     record(
       '渲染过程未产生未捕获异常或 console.error',
       pageErrors.length === 0,
