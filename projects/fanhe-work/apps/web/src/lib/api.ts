@@ -305,6 +305,8 @@ export type NoteListQuery = {
   archived?: boolean | undefined
   from?: string | undefined
   to?: string | undefined
+  /** 关键词，服务端同时匹配标题与正文。空串不发送（服务端也按不检索处理）。 */
+  q?: string | undefined
 }
 
 /**
@@ -324,6 +326,9 @@ export function notesRequest(
   if (query.archived === true) search.set('archived', 'true')
   if (query.from !== undefined && query.from !== '') search.set('from', query.from)
   if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  // 检索词同样只在非空时发送。全空白不必在这里拦：服务端会 trim 后按「不检索」处理，
+  // 两处都拦反而多一条要同步的规则（`normalizeSearchQuery` 是那条规则的唯一出处）。
+  if (query.q !== undefined && query.q !== '') search.set('q', query.q)
   const queryString = search.toString()
   return request<NoteListResponse>(`/api/notes${queryString === '' ? '' : `?${queryString}`}`, {
     method: 'GET',

@@ -165,10 +165,13 @@ const LIST_QUERY_SCHEMA = {
     archived: { type: 'string', enum: ['true', 'false'] },
     from: { type: 'string', maxLength: 64 },
     to: { type: 'string', maxLength: 64 },
+    // 检索词。名字用 `q` 而不是 `search`：这是查询串里的既有惯例，也短。
+    // 上限与其余字段同源，取自共享包，避免前端输入框与服务端校验各写一个数字。
+    q: { type: 'string', maxLength: NOTE_LIMITS.SEARCH_MAX },
   },
 } as const
 
-type ListQuery = { tag?: string; archived?: string; from?: string; to?: string }
+type ListQuery = { tag?: string; archived?: string; from?: string; to?: string; q?: string }
 
 export function registerNoteRoutes(app: FastifyInstance): void {
   app.get<{ Querystring: ListQuery }>(
@@ -186,6 +189,7 @@ export function registerNoteRoutes(app: FastifyInstance): void {
         archived: request.query.archived === 'true',
         from: request.query.from,
         to: request.query.to,
+        search: request.query.q,
       })
       if (!result.ok) return sendFailure(reply, result.reason)
 

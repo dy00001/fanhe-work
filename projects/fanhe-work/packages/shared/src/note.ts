@@ -28,6 +28,12 @@ export const NOTE_LIMITS = {
   CONTENT_MAX: 100_000,
   TAG_MAX: 32,
   TAGS_MAX_COUNT: 20,
+  /**
+   * 检索词上限。给得比标题短：检索词是「我要找什么」而不是「我要存什么」，
+   * 64 个字符已经远超过任何人会手打的查询长度。它的作用与其余上限相同 ——
+   * 在请求体被完整读进来之前就把超长输入挡在门外。
+   */
+  SEARCH_MAX: 64,
 } as const
 
 /**
@@ -183,4 +189,27 @@ export function isValidNoteTag(value: string): boolean {
  */
 export function parseNoteTagInput(text: string): string[] {
   return normalizeNoteTags(text.split(/[,，\r\n]+/))
+}
+
+/**
+ * 把检索词归一成「要用的词」或 `null`。
+ *
+ * **返回值区分 `null` 与字符串是有承重作用的，不是风格问题。** `null` 表示「不检索」，
+ * 调用方据此完全不往查询条件里加这一项；若返回空串并照旧拼进条件，`contains: ''` 会
+ * 匹配到**每一行**，搜索结果看起来「什么都搜得到」—— 那是一个不会报错的错误，而且
+ * 现象（结果太多）很容易被当成「关键词太宽泛」而不是一个 bug。因此这里把「没词」与
+ * 「有个词」在类型上分开，让调用方必须显式处理。
+ *
+ * 只去首尾空白，**不合并词内空白**：`衣柜 门板` 与 `衣柜门板` 对使用者是两次不同的
+ * 查找，前者可能正是想找同时出现这两段文字的正文，把它压成一个词会让搜索变得更窄
+ * 却不告诉任何人。
+ *
+ * 与 `parseNoteTagInput` 一样放在共享包：前端要用它决定「这个框算不算空」，服务端要用
+ * 它决定「加不加这个条件」，两边各写一份的结果是输入一个空格时界面认为「没在搜」、
+ * 服务端却认为「在搜一个空串」。
+ */
+export function normalizeSearchQuery(text: string | undefined): string | null {
+  if (text === undefined) return null
+  const trimmed = text.trim()
+  return trimmed === '' ? null : trimmed
 }

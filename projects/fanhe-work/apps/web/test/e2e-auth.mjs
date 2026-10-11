@@ -3,7 +3,8 @@
  * 切换模块 → 静默续期 → 直接访问子路由 → 未知路径落到 404 页 → 折叠偏好跨刷新保持 →
  * 主题切换与跨刷新保持 → 登出 → 重新打开后凭据自动带出 → 取消勾选后凭据被清除 →
  * 启动通道的新增、编辑、排序、启动与删除，以及路径失效的提示、重新指定入口与
- * 启动记录的摘要。
+ * 启动记录的摘要 → 工作纪要的编写、Markdown 预览、置顶、归档与删除，以及中文关键词
+ * 检索与检索和视图的正交性。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -30,8 +31,13 @@
  *      内什么也看不到：
  *        ACCESS_TOKEN_TTL_SECONDS=60 pnpm dev:api
  *   3. 前端 dev server 在跑：pnpm dev
+ *   4. **调试端口 9222 上没有别的监听者。** 本脚本要自己启动浏览器并占用它，端口被
+ *      占住时那个浏览器照样起得来、只是调试端口开不了，于是唯一的症状是 30 秒后的
+ *      「CDP 页面目标未就绪」，看不出真正原因。可用 `E2E_CDP_PORT` 换一个端口绕开。
  *
  * 用法：node test/e2e-auth.mjs [应用地址] [截图目录]
+ *
+ * 环境变量：`E2E_CDP_PORT` —— 覆盖调试端口，默认 9222。
  */
 
 import { spawn } from 'node:child_process'
@@ -42,7 +48,7 @@ import { join, resolve } from 'node:path'
 
 const APP_URL = process.argv[2] ?? 'http://127.0.0.1:5173'
 const SHOT_DIR = process.argv[3] ?? 'e2e-shots'
-const CDP_PORT = 9222
+const CDP_PORT = Number(process.env.E2E_CDP_PORT ?? 9222)
 
 /** 本次验证创建的账号。带 zz_ 前缀，便于与真实数据区分和清理。 */
 const OWNER = {
@@ -68,6 +74,41 @@ const NOTE_TITLE = 'zz_e2e_纪要'
 const NOTE_BODY = '# 预览标题\n\n| 列 | 值 |\n| --- | --- |\n| 甲 | 1 |\n'
 const NOTE_TAG_A = 'zz_e2e_标签甲'
 const NOTE_TAG_B = 'zz_e2e_标签乙'
+
+/**
+ * 检索验证用的两条纪要（T3-07）。
+ *
+ * 刻意让两个关键词落在**不同的字段**上，这样「标题命中」与「正文命中」各自都有免于
+ * 混同的证据：`keywordInTitle` 只出现在甲条的标题里，`keywordInBody` 只出现在乙条的
+ * 正文里，而两条的标题、正文互不包含对方的词。
+ *
+ * 两个关键词都是**中文**，且只有两个字 —— 本任务的验收要点就是「中文关键词可命中」，
+ * 而两字词恰好是最难被救走的那种：PostgreSQL 的 `tsvector` 把连续中文当一个 token
+ * （实测 `to_tsvector('simple','衣柜设计')` 只有一个词位，`@@ to_tsquery('simple',
+ * '衣柜')` 为假），而 `pg_trgm` 的 GIN 索引对两个字仍然走全表扫描。也就是说这一项
+ * 必须真的在界面上跑一遍才能确认整条链路是通的，光靠接口层的用例证明不了索引方案
+ * 选得对。
+ *
+ * `absent` 用来验证「搜不到」时的呈现，取一个绝不可能撞上的长词，避免将来新增的
+ * 数据恰好在正文里带了几句无关的话就让断言变得不稳定。
+ */
+const NOTE_SEARCH = {
+  title: 'zz_e2e_衣柜设计',
+  body: '柜体内部：挂衣杆下沿 60mm 起。',
+  keywordInTitle: '衣柜',
+  otherTitle: 'zz_e2e_地板选型',
+  otherBody: '主卧地板与踢脚线的收口。',
+  keywordInBody: '踢脚线',
+  absent: 'zz_e2e_一定搜不到的词',
+}
+
+/**
+ * 纪要列表当前各行的文本。
+ *
+ * 检索的断言必须同时看「有几行」与「是哪一行」：只数个数的话，把关键词换掉之后
+ * 「仍然是一行」恒为真，于是测的其实是「列表没崩」，而不是「筛出了对的那条」。
+ */
+const NOTE_ROW_TEXTS = `[...document.querySelectorAll('main ul li button')].map((item) => item.textContent)`
 
 /**
  * 一条形态合法但**一定不存在**的路径，用来验证「路径失效」的提示与重新指定入口。
@@ -454,9 +495,49 @@ function clickNoteRow(title) {
   })()`
 }
 
+/**
+ * 「检索之后，列表恰好只剩这一条」。
+ *
+ * 两个条件必须同时成立，理由见 `NOTE_ROW_TEXTS`：数量对而内容错（筛出了另一条）与
+ * 数量错都是坏的，而只断言其中一个都会漏掉一种。
+ */
+function onlyNoteRowFinder(title) {
+  return `(() => {
+    const rows = ${NOTE_ROW_TEXTS}
+    return rows.length === 1 && rows[0].includes(${JSON.stringify(title)})
+  })()`
+}
+
 /** 按文字找到当前展开的下拉菜单项。 */
 function menuItemFinder(text) {
   return `[...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.includes(${JSON.stringify(text)}))`
+}
+
+/**
+ * 打开顶栏的主题菜单。
+ *
+ * **点之前必须先确认上一个菜单已经关干净。** Radix 的下拉菜单在关闭动画期间仍留在
+ * DOM 里，此时的点击会被触发器忽略，失败表现是「菜单没打开」→ 5 秒后一句「等待
+ * 超时：主题菜单展开」。这个坑在真机上只表现为「点一下没反应，再点一下就好」，
+ * 在脚本里却会中断整个验证（它不是记一条 FAIL 后继续，而是直接抛出去）。
+ *
+ * 实跑撞到过一次，且恰好撞在「切回浅色」之后紧接着的那一次打开上 —— 两次点击之间
+ * 只隔着一个 `Emulation.setEmulatedMedia`，没有任何等待，所以概率性触发。
+ */
+async function openThemeMenu(client) {
+  await evaluate(
+    client,
+    waitFor(
+      `document.querySelector('[role="menuitemradio"]') === null`,
+      5000,
+      '上一个主题菜单已关闭',
+    ),
+  )
+  await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
+  await evaluate(
+    client,
+    waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+  )
 }
 
 /**
@@ -1197,11 +1278,7 @@ async function main() {
     //
     //     位置同样受「要整页重载」的约束：重载会清掉挂在 window 上的请求探针，而续期
     //     断言（第 7 项）已经做完，所以排在这里是安全的。
-    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
-    await evaluate(
-      client,
-      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
-    )
+    await openThemeMenu(client)
     await mouseClick(
       client,
       `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('深色'))`,
@@ -1254,11 +1331,7 @@ async function main() {
     )
 
     // 切回浅色，验证写回另一个方向，同时把后续截图留在浅色下。
-    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
-    await evaluate(
-      client,
-      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
-    )
+    await openThemeMenu(client)
     await mouseClick(
       client,
       `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('浅色'))`,
@@ -1284,11 +1357,7 @@ async function main() {
     await client.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-color-scheme', value: 'dark' }],
     })
-    await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
-    await evaluate(
-      client,
-      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
-    )
+    await openThemeMenu(client)
     await mouseClick(
       client,
       `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('跟随系统'))`,
@@ -1999,6 +2068,189 @@ async function main() {
     )
     record('删空后回到空态', true, '')
     await screenshot(client, '9e-notes-cleared')
+
+    // 9f. 全文检索（T3-07）。
+    //
+    //     验收要点是「中文关键词可命中」。这一项必须在浏览器里跑：接口层的用例只能
+    //     证明服务端收下 `q` 之后返回了正确的集合，证明不了界面真的把它发了出去、
+    //     以及结果回填到了列表上。
+    //
+    //     刻意建两条互不包含的纪要：库里只有一条时，「筛出了对的那条」与「根本没筛」
+    //     在界面上长得一模一样，断言会在实现整个坏掉的情况下照样通过。
+    await evaluate(client, clickMainButton('新建'))
+    await evaluate(client, fillInput('#note-title', NOTE_SEARCH.title))
+    await evaluate(client, fillInput('#note-content', NOTE_SEARCH.body))
+    await evaluate(client, clickMainButton('创建'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].length === 1`,
+        10000,
+        '检索用甲条建立',
+      ),
+    )
+    await evaluate(client, clickMainButton('新建'))
+    await evaluate(client, fillInput('#note-title', NOTE_SEARCH.otherTitle))
+    await evaluate(client, fillInput('#note-content', NOTE_SEARCH.otherBody))
+    await evaluate(client, clickMainButton('创建'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].length === 2`,
+        10000,
+        '检索用乙条建立',
+      ),
+    )
+    record('检索前置：两条互不包含的纪要先建好', true, '')
+
+    // 标题命中。
+    await evaluate(client, fillInput('#note-search', NOTE_SEARCH.keywordInTitle))
+    await evaluate(client, waitFor(onlyNoteRowFinder(NOTE_SEARCH.title), 10000, '按标题筛出甲条'))
+    record(
+      '中文关键词命中标题：另一条被筛掉，计数改为「匹配 1 条」',
+      (await evaluate(client, `document.querySelector('main').innerText.includes('匹配 1 条')`)) ===
+        true,
+      '',
+    )
+
+    // 正文命中。换成只在**乙条正文**里出现的词 —— 它同时证明了两件事：正文也参与
+    // 检索，以及上一步的结果不是没被刷新的旧数据。
+    await evaluate(client, fillInput('#note-search', NOTE_SEARCH.keywordInBody))
+    await evaluate(
+      client,
+      waitFor(onlyNoteRowFinder(NOTE_SEARCH.otherTitle), 10000, '按正文筛出乙条'),
+    )
+    record('关键词只出现在正文里同样命中（该词不在任何标题里）', true, '')
+    await screenshot(client, '9f-notes-search-hit')
+
+    // 搜不到。
+    await evaluate(client, fillInput('#note-search', NOTE_SEARCH.absent))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes(${JSON.stringify(`没有匹配「${NOTE_SEARCH.absent}」`)})`,
+        10000,
+        '搜不到时的说明',
+      ),
+    )
+    record(
+      '搜不到时回显关键词，计数为「匹配 0 条」',
+      (await evaluate(client, `document.querySelector('main').innerText.includes('匹配 0 条')`)) ===
+        true,
+      '',
+    )
+
+    // 清空。按钮在输入框内部，只能按 aria-label 找。先等它出现：它只在输入框非空时
+    // 才渲染，而「渲染出来」与「上一步填完值」之间隔着一次 React 的状态提交。
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main button[aria-label="清空搜索"]') !== null`,
+        5000,
+        '清空按钮出现',
+      ),
+    )
+    await evaluate(client, clickSelector('main button[aria-label="清空搜索"]'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelectorAll('main ul li button').length === 2`,
+        10000,
+        '清空后恢复两条',
+      ),
+    )
+    record(
+      '清空搜索立即恢复完整列表，输入框随之清空',
+      (await evaluate(client, `document.querySelector('#note-search').value`)) === '',
+      '',
+    )
+
+    // 检索 × 视图。归档掉甲条之后，「衣柜」在未归档里应当什么也搜不到，而在已归档里
+    // 应当搜得到它 —— 这一步才证明检索与视图是两个正交条件，而不是其中一个被忽略。
+    await evaluate(client, clickNoteRow(NOTE_SEARCH.title))
+    await evaluate(client, clickMainButton('归档'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes('已归档，可在')`,
+        10000,
+        '归档提示',
+      ),
+    )
+    await evaluate(client, fillInput('#note-search', NOTE_SEARCH.keywordInTitle))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes(${JSON.stringify(`没有匹配「${NOTE_SEARCH.keywordInTitle}」`)})`,
+        10000,
+        '未归档视图里搜不到已归档的那条',
+      ),
+    )
+    // 切换视图不清空关键词：找的仍是同一样东西，让用户重打一遍没有道理。因此这里
+    // 断言的不只是「能看到它」，还包括「关键词还在输入框里、并且仍然生效」。
+    await evaluate(client, clickMainButton('已归档'))
+    await evaluate(
+      client,
+      waitFor(onlyNoteRowFinder(NOTE_SEARCH.title), 10000, '归档视图里搜得到甲条'),
+    )
+    record('检索与视图正交：同一条在未归档搜不到、切到已归档就搜得到', true, '')
+    await screenshot(client, '9g-notes-search-archived')
+
+    // 收尾。先删已归档的甲条，再切回未归档删乙条，最后回到基线空态 —— 与上面那段
+    // 一样，纪要是软删除，真正的清理要靠数据库（见文件头部注释）。
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main button[aria-label="清空搜索"]') !== null`,
+        5000,
+        '清空按钮出现',
+      ),
+    )
+    await evaluate(client, clickSelector('main button[aria-label="清空搜索"]'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_SEARCH.title)}))`,
+        10000,
+        '归档视图里出现甲条',
+      ),
+    )
+    await evaluate(client, clickNoteRow(NOTE_SEARCH.title))
+    await evaluate(client, clickMainButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(
+        `![...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_SEARCH.title)}))`,
+        10000,
+        '甲条消失',
+      ),
+    )
+    await evaluate(client, clickMainButton('未归档'))
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_SEARCH.otherTitle)}))`,
+        10000,
+        '未归档视图里出现乙条',
+      ),
+    )
+    await evaluate(client, clickNoteRow(NOTE_SEARCH.otherTitle))
+    await evaluate(client, clickMainButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('还没有纪要')`, 10000, '回到空态'),
+    )
+    record('检索验证用的两条纪要已清理，回到空态', true, '')
 
     // 10. 渲染层无错误。这是本脚本存在的理由。
     record(

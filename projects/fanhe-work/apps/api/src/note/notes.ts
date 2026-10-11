@@ -2,6 +2,7 @@ import {
   NOTE_LIMITS,
   isValidNoteTag,
   normalizeNoteTags,
+  normalizeSearchQuery,
   type CreateNoteRequest,
   type Note,
   type NoteTagCount,
@@ -143,6 +144,8 @@ export type NoteListFilter = {
   from?: string | undefined
   /** 创建时间上界。 */
   to?: string | undefined
+  /** 关键词，同时匹配标题与正文。空串与全空白按「不检索」处理。 */
+  search?: string | undefined
 }
 
 /**
@@ -175,6 +178,44 @@ export async function listNotes(
 
   if (filter.tag !== undefined && filter.tag.trim() !== '') {
     where.tags = { has: filter.tag.trim() }
+  }
+
+  /**
+   * 关键词检索：标题与正文各匹配一次，取并集。
+   *
+   * **中文不能用 `tsvector`，这条已经实测过，不要再试。** PostgreSQL 自带的分词器不认
+   * 中文：`to_tsvector('simple', '衣柜门板安装说明')` 得到的是**整串一个词**
+   * （`'衣柜门板安装说明':1`），于是 `to_tsquery('simple', '衣柜')` 匹配不上 ——
+   * 照搬英文那套（`tsvector` + GIN）的结果是「搜什么都搜不到」，而现象看起来像索引
+   * 没生效。本机也没有 `zhparser` / `pg_bigm` 这类中文分词扩展可用。
+   *
+   * **也没有走 `pg_trgm` 索引，理由是实测出来的：它对两个字的关键词根本不生效。**
+   * 在三万行中文数据上建好 `gin (body gin_trgm_ops)` 之后，`ILIKE '%衣柜%'`（两字）
+   * 仍然走 Seq Scan，而 `'%衣柜门%'`（三字）与 `'%安装说明%'`（四字）才走
+   * Bitmap Index Scan —— pg_trgm 从少于三个字符的 **pattern** 里提取不出三元组。
+   * 中文关键词恰恰常常就是两个字（衣柜、门板、抽屉），也就是说这个索引解决不了最
+   * 典型的那类查询，却要额外带来一个扩展与一次迁移。
+   *
+   * 因此当前就是 `ILIKE`。单用户量级下（几百到几千条）顺序扫描是微秒级，够用。
+   * **等到纪要量级上万、或进入多用户（阶段五）时再加索引**，写法已验证可用：
+   * `@@index([title(ops: raw("gin_trgm_ops")), content(ops: raw("gin_trgm_ops"))], type: Gin)`，
+   * 并在迁移里先 `CREATE EXTENSION IF NOT EXISTS pg_trgm`。注意那时两字查询仍会退化
+   * 成顺序扫描，索引只对三个字以上的关键词有效。
+   *
+   * **已知局限：LIKE 的元字符没有被转义。** Prisma 的 `contains` 只负责把值包成
+   * `%值%`，不提供 `ESCAPE` 子句，所以关键词里若含 `%` 或 `_`，它们会当通配符用 ——
+   * 搜 `50%` 会多带出含 `50` 的结果，搜单独一个 `%` 则等于不过滤。这里选择接受：
+   * 后果只是结果偏宽（不会漏、也不会越出 userId / deletedAt / 归档这几道边界），
+   * 而为一个罕见输入改写整个列表查询（换成 `$queryRaw` 并手工拼转义）得不偿失。
+   *
+   * 匹配大小写不敏感是为英文字母与代码片段准备的，中文不受影响。
+   */
+  const search = normalizeSearchQuery(filter.search)
+  if (search !== null) {
+    where.OR = [
+      { title: { contains: search, mode: 'insensitive' } },
+      { content: { contains: search, mode: 'insensitive' } },
+    ]
   }
 
   const createdAt: { gte?: Date; lte?: Date } = {}

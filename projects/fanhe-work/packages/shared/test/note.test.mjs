@@ -12,7 +12,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { NOTE_LIMITS, isValidNoteTag, normalizeNoteTags, parseNoteTagInput } from '../dist/index.js'
+import {
+  NOTE_LIMITS,
+  isValidNoteTag,
+  normalizeNoteTags,
+  normalizeSearchQuery,
+  parseNoteTagInput,
+} from '../dist/index.js'
 
 test('归一去掉首尾空白', () => {
   assert.deepEqual(normalizeNoteTags(['  工作  ', '\t周报 ']), ['工作', '周报'])
@@ -106,4 +112,35 @@ test('输入拆分不丢弃超长标签', () => {
   // 「是哪一个被吃掉了」。判定留给调用方，由它把超长的那一个标出来。
   const tooLong = '中'.repeat(NOTE_LIMITS.TAG_MAX + 1)
   assert.deepEqual(parseNoteTagInput(`工作,${tooLong}`), ['工作', tooLong])
+})
+
+test('没给检索词与给了空检索词都归一为 null', () => {
+  // 「没给」与「给了个空的」必须落到同一个结果：都表示不检索。
+  assert.equal(normalizeSearchQuery(undefined), null)
+  assert.equal(normalizeSearchQuery(''), null)
+})
+
+test('只有空白的检索词按「不检索」处理', () => {
+  // 空格在输入框里看不出来，若把它当成一个真实的词，服务端会去搜「一个空格」，
+  // 而 contains 一个空串会匹配每一行 —— 表现为「搜什么都全中」。
+  assert.equal(normalizeSearchQuery('   '), null)
+  assert.equal(normalizeSearchQuery('\t\n '), null)
+})
+
+test('检索词去掉首尾空白', () => {
+  assert.equal(normalizeSearchQuery('  衣柜  '), '衣柜')
+  assert.equal(normalizeSearchQuery('\n见光板 '), '见光板')
+})
+
+test('检索词不合并词内空白', () => {
+  // 「衣柜 门板」与「衣柜门板」是两次不同的查找，压成一个词会让搜索变窄
+  // 却不告诉任何人。
+  assert.equal(normalizeSearchQuery('衣柜 门板'), '衣柜 门板')
+})
+
+test('中文关键词原样返回，不被截断', () => {
+  assert.equal(normalizeSearchQuery('衣柜门板安装说明'), '衣柜门板安装说明')
+  // 归一不做长度判定，超长由调用方按 SEARCH_MAX 处理 —— 与超长标签同一条分工。
+  const atLimit = '中'.repeat(NOTE_LIMITS.SEARCH_MAX)
+  assert.equal(normalizeSearchQuery(atLimit), atLimit)
 })

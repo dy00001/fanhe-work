@@ -487,6 +487,126 @@ describe('纪要接口', { skip: reachable ? false : '数据库不可达，跳�
     assert.equal(misses.length, 0)
   })
 
+  test('中文关键词同时命中标题与正文', async () => {
+    // 这是 T3-07 的验收要点本体。用中文而不是英文来测，是因为中文恰好是这条链路
+    // 上唯一会出错的地方：`tsvector` 对中文整串切一个词、`pg_trgm` 索引对两个字
+    // 不生效，两条都会让「搜不到」看起来像配置问题。用英文测会一路都是绿的。
+    const { token } = await signIn(ROLE_CODES.MEMBER)
+    const headers = authHeader(token)
+
+    await seedNote(headers, '衣柜尺寸复尺', { content: '与客户确认' })
+    await seedNote(headers, '其他事项', { content: '衣柜要考虑见光板与收口条' })
+    await seedNote(headers, '完全无关的一条', { content: '与关键词毫无关系' })
+
+    const hits = await listNotes(headers, `?q=${encodeURIComponent('衣柜')}`)
+    assert.equal(hits.length, 2)
+    const titles = hits.map((note) => note.title).sort()
+    assert.deepEqual(titles, ['其他事项', '衣柜尺寸复尺'])
+
+    // 正文里的关键词同样能被搜到 —— 只搜标题的实现也能让上面两条里的标题那条命中，
+    // 因此必须单独确认正文这一半。
+    const contentOnly = await listNotes(headers, `?q=${encodeURIComponent('见光板')}`)
+    assert.equal(contentOnly.length, 1)
+    assert.equal(firstOf(contentOnly).title, '其他事项')
+
+    assert.equal((await listNotes(headers, `?q=${encodeURIComponent('搜不到的词')}`)).length, 0)
+  })
+
+  test('检索与标签筛选取交集', async () => {
+    const { token } = await signIn(ROLE_CODES.MEMBER)
+    const headers = authHeader(token)
+
+    await seedNote(headers, '会议里的衣柜', { tags: ['会议'], content: '衣柜' })
+    await seedNote(headers, '会议里的其他', { tags: ['会议'], content: '无关' })
+    await seedNote(headers, '衣柜但没标签', { content: '衣柜' })
+
+    const both = await listNotes(
+      headers,
+      `?q=${encodeURIComponent('衣柜')}&tag=${encodeURIComponent('会议')}`,
+    )
+    assert.equal(both.length, 1)
+    assert.equal(firstOf(both).title, '会议里的衣柜')
+  })
+
+  test('归档视图里同样能检索', async () => {
+    const { token } = await signIn(ROLE_CODES.MEMBER)
+    const headers = authHeader(token)
+
+    await seedNote(headers, '仍在使用', { content: '衣柜' })
+    const archived = await seedNote(headers, '已经归档', { content: '衣柜' })
+    await app.inject({
+      method: 'PUT',
+      url: `/api/notes/${String(archived.id)}/archive`,
+      headers,
+      payload: { archived: true },
+    })
+
+    // 默认视图看不到归档那条；归档视图里搜同一词则只有它。
+    const defaultHits = await listNotes(headers, `?q=${encodeURIComponent('衣柜')}`)
+    assert.deepEqual(
+      defaultHits.map((note) => note.title),
+      ['仍在使用'],
+    )
+
+    const archivedHits = await listNotes(headers, `?q=${encodeURIComponent('衣柜')}&archived=true`)
+    assert.deepEqual(
+      archivedHits.map((note) => note.title),
+      ['已经归档'],
+    )
+  })
+
+  test('空检索词与全空白检索词都按不检索处理', async () => {
+    // 这一条防的是「空串被当成一个真实的词」：`contains: ''` 会匹配每一行，
+    // 表面上与「不检索」结果相同，因此只在实现里看才分得清 —— 但它同时意味着
+    // 前端一旦传了空串，服务端就没有任何机会发现语义已经错了。
+    const { token } = await signIn(ROLE_CODES.MEMBER)
+    const headers = authHeader(token)
+
+    await seedNote(headers, '第一条')
+    await seedNote(headers, '第二条')
+
+    assert.equal((await listNotes(headers, '?q=')).length, 2)
+    assert.equal((await listNotes(headers, `?q=${encodeURIComponent('   ')}`)).length, 2)
+    assert.equal((await listNotes(headers, '')).length, 2)
+  })
+
+  test('检索词超长被 schema 拒绝', async () => {
+    const { token } = await signIn(ROLE_CODES.MEMBER)
+    const headers = authHeader(token)
+
+    const tooLong = '中'.repeat(NOTE_LIMITS.SEARCH_MAX + 1)
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/notes?q=${encodeURIComponent(tooLong)}`,
+      headers,
+    })
+    assert.equal(response.statusCode, 400)
+
+    // 正好到上限应当放行，避免把边界写成「小于」而不是「小于等于」。
+    const atLimit = '中'.repeat(NOTE_LIMITS.SEARCH_MAX)
+    const ok = await app.inject({
+      method: 'GET',
+      url: `/api/notes?q=${encodeURIComponent(atLimit)}`,
+      headers,
+    })
+    assert.equal(ok.statusCode, 200)
+  })
+
+  test('检索不会搜到别人的纪要', async () => {
+    // 加检索最容易破的就是所有权的边界：条件从「恒带 userId」变成 OR 之后，
+    // 写错括号就会让 OR 把 userId 一起纳进去。这类缺陷不报错，只会多出别人的数据。
+    const mine = await signIn(ROLE_CODES.MEMBER)
+    const other = await signIn(ROLE_CODES.MEMBER)
+
+    await seedNote(authHeader(other.token), '别人的衣柜')
+
+    const mineHits = await listNotes(authHeader(mine.token), `?q=${encodeURIComponent('衣柜')}`)
+    assert.equal(mineHits.length, 0)
+
+    const otherHits = await listNotes(authHeader(other.token), `?q=${encodeURIComponent('衣柜')}`)
+    assert.equal(otherHits.length, 1)
+  })
+
   test('按创建时间范围筛选', async () => {
     const { token } = await signIn(ROLE_CODES.MEMBER)
     const headers = authHeader(token)
