@@ -456,27 +456,70 @@ function clickSelector(selector) {
  * @param label  报错时用的名字
  */
 async function mouseClick(client, finder, label) {
-  const point = JSON.parse(
-    await evaluate(
-      client,
-      `(() => {
-        const element = ${finder}
-        if (!element) throw new Error('找不到元素：' + ${JSON.stringify(label)})
-        const rect = element.getBoundingClientRect()
-        if (rect.width === 0 || rect.height === 0) {
-          throw new Error('元素没有尺寸，点了也白点：' + ${JSON.stringify(label)})
-        }
-        return JSON.stringify({
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-        })
-      })()`,
-    ),
-  )
+  const point = await elementCenter(client, finder, label)
   const base = { x: point.x, y: point.y, button: 'left', clickCount: 1 }
   await client.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved', buttons: 0 })
   await client.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed', buttons: 1 })
   await client.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased', buttons: 0 })
+}
+
+/**
+ * 把真实指针移到元素中心，不按下。
+ *
+ * 用于**靠悬停展开**的控件 —— 目前只有 Radix 的二级菜单（`DropdownMenuSub`）：它的
+ * `SubTrigger` 监听的是 `pointermove`，合成事件与 `mouseClick` 的按下 / 抬起都不触发它。
+ * 顶栏头像菜单里的「外观」正是这种子菜单，主题三档挂在它下面。
+ */
+async function mouseMove(client, finder, label) {
+  const point = await elementCenter(client, finder, label)
+  await client.send('Input.dispatchMouseEvent', {
+    x: point.x,
+    y: point.y,
+    button: 'none',
+    buttons: 0,
+    type: 'mouseMoved',
+  })
+}
+
+/**
+ * 取元素中心点，供真实指针事件使用。找不到、或没有尺寸时抛错。
+ *
+ * **等位置稳定再取。** Radix 的菜单内容有入场动画（`zoom-in-95` + `slide-in-from-*`），
+ * 在动画中途量到的中心点与最终位置差几像素。菜单项的命中区只有二十来像素高，这点
+ * 偏差足以让坐标落到相邻项或菜单之外 —— 后者会被当成「点了空白处」，菜单直接关掉、
+ * 选项没选中，而失败现象是**紧接着的那条断言超时**，与真正的原因隔了一层。实跑撞到过
+ * 一次，就发生在「跟随系统」那一步（选中后 html 该挂 dark，却没挂上）。
+ *
+ * 两次采样间隔 60ms，最多 8 次；动画通常 150~200ms，两三次采样就稳了。
+ */
+async function elementCenter(client, finder, label) {
+  const readPoint = async () =>
+    JSON.parse(
+      await evaluate(
+        client,
+        `(() => {
+          const element = ${finder}
+          if (!element) throw new Error('找不到元素：' + ${JSON.stringify(label)})
+          const rect = element.getBoundingClientRect()
+          if (rect.width === 0 || rect.height === 0) {
+            throw new Error('元素没有尺寸，点了也白点：' + ${JSON.stringify(label)})
+          }
+          return JSON.stringify({
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          })
+        })()`,
+      ),
+    )
+
+  let point = await readPoint()
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await sleep(60)
+    const next = await readPoint()
+    if (next.x === point.x && next.y === point.y) return next
+    point = next
+  }
+  return point
 }
 
 /**
@@ -497,6 +540,57 @@ function clickNavByLabel(label) {
     link.click()
     return true
   })()`
+}
+
+/**
+ * 按 `aria-label` 点侧栏底部的图标链接。
+ *
+ * 系统设置在 UI 改造后从主列表移到了底部图标行，那个链接只有图标没有文字
+ * （`textContent` 是空的），因此 `clickNavByLabel` 找不到它，只能按 `aria-label` 定位。
+ */
+function clickSidebarIconLink(label) {
+  return `(() => {
+    const link = document.querySelector(${JSON.stringify(`aside a[aria-label="${label}"]`)})
+    if (!link) throw new Error('找不到侧栏图标链接 ' + ${JSON.stringify(label)})
+    link.click()
+    return true
+  })()`
+}
+
+/**
+ * 从首页进入 `workbench` 的某个子页面。
+ *
+ * 首页改版后，三个功能面板（启动通道 / 工作纪要 / 事件记录）不再有页内切换栏 ——
+ * 入口是首页三段里的链接：「管理配置」→ `/workbench/launch`、「新建」→
+ * `/workbench/notes`、事件卡头的「查看全部」→ `/workbench/events`。
+ *
+ * **两步都走真实点击**，不直接改地址：这几条链接的存在本身就是被测对象之一 ——
+ * 上一版首页把三个面板换掉之后，如果忘了给它们留入口，功能就等于从界面上消失了，
+ * 而那种缺失只有「真的去点一下」才发现得了。
+ */
+async function openHomeSection(client, href) {
+  await evaluate(client, clickNavByLabel('首页'))
+  await evaluate(client, waitFor(`location.pathname === '/workbench'`, 10000, '回到首页'))
+  await evaluate(
+    client,
+    waitFor(
+      `document.querySelector('a[href=${JSON.stringify(href)}]') !== null`,
+      10000,
+      `首页上的 ${href} 入口`,
+    ),
+  )
+  await evaluate(
+    client,
+    `(() => {
+      const link = document.querySelector('a[href=${JSON.stringify(href)}]')
+      link.click()
+      return true
+    })()`,
+  )
+  await evaluate(
+    client,
+    waitFor(`location.pathname === ${JSON.stringify(href)}`, 10000, `地址切到 ${href}`),
+  )
 }
 
 /**
@@ -887,30 +981,74 @@ function menuItemFinder(text) {
 }
 
 /**
- * 打开顶栏的主题菜单。
+ * 选中主题三档里的某一档（二级菜单里的单选项）。
+ *
+ * **用合成 click，不走真实指针。** Radix 的菜单项把选择挂在 `onClick` 上
+ * （`@radix-ui/react-menu` 的 `MenuItem`：`onClick: composeEventHandlers(props.onClick,
+ * handleSelect)`，`MenuRadioItem` 的 `onSelect` 再调 `onValueChange`），合成事件足够。
+ *
+ * 真实指针在这里反而不可靠：二级菜单有入场动画（`zoom-in-95` + `slide-in-from-*`），
+ * 坐标在动画期间会漂移，点偏一点就落到菜单之外 —— 那会被当成「点了空白处」，菜单关掉、
+ * 选项没选中，而失败现象是紧接着的断言超时（「跟随系统」选中后 `html` 该挂 `dark` 却
+ * 没挂），与真正的原因隔了一层。实跑撞到过一次。
+ */
+function selectThemeOption(label) {
+  return `(() => {
+    const item = [...document.querySelectorAll('[role="menuitemradio"]')].find((node) => node.textContent.includes(${JSON.stringify(label)}))
+    if (!item) throw new Error('找不到主题档位 ' + ${JSON.stringify(label)})
+    item.click()
+    return true
+  })()`
+}
+
+/**
+ * 打开顶栏头像菜单里的主题三档。
  *
  * **点之前必须先确认上一个菜单已经关干净。** Radix 的下拉菜单在关闭动画期间仍留在
  * DOM 里，此时的点击会被触发器忽略，失败表现是「菜单没打开」→ 5 秒后一句「等待
- * 超时：主题菜单展开」。这个坑在真机上只表现为「点一下没反应，再点一下就好」，
+ * 超时：账号菜单展开」。这个坑在真机上只表现为「点一下没反应，再点一下就好」，
  * 在脚本里却会中断整个验证（它不是记一条 FAIL 后继续，而是直接抛出去）。
  *
- * 实跑撞到过一次，且恰好撞在「切回浅色」之后紧接着的那一次打开上 —— 两次点击之间
- * 只隔着一个 `Emulation.setEmulatedMedia`，没有任何等待，所以概率性触发。
+ * 判据是**父菜单**的 `[role="menuitem"]` 全部消失，不是子菜单的 `menuitemradio`。
+ * 主题三档改成二级菜单之后，这一条变了：子菜单先于父菜单卸载，等 `menuitemradio`
+ * 归零时父菜单还在关闭动画里，于是紧接着的点击照样被忽略 —— 这正是改造后第一次
+ * 实跑撞到的失败（切回浅色后紧接着打开那一次）。父菜单的 `menuitem` 是那个「关干净」
+ * 的信号。
  */
 async function openThemeMenu(client) {
   await evaluate(
     client,
-    waitFor(
-      `document.querySelector('[role="menuitemradio"]') === null`,
-      5000,
-      '上一个主题菜单已关闭',
-    ),
+    waitFor(`document.querySelector('[role="menuitem"]') === null`, 5000, '上一个菜单已关闭'),
   )
-  await mouseClick(client, `document.querySelector('[aria-label="切换主题"]')`, '主题切换按钮')
+  await mouseClick(client, `document.querySelector('[aria-label="账号菜单"]')`, '账号菜单')
   await evaluate(
     client,
-    waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+    waitFor(`document.querySelector('[role="menuitem"]') !== null`, 5000, '账号菜单展开'),
   )
+
+  // 头像菜单按原型补齐为五项后，「外观」不再是三个平铺的单选项，而是一个二级菜单
+  // （设置 / 收藏 / 外观 ▸ / 帮助中心 / 退出登录）。主题三档挂在子菜单里，而 Radix 的
+  // 子菜单**靠指针悬停展开** —— 它监听 `pointermove`，合成事件与 mouseClick 的
+  // 按下 / 抬起都不触发。因此这里必须走一次真实指针移动。
+  const trigger = menuItemFinder('外观')
+  await mouseMove(client, trigger, '外观子菜单')
+  let opened = true
+  try {
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 3000, '主题菜单展开'),
+    )
+  } catch {
+    opened = false
+  }
+  if (!opened) {
+    // 悬停没触发时补一次点击。指针恰好已停在触发器上、没有产生位移时会走到这里。
+    await mouseClick(client, trigger, '外观子菜单')
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="menuitemradio"]') !== null`, 5000, '主题菜单展开'),
+    )
+  }
 }
 
 /**
@@ -1082,7 +1220,7 @@ const INSTALL_PROBE = `(() => {
  *
  * **存在的理由是区分两种都能通过事后断言的实现。** 折叠偏好的验收点是「刷新后保持
  * 上次状态」，而把读取放进 `useEffect` 同样满足它：界面先按默认的展开态渲染一帧，
- * 再跳到折叠态，等一会儿再看宽度确实是 64px。用户那边看到的是每次刷新都闪一下展开
+ * 再跳到折叠态，等一会儿再看宽度确实是 72px。用户那边看到的是每次刷新都闪一下展开
  * 的侧栏，而断言全绿。要分辨这两种写法，只能看**第一个出现侧栏的帧**有多宽。
  *
  * 逐帧记录而不是只记第一帧：万一将来出现别的闪烁来源，报错时把前几帧打出来比
@@ -1354,29 +1492,74 @@ async function main() {
 
     await screenshot(client, '4-home')
 
-    // 5b. 左侧导航按权限过滤。owner 同时持有 personal 与 system 两段权限，五项应当
+    // 5b. 左侧导航按权限过滤。owner 同时持有 personal 与 system 两段权限，十八项应当
     //     全部可见。四种角色的差异由 packages/shared/test/navigation.test.mjs 覆盖：
     //     造出另外三个角色的账号需要账号管理接口，那是阶段三的功能。
     //
-    //     选择器必须限定在侧栏的 `aside` 里，不能用全局的 `nav a`。T3-06 给个人工作台
-    //     加了板块切换（`<nav aria-label="工作台板块">`，含「一键登录通道」「工作纪要」
-    //     两个链接），全局查询会把这它们一并数进来，于是「五项」变成七项 —— 而界面本身
-    //     完全正确。断言比被测对象宽，就会把正确的东西判成错的。
-    const navLabels = JSON.parse(
+    //     **按分组结构断言，不是只数一个总数。** 上一版侧栏是一层平铺，数总数就够；
+    //     改造后是「三个顶层项 + 四个分组」，总数对而结构错（例如某个分组少一个子项、
+    //     另一个多一个）是可能的，只数总数看不出来。
+    //
+    //     选择器限定在侧栏的 `aside nav` 里。首页改版后内容区也有若干链接，全局查询
+    //     会把它们一并数进来 —— 断言比被测对象宽，就会把正确的东西判成错的。
+    const navShape = JSON.parse(
       await evaluate(
         client,
-        `JSON.stringify([...document.querySelectorAll('aside nav a')].map((item) => item.textContent.trim()))`,
+        `JSON.stringify({
+          // 顶层项的链接里除了名称还有一个「开发中」标签（<em>），直接读 textContent 会
+          // 得到「资产开发中」。名称单独放在一个 <span> 里，只取它，标签不进断言。
+          top: [...document.querySelectorAll('aside nav > a')].map(
+            (item) => item.querySelector('span')?.textContent.trim() ?? item.textContent.trim(),
+          ),
+          groups: [...document.querySelectorAll('aside nav > div')].map((group) => ({
+            head: group.querySelector('button')?.textContent.trim() ?? '',
+            items: [...group.querySelectorAll('a')].map((item) => item.textContent.trim()),
+          })),
+          // 系统设置落在底部图标行（aside 里、nav 之外），只有图标没有文字，按 aria-label 取。
+          footer: [...document.querySelectorAll('aside a[aria-label]')].map((item) =>
+            item.getAttribute('aria-label'),
+          ),
+        })`,
       ),
     )
-    record('owner 可见全部五个导航项', navLabels.length === 5, navLabels.join(' / '))
+    const groupCount = navShape.groups.reduce((sum, g) => sum + g.items.length, 0)
+    const navCount = navShape.top.length + groupCount + navShape.footer.length
     record(
-      '可见范围包含系统设置，即 system 段权限的体现',
-      navLabels.some((label) => label.includes('系统设置')),
+      'owner 可见全部十八个导航项',
+      navCount === 18,
+      `实测 ${navCount} 项（顶层 ${navShape.top.length} + 分组 ${groupCount} + 页脚 ${navShape.footer.length}）：${navShape.top.join(' / ')}`,
+    )
+    record(
+      '顶层三项为首页 / 资产 / 搜索',
+      navShape.top.join(' / ') === '首页 / 资产 / 搜索',
+      navShape.top.join(' / '),
+    )
+    record(
+      '四个分组依次为客户 / 运维 / 设计 / 其他，且子项数与原型一致',
+      navShape.groups.length === 4 &&
+        navShape.groups.map((g) => g.items.length).join(',') === '4,4,3,3',
+      navShape.groups.map((g) => `${g.head}(${g.items.length})`).join(' / '),
+    )
+    record(
+      '分组头不可路由：渲染为 button 而不是链接',
+      (await evaluate(
+        client,
+        `[...document.querySelectorAll('aside nav > div > button')].length === 4`,
+      )) === true,
       '',
     )
-    // 5b-2. 主框架尺寸。实施方案第五章给的是三个硬数字：侧栏展开 224px、折叠 64px、
-    //       顶栏 56px。它们是布局基准，改错不会报错、不会白屏，只表现为界面比例不对，
-    //       所以这里逐条钉住。取整数比较是因为过渡动画期间会读到小数宽度。
+    // 系统设置按裁决落在底部图标行，不在主列表里 —— 它是 system 段权限的体现。
+    record(
+      '系统设置落在侧栏底部图标行，即 system 段权限的体现',
+      (await evaluate(
+        client,
+        `document.querySelector('aside a[aria-label="系统设置"]') !== null`,
+      )) === true,
+      '',
+    )
+    // 5b-2. 主框架尺寸。UI 合并方案对齐原 UI 实测后给的是三个硬数字：侧栏展开 240px、
+    //       折叠 72px、顶栏 72px。它们是布局基准，改错不会报错、不会白屏，只表现为
+    //       界面比例不对，所以这里逐条钉住。取整数比较是因为过渡动画期间会读到小数宽度。
     const metrics = JSON.parse(
       await evaluate(
         client,
@@ -1386,15 +1569,18 @@ async function main() {
         })`,
       ),
     )
-    record('侧栏展开宽度 224px', metrics.sidebar === 224, `实测 ${metrics.sidebar}px`)
-    record('顶栏高度 56px', metrics.header === 56, `实测 ${metrics.header}px`)
+    record('侧栏展开宽度 240px', metrics.sidebar === 240, `实测 ${metrics.sidebar}px`)
+    record('顶栏高度 72px', metrics.header === 72, `实测 ${metrics.header}px`)
 
     // 5b-3. 折叠。折叠态只留图标，导航项名称改由气泡提示承担 —— 这是折叠后唯一的
     //       名称来源，所以顺带断言提示真的出来了，而不只是宽度变了。
+    //
+    //       选择器**不再限定在 `aside` 里**：折叠按钮按原型渲染在侧栏之外（它要骑在
+    //       侧栏右缘上，留在 aside 的滚动容器里会被裁掉一半），见 Sidebar 顶部注释。
     await evaluate(
       client,
       `(() => {
-        const button = document.querySelector('aside button[aria-label="收起侧栏"]')
+        const button = document.querySelector('button[aria-label="收起侧栏"]')
         if (!button) throw new Error('找不到收起按钮')
         button.click()
         return true
@@ -1403,12 +1589,12 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 64`,
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 72`,
         5000,
         '侧栏折叠',
       ),
     )
-    record('点击收起后侧栏宽度 64px', true, '')
+    record('点击收起后侧栏宽度 72px', true, '')
 
     await evaluate(
       client,
@@ -1440,7 +1626,7 @@ async function main() {
     await evaluate(
       client,
       `(() => {
-        const button = document.querySelector('aside button[aria-label="展开侧栏"]')
+        const button = document.querySelector('button[aria-label="展开侧栏"]')
         if (!button) throw new Error('找不到展开按钮')
         button.click()
         return true
@@ -1449,7 +1635,7 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 224`,
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 240`,
         5000,
         '侧栏展开',
       ),
@@ -1458,7 +1644,7 @@ async function main() {
     // 5c. 切换导航项应切换内容区。占位模块进入统一的占位页，页面注明规划范围并提供
     //     返回落地模块的入口。这一段走守卫的正常路径（请求项可见时直接采用）；回退路径
     //     由单元测试覆盖 —— 触发它需要在会话存续期间改动权限，而那要等账号管理接口落地。
-    await evaluate(client, clickNavByLabel('系统设置'))
+    await evaluate(client, clickSidebarIconLink('系统设置'))
     await evaluate(
       client,
       waitFor(
@@ -1484,7 +1670,7 @@ async function main() {
     record('占位页提供返回落地模块的入口', backHref === '/workbench', `href=${backHref}`)
     await screenshot(client, '4b-nav-system')
 
-    // 5d. 点占位页的返回入口应回到个人工作台，且不再出现占位标注。用入口本身返回，
+    // 5d. 点占位页的返回入口应回到首页，且不再出现占位标注。用入口本身返回，
     //     而不是再点一次侧栏，顺带把「操作入口真的可用」纳入覆盖。
     await evaluate(
       client,
@@ -1497,14 +1683,10 @@ async function main() {
     )
     await evaluate(
       client,
-      waitFor(
-        `document.querySelector('main h1')?.innerText === '个人工作台'`,
-        5000,
-        '个人工作台内容区',
-      ),
+      waitFor(`document.querySelector('main h1')?.innerText === '首页'`, 5000, '首页内容区'),
     )
     const benchPanel = await evaluate(client, `document.querySelector('main').innerText`)
-    record('已排期的个人工作台不标注功能开发中', !benchPanel.includes('功能开发中'), '')
+    record('已排期的首页不标注功能开发中', !benchPanel.includes('功能开发中'), '')
     await screenshot(client, '4c-nav-workbench')
 
     // 6. 刷新令牌存在 localStorage，访问令牌不在。
@@ -1625,7 +1807,7 @@ async function main() {
     )
     record(
       '404 页的面包屑回落到应用名',
-      notFound.header.includes('梵禾 Work') && !notFound.header.includes('个人工作台'),
+      notFound.header.includes('梵禾 Work') && !notFound.header.includes('首页'),
       notFound.header.trim().replace(/\s+/g, ' '),
     )
     await screenshot(client, '5c-not-found')
@@ -1645,7 +1827,7 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `document.querySelector('main h1')?.innerText === '个人工作台'`,
+        `document.querySelector('main h1')?.innerText === '首页'`,
         5000,
         '404 页返回落地模块',
       ),
@@ -1664,7 +1846,7 @@ async function main() {
     await evaluate(
       client,
       `(() => {
-        const button = document.querySelector('aside button[aria-label="收起侧栏"]')
+        const button = document.querySelector('button[aria-label="收起侧栏"]')
         if (!button) throw new Error('找不到收起按钮')
         button.click()
         return true
@@ -1673,7 +1855,7 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 64`,
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 72`,
         5000,
         '再次折叠',
       ),
@@ -1698,12 +1880,12 @@ async function main() {
     )
     record(
       '刷新后侧栏仍是折叠态',
-      collapsedSamples[0] === 64,
+      collapsedSamples[0] === 72,
       `首帧 ${collapsedSamples[0]}px，前几帧 ${collapsedSamples.slice(0, 6).join(' → ')}`,
     )
     record(
       '刷新后没有展开→折叠的跳动',
-      collapsedSamples.every((width) => width === 64),
+      collapsedSamples.every((width) => width === 72),
       `共采样 ${collapsedSamples.length} 帧`,
     )
 
@@ -1711,7 +1893,7 @@ async function main() {
     await evaluate(
       client,
       `(() => {
-        const button = document.querySelector('aside button[aria-label="展开侧栏"]')
+        const button = document.querySelector('button[aria-label="展开侧栏"]')
         if (!button) throw new Error('找不到展开按钮')
         button.click()
         return true
@@ -1720,7 +1902,7 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 224`,
+        `Math.round(document.querySelector('aside')?.getBoundingClientRect().width ?? 0) === 240`,
         5000,
         '重载后展开侧栏',
       ),
@@ -1748,7 +1930,7 @@ async function main() {
     const garbageSamples = JSON.parse(
       await evaluate(client, 'JSON.stringify(window.__sidebarWidths)'),
     )
-    record('偏好值非法时回落为展开', garbageSamples[0] === 224, `首帧 ${garbageSamples[0]}px`)
+    record('偏好值非法时回落为展开', garbageSamples[0] === 240, `首帧 ${garbageSamples[0]}px`)
 
     // 7f. 主题切换与跨刷新保持。判据与 7e 是同一条：「刷新后还是深色」不足以证明
     //     没有闪烁 —— 把应用放进 `useEffect` 也能满足它，代价是每次刷新先闪一帧浅色。
@@ -1761,11 +1943,7 @@ async function main() {
     //     位置同样受「要整页重载」的约束：重载会清掉挂在 window 上的请求探针，而续期
     //     断言（第 7 项）已经做完，所以排在这里是安全的。
     await openThemeMenu(client)
-    await mouseClick(
-      client,
-      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('深色'))`,
-      '深色选项',
-    )
+    await evaluate(client, selectThemeOption('深色'))
     await evaluate(
       client,
       waitFor(
@@ -1791,7 +1969,7 @@ async function main() {
     await evaluate(
       client,
       waitFor(
-        `document.querySelector('[aria-label="切换主题"]') !== null`,
+        `document.querySelector('[aria-label="账号菜单"]') !== null`,
         20000,
         '重载后外壳挂载',
       ),
@@ -1814,11 +1992,7 @@ async function main() {
 
     // 切回浅色，验证写回另一个方向，同时把后续截图留在浅色下。
     await openThemeMenu(client)
-    await mouseClick(
-      client,
-      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('浅色'))`,
-      '浅色选项',
-    )
+    await evaluate(client, selectThemeOption('浅色'))
     await evaluate(
       client,
       waitFor(
@@ -1840,11 +2014,7 @@ async function main() {
       features: [{ name: 'prefers-color-scheme', value: 'dark' }],
     })
     await openThemeMenu(client)
-    await mouseClick(
-      client,
-      `[...document.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.includes('跟随系统'))`,
-      '跟随系统选项',
-    )
+    await evaluate(client, selectThemeOption('跟随系统'))
     await evaluate(
       client,
       waitFor(
@@ -1980,10 +2150,11 @@ async function main() {
     //     位置放在最后：这一段会新增并删除配置，虽然结束时回到空态，但过程中会往
     //     数据库里写行；排在前面的话，任何一步失败都会让后面的断言面对一份不干净的
     //     数据，而失败原因会被埋在一堆连锁失败里。
-    await evaluate(
-      client,
-      waitFor(`document.querySelector('main h1')?.innerText === '个人工作台'`, 8000, '个人工作台'),
-    )
+    //
+    //     首页改版后，完整的启动通道面板搬到了 `/workbench/launch`，首页上只剩
+    //     「选一条 + 启动」的区块。因此入口也从「首页就是面板」变成了首页区块头
+    //     那个「管理配置」链接 —— 走真实点击，顺带验证那个入口还在。
+    await openHomeSection(client, '/workbench/launch')
     await evaluate(
       client,
       waitFor(
@@ -2353,21 +2524,13 @@ async function main() {
     //    **空库时编辑器直接可用**（第一条纪要不会被空态挡住）。前者是本任务的验收
     //    要点，后者是实现过程中真的踩到过的死角 —— 编辑器原先只画在「列表非空」的
     //    分支里，于是全新库上那个「新建」按钮点下去毫无反应。
-    await evaluate(client, clickNavByLabel('个人工作台'))
+    await evaluate(client, clickNavByLabel('首页'))
     await evaluate(
       client,
-      waitFor(
-        `document.querySelector('main').innerText.includes('一键登录通道')`,
-        10000,
-        '工作台页头',
-      ),
+      waitFor(`document.querySelector('main').innerText.includes('案例展示')`, 10000, '首页内容'),
     )
-    await evaluate(client, clickNavByLabel('工作纪要'))
-    await evaluate(
-      client,
-      waitFor(`location.pathname === '/workbench/notes'`, 10000, '地址切到 /workbench/notes'),
-    )
-    record('工作台可切到工作纪要板块，地址同步为 /workbench/notes', true, '')
+    await openHomeSection(client, '/workbench/notes')
+    record('首页可切到工作纪要面板，地址同步为 /workbench/notes', true, '')
 
     await evaluate(
       client,
@@ -2817,12 +2980,12 @@ async function main() {
 
     // 第四件：切板块往返。编辑器会被卸载重挂，靠的是卸载时落盘。
     await evaluate(client, fillInput('#note-content', `${NOTE_DRAFT.body}\n## 切板块前写的\n`))
-    await evaluate(client, clickNavByLabel('一键登录通道'))
+    await evaluate(client, clickNavByLabel('首页'))
     await evaluate(
       client,
-      waitFor(`document.querySelector('#note-title') === null`, 10000, '离开纪要板块'),
+      waitFor(`document.querySelector('#note-title') === null`, 10000, '离开纪要面板'),
     )
-    await evaluate(client, clickNavByLabel('工作纪要'))
+    await openHomeSection(client, '/workbench/notes')
     await evaluate(
       client,
       waitFor(
@@ -2951,7 +3114,7 @@ async function main() {
     //     界面上还没有入口** —— 因此这里用接口把它置为已完成（见 `apiCompleteEvent`）。
     //     这不是绕开验证：本任务要验的是「拿到数据之后怎么分组与显示」，而状态是怎么
     //     变过去的属下一轮。
-    await evaluate(client, clickNavByLabel('事件记录'))
+    await openHomeSection(client, '/workbench/events')
     await evaluate(
       client,
       waitFor(`location.pathname === '/workbench/events'`, 10000, '地址切到 /workbench/events'),

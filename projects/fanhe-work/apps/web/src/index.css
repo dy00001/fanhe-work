@@ -74,7 +74,10 @@
   --secondary-foreground: #18181b;
   --muted: #f4f4f5;
   --muted-foreground: #52525b;
-  --muted-foreground-weak: #a1a1aa;
+  /* 原值 #a1a1aa 在 #fafafa 上只有 2.46:1，达不到 AA。UI 改造按原型实测提到
+     #71717a（4.63:1）。这一档承载「开发中」这类注释性文字，是最容易漏检的
+     一处对比度缺陷。 */
+  --muted-foreground-weak: #71717a;
 
   /* 悬停与选中底色。侧栏选中项用的是这一档，而不是高亮色。 */
   --accent: #f4f4f5;
@@ -90,6 +93,41 @@
   --border-soft: #f1f1f3;
   --input: #e4e4e7;
   --ring: #18181b;
+
+  /* 模块分色。界面整体保持灰阶，彩色只用来给模块标识一层极淡的底与辉光。
+     8% 是「看得见但不喧哗」的临界值，暗色下提到 14% 才能在深底上保留同样的
+     可感知度。取值来自 `UI合并方案/梵禾Work-首页改造预览.html` 的 `:root`。 */
+  --m-neutral: #52525b;
+  --m-teal: #0f6e56;
+  --m-blue: #185fa5;
+  --m-purple: #534ab7;
+  --m-amber: #854f0b;
+  --wash: 8%;
+  --wash-glow: 20%;
+
+  /* 卡片阴影。原 UI 全站只有这一个阴影值，作用不是把卡片抬起来，而是让它在
+     底色上获得边界感。方案 B 的其余部分继续保持「阴影归零」，只有带媒体的
+     主卡与模块卡用它。要退回完全归零，把这一行改成 none 即可（暗色那份同样）。 */
+  --shadow-card: 0 4px 30px rgb(0 0 0 / 0.1);
+
+  /* 浮层阴影。下拉菜单、分组折叠浮层、折叠态的骑边按钮共用这一档 —— 它们都需要
+     从页面上「浮起来」，而方案 B 的卡片分层不靠阴影，所以这是唯一允许用阴影的
+     浮层场景。原 UI 也只用这一个值，浅色极淡（6%）、暗色加重到 55%，两态取值
+     来自原型。 */
+  --shadow-pop: 0 4px 16px rgb(0 0 0 / 0.06);
+
+  /* 一键启动主卡（媒体卡）的色族。原型里这张卡带背景媒体、磨砂玻璃与压暗层，
+     取值来自星尘AIGC 的线上实测，不是估的。
+     本期**先不接媒体素材**：原型那张 webp 是视频海报的替代帧，而这里还没有视频
+     可放。因此只落地玻璃面与文字色一族，卡面直接取 `--hero-surface`（半透明灰，
+     透过它看到的是页面底色），结构与其余取值一处不动。素材到位后补一个
+     `--hero-art` 与一层媒体 div 即可，本组其余值不用改。 */
+  --hero-surface: rgb(240 240 240 / 0.75);
+  --hero-fg: #0f0f0f;
+  --hero-sub: rgb(15 15 15 / 0.7);
+  --hero-line: rgb(15 15 15 / 0.14);
+  --hero-chip: rgb(15 15 15 / 0.06);
+  --hero-badge: rgb(138 63 252 / 0.8);
 }
 
 /* =============================================================================
@@ -131,7 +169,9 @@
   --secondary-foreground: #fafafa;
   --muted: #262626;
   --muted-foreground: #a1a1aa;
-  --muted-foreground-weak: #71717a;
+  /* 暗色下最弱一级必须比次弱一级更暗，且仍要过 AA。原值 #71717a 在 #0a0a0a 上
+     是 4.10:1，差一点；提到 #7f7f88 得到 4.99:1。 */
+  --muted-foreground-weak: #7f7f88;
 
   --accent: #262626;
   --accent-foreground: #fafafa;
@@ -145,6 +185,24 @@
   --border-soft: #1f1f22;
   --input: #27272a;
   --ring: #d4d4d8;
+
+  /* 暗色下同样的分色需要更高的浓度才可感知。色相不动，只调强度。
+     阴影两态取同一个值 —— 原 UI 在暗色下也没有加重。 */
+  --wash: 14%;
+  --wash-glow: 28%;
+  --shadow-card: 0 4px 30px rgb(0 0 0 / 0.1);
+  /* 暗色下浮层阴影要加重：同样的 6% 黑在近黑的底上看不见，浮层会失去层次。 */
+  --shadow-pop: 0 4px 16px rgb(0 0 0 / 0.55);
+
+  /* 主卡色族暗色一份。文字与线条一律反白，玻璃面压到 50% —— 暗色下若照抄浅色的
+     75% 不透明度，卡面会亮过卡片本身，主卡就不再是「压在媒体上的一层玻璃」。
+     品牌紫的徽标两态取同一个值：它是品牌色，不随明暗改。 */
+  --hero-surface: rgb(33 33 33 / 0.5);
+  --hero-fg: #ffffff;
+  --hero-sub: rgb(255 255 255 / 0.8);
+  --hero-line: rgb(255 255 255 / 0.16);
+  --hero-chip: rgb(255 255 255 / 0.09);
+  --hero-badge: rgb(138 63 252 / 0.8);
 }
 
 @theme inline {
@@ -189,6 +247,15 @@
   --color-border-soft: var(--border-soft);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  /* 模块分色的工具类映射（`bg-m-teal` / `text-m-blue` 等）。
+     `--wash` 与 `--wash-glow` 不在此列：它们是 `color-mix` 的强度参数，
+     不是颜色，用法是 `color-mix(in srgb, var(--m-teal) var(--wash), var(--card))`。 */
+  --color-m-neutral: var(--m-neutral);
+  --color-m-teal: var(--m-teal);
+  --color-m-blue: var(--m-blue);
+  --color-m-purple: var(--m-purple);
+  --color-m-amber: var(--m-amber);
 }
 
 @layer base {
@@ -208,4 +275,73 @@
     @apply bg-background font-sans text-foreground antialiased;
     margin: 0;
   }
+}
+
+/* =============================================================================
+   一键启动主卡的 CTA
+   =============================================================================
+
+   原型里它叫 `.ia-try`：一块玻璃药丸 —— 135° 高光渐变、0.5px 内白边、大扩散投影、
+   外加 `backdrop-filter: blur(4px) saturate(1.3)`。
+
+   写成一条具名规则而不是 Tailwind 的任意值类名：那一串 rgba 与角度塞进类名之后
+   （`bg-[linear-gradient(135deg,rgba(255,255,255,0),rgba(255,255,255,0.12)_33%,…)]`）
+   可读性很差，改一个断点就要数一遍下划线。它同时被 `<button>`（有启动权限时）与
+   `<a>`（没有权限或还没配置时指向管理页）用到，两处的盒模型必须完全一致，这也是
+   放在这里而不是各写一遍的理由。
+
+   按压反馈照原 UI：`scale(0.97)` 且**不带** transition —— 全站除分段控件外所有
+   悬停/按压都是瞬时的，这一条是有意与原型一致。
+   ============================================================================= */
+.launch-cta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--hero-fg);
+  background: linear-gradient(
+    135deg,
+    rgb(255 255 255 / 0),
+    rgb(255 255 255 / 0.12) 33%,
+    rgb(255 255 255 / 0.4) 66%,
+    rgb(255 255 255 / 0)
+  );
+  backdrop-filter: blur(4px) saturate(1.3);
+  -webkit-backdrop-filter: blur(4px) saturate(1.3);
+  border: 0;
+  border-radius: 16px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 20px;
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.25),
+    inset 0 0 0 0.5px rgb(255 255 255 / 0.5);
+}
+
+.launch-cta:hover {
+  opacity: 0.9;
+}
+
+.launch-cta:active {
+  transform: scale(0.97);
+}
+
+/* 启动中与「没有可启动的配置」两种情况下按钮不可点。禁用态只降不透明度，
+   不改底色 —— 换一个底色会让它看起来像另一种按钮。 */
+.launch-cta:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.launch-cta:disabled:active {
+  transform: none;
+}
+
+.launch-cta:focus-visible {
+  outline: 2px solid var(--hero-fg);
+  outline-offset: 2px;
 }

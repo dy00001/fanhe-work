@@ -1,11 +1,22 @@
-import type { AuthenticatedUser } from '@fanhe/shared'
-import { LogOut, Monitor, Moon, Sun, type LucideIcon } from 'lucide-react'
+import { NAV_CODES, navPath, type AuthenticatedUser } from '@fanhe/shared'
+import {
+  CircleQuestionMark,
+  LogOut,
+  Monitor,
+  Moon,
+  Palette,
+  Settings,
+  Star,
+  Sun,
+  type LucideIcon,
+} from 'lucide-react'
+import { Link } from 'react-router'
 
 import { type ThemePreference, isThemePreference } from '../lib/preferences'
 import { useTheme } from '../lib/theme'
+import { buildVersionDetail, buildVersionLine } from '../lib/version'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from './ui/breadcrumb'
-import { Button } from './ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,12 +25,14 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
-import { Input } from './ui/input'
 
 /**
- * 主题档位对应的图标，用在切换按钮上。
+ * 主题档位对应的图标。
  *
  * 按**偏好**而不是按当前生效的配色取图标：选了「跟随系统」就一直是那个显示器图标，
  * 即便此刻系统是深色。若让图标跟着实际配色走，「跟随系统」与「深色」两个档位会显示
@@ -39,13 +52,7 @@ const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
 ]
 
 type TopBarProps = {
-  /**
-   * 当前位置的一级导航名称。
-   *
-   * 面包屑目前只有一级，因为内容区还没有子页面。等 T2-03 引入路由、阶段三落地
-   * 二级导航之后，这里会变成一串（一级项 / 二级项 / 当前页）。现在就把结构留成
-   * `BreadcrumbList` 加单个 `BreadcrumbItem`，是为了那时只加元素、不改外层。
-   */
+  /** 当前位置的一级导航名称。未匹配到导航时传 null，回落为应用名。 */
   title: string | null
   user: AuthenticatedUser
   roleName: string
@@ -55,82 +62,48 @@ type TopBarProps = {
 /**
  * 顶部栏。
  *
- * 高度 56px，与侧栏的品牌区同高 —— 两者的下边缘对齐，视线扫过去才是一条直线。
+ * 高度 72px，与侧栏的品牌行同高 —— 两者的下边缘对齐，视线扫过去才是一条直线。
  * 背景取 `background` 而不是 `card`：侧栏是卡片色、顶栏与内容区同色，整块背景色
  * 构成 L 形，侧栏因此从背景里浮出来。这是方案 B 的分层方式，不用阴影。暗色下
  * 侧栏同样比背景亮（#141414 对 #0a0a0a），这个关系是刻意保持的。
  *
- * 全局搜索框**刻意保持禁用**。搜索覆盖纪要、事件与账号，是阶段三的能力；现在
- * 放一个能输入却什么都不发生的框，比放一个明确不可用的框更糟 —— 后者至少诚实地
- * 说明了当前状态。`title` 给出原因，避免用户以为界面坏了。
+ * 顶栏只留面包屑与头像（编号 8）：左侧面包屑、右侧头像，中间不承载内容。全局搜索
+ * 框移到了侧栏（成为一级导航项「搜索」），主题切换移到了侧栏底部（编号 7）。
  *
- * 主题切换也放在这里：它是顶栏里唯一一个「改了立刻全局可见」的控件，得在常驻位置
- * 才容易被找到。配色本身由 `lib/theme.ts` 落到 `<html>` 上，组件只负责表达偏好 ——
- * 令牌怎么变是 `index.css` 的事，这里一行颜色都没写。
+ * **头像菜单按原型补齐为五项**：设置 / 收藏 / 外观（二级三档）/ 帮助中心 / 退出登录。
+ * 上一版只有「外观 + 退出登录」，是自作的收敛，与原型不符，这次还原。
+ *
+ * 三处行为差别是刻意的，不是漏做：
+ *   - **设置**指向系统设置页。本项目里它真实存在（`/system-settings`），原型只是个
+ *     静态按钮；能接上的就接上，不去发明一个空按钮。
+ *   - **收藏 / 帮助中心**保持原型的样子：渲染出来，点了不响应。它们在项目里没有
+ *     对应页面，凭空指向一个地址比不响应更糟 —— 那会让人以为功能已经存在。
+ *   - **外观**是二级菜单，与侧栏底部的三档是**同一份状态**，改哪边另一边都跟着变。
+ *
+ * 菜单最底部还有一行**版本号**（`v0.1.0 · 2026-10-12 · a1b2c3d`），不可点，悬停给出
+ * 完整说明。取值与更新方式见 `lib/version.ts` 顶部注释 —— 一句话是：改仓库根
+ * `package.json` 的 `version` 一处，重新构建即生效，提交号与构建时刻自动跟随。
  */
 export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
   const { preference, setPreference } = useTheme()
-  const ThemeIcon = THEME_ICONS[preference]
 
   // 中文取首字、英文取首字母，两种都是「一个字」。不用 split 处理多字节，
   // 展开运算符按码点切分，不会把中文截成半个字符。
   const initial = [...user.displayName][0] ?? user.username.slice(0, 1).toUpperCase()
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 px-6">
+    <header className="flex h-[72px] shrink-0 items-center gap-4 px-5">
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem>
-            <BreadcrumbPage>{title ?? '梵禾 Work'}</BreadcrumbPage>
+            <BreadcrumbPage className="text-base font-medium">
+              {title ?? '梵禾 Work'}
+            </BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-3">
-        <Input
-          disabled
-          placeholder="搜索纪要、事件、账号"
-          title="搜索功能在阶段三实现"
-          aria-label="全局搜索（阶段三实现）"
-          className="h-8 w-56"
-        />
-
-        {/* 主题切换放在这里而不是账号菜单里：账号菜单里是「身份」相关的操作（看角色、
-            退出登录），主题是「观感」，两者混在一起会让每次换主题都先打开一个看起来
-            与主题无关的菜单。三档用单选菜单而不是「点一下切一下」的按钮：循环切换的
-            按钮看不出有「跟随系统」这一档，用户只能靠反复点击去猜。 */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 text-muted-foreground"
-              aria-label="切换主题"
-              title="切换主题"
-            >
-              <ThemeIcon className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-
-          <DropdownMenuContent align="end" className="w-40">
-            <DropdownMenuRadioGroup
-              value={preference}
-              onValueChange={(value) => {
-                // Radix 给的是 string。守卫而不是断言：多一个 `as` 就少一次编译期检查，
-                // 而这里的取值直接决定写进存储的内容。
-                if (isThemePreference(value)) setPreference(value)
-              }}
-            >
-              {THEME_OPTIONS.map((option) => (
-                <DropdownMenuRadioItem key={option.value} value={option.value}>
-                  {option.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -138,7 +111,7 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
               aria-label="账号菜单"
               className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
-              <Avatar>
+              <Avatar className="size-8">
                 <AvatarFallback className="bg-primary text-xs font-medium text-primary-foreground">
                   {initial}
                 </AvatarFallback>
@@ -146,20 +119,85 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
             </button>
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col gap-0.5">
                 <span className="truncate text-sm font-medium text-foreground">
                   {user.displayName}
                 </span>
-                <span className="truncate text-xs text-muted-foreground">{roleName}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {roleName} · {user.username}
+                </span>
               </div>
             </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem asChild>
+              <Link to={navPath(NAV_CODES.SYSTEM_SETTINGS)}>
+                <Settings className="size-4" />
+                设置
+              </Link>
+            </DropdownMenuItem>
+
+            {/* 原型里「收藏」是一个静态按钮，本项目尚无对应页面。保留原样渲染、
+                不接任何行为：凭空指向一个地址会让人以为功能已经存在。 */}
+            <DropdownMenuItem>
+              <Star className="size-4" />
+              收藏
+            </DropdownMenuItem>
+
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Palette className="size-4" />
+                外观
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuRadioGroup
+                  value={preference}
+                  onValueChange={(value) => {
+                    // Radix 给的是 string。守卫而不是断言：多一个 `as` 就少一次编译期
+                    // 检查，而这里的取值直接决定写进存储的内容。
+                    if (isThemePreference(value)) setPreference(value)
+                  }}
+                >
+                  {THEME_OPTIONS.map((option) => {
+                    const Icon = THEME_ICONS[option.value]
+                    return (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>
+                        <Icon className="size-4" />
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    )
+                  })}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            {/* 同「收藏」：原型有、项目无，保持渲染不接行为。 */}
+            <DropdownMenuItem>
+              <CircleQuestionMark className="size-4" />
+              帮助中心
+            </DropdownMenuItem>
+
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onLogout()}>
               <LogOut className="size-4" />
               退出登录
             </DropdownMenuItem>
+
+            {/* 版本号。放菜单最底部：它属于「我是谁 / 我在哪一版」这类账号元信息，
+                与上一条身份信息同源；而它需要被随时查到、又不需要被随时看到，
+                菜单是这两条的交点。
+                不可点，因此用 div 而不是 DropdownMenuItem —— 后者带悬停底色与
+                键盘焦点，会让一行纯信息看起来像一个能按的按钮。
+                `title` 给出完整说明（含 UTC 标注与提交号），菜单里那一行保持短。 */}
+            <DropdownMenuSeparator />
+            <div
+              className="px-2 pt-1.5 pb-0.5 font-mono text-xs text-muted-foreground-weak"
+              title={buildVersionDetail()}
+            >
+              {buildVersionLine()}
+            </div>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

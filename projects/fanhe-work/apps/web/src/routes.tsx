@@ -15,16 +15,33 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  * 而不是按路径，因此二级路径天然复用同一层权限守卫，不必为每个子页面再写一遍
  * 「这个角色能不能进」。
  *
- * 之所以需要这张表：一级导航的路径是精确的 `/${code}`，它匹配 `/workbench` 但**不**
- * 匹配 `/workbench/notes`，官方的一级导航里也没有二级页面这一层。而共享包的
- * `navCodeFromPath` 早就只读首段、并明确写了「`/workbench/notes` 与 `/workbench`
- * 解析出同一个编号」—— 也就是说这一层是它预期之内的事，这里只是把路由表补齐。
+ * 之所以需要这张表：一级导航的路径是精确的（`/workbench`、`/customer/overview`），
+ * 它匹配自己但**不**匹配更深一层。而共享包的 `navCodeFromPath` 早就写明「更深的段按
+ * 前缀归到同一个编号」—— 也就是说这一层是它预期之内的事，这里只是把路由表补齐。
  *
  * 放在这里而不是共享包：它是**路由结构**，属于前端；共享包那份清单回答的是
  * 「有哪些模块、谁看得见」，两者不该混在一起。
+ *
+ * `workbench` 下面有三段：`launch` 是 UI 改造后新加的 —— 首页占掉了 `/workbench`
+ * 本身，启动通道的完整面板需要自己的地址，否则「配置管理」就没有入口了。
  */
 const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
-  [NAV_CODES.WORKBENCH]: ['notes', 'events'],
+  [NAV_CODES.WORKBENCH]: ['launch', 'notes', 'events'],
+}
+
+/**
+ * 把共享包给出的完整路径转成路由表要的相对路径。
+ *
+ * **这一层不能省。** 上一版导航项的路径就是 `/${code}`，于是 `path={item.code}` 恰好
+ * 是对的；引入两层路径后，综合看板的地址是 `/customer/overview`，而 `item.code` 仍是
+ * `customer-overview` —— 直接拿编号当路径，侧栏点得进去、地址栏却是
+ * `/customer-overview`，刷新即 404。路径的唯一事实来源是共享包的 `navPath`，
+ * 这里只做「去掉前导斜杠」这一件事。
+ *
+ * 路由的 `path` 不写前导斜杠（写了会被 React Router 当成绝对路径，反而与父级脱钩）。
+ */
+function routePath(code: NavCode): string {
+  return navPath(code).replace(/^\//, '')
 }
 
 /**
@@ -35,10 +52,10 @@ const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
  * 排查方向会先落到路由配置上。这里用 `NAV_ITEMS.map` 生成子路由，新增模块时
  * 只改共享包一处。
  *
- * 结构上分两层：无路径的外壳路由承担侧栏与顶栏，五个模块作为它的子路由渲染进
- * 内容区。这正是「嵌套路由」的用处 —— 切换模块时外壳不重新挂载，侧栏的折叠
- * 状态与滚动位置因此不会丢。若把五个模块写成平级路由、各自再包一层外壳，切一次
- * 模块就重挂一次外壳，折叠状态会被重置回展开。
+ * 结构上分两层：无路径的外壳路由承担侧栏与顶栏，清单里的每个模块作为它的子路由
+ * 渲染进内容区。这正是「嵌套路由」的用处 —— 切换模块时外壳不重新挂载，侧栏的折叠
+ * 状态与滚动位置因此不会丢。若把模块写成平级路由、各自再包一层外壳，切一次模块就
+ * 重挂一次外壳，折叠状态会被重置回展开。
  *
  * 未匹配的路径渲染 404 页，不重定向。重定向会把地址栏改写成落地页的地址，用户
  * 看不出自己输错了什么，而保留原地址能让「复制给别人看」得到同样的结果。404 页
@@ -63,7 +80,7 @@ export function AppRoutes() {
         />
 
         {NAV_ITEMS.map((item) => (
-          <Route key={item.code} path={item.code}>
+          <Route key={item.code} path={routePath(item.code)}>
             {/* 模块自身的页面挂在 `index` 上，二级页面挂在各自的子路由上。父路由不写
                 `element`，默认渲染 `Outlet`，因此这一层只是路径的容器。 */}
             <Route index element={<ModuleRoute code={item.code} />} />

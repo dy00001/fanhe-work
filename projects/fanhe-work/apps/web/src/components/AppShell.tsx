@@ -16,10 +16,11 @@ import { TopBar } from './TopBar'
  * 与内容区的滚动位置因此得以保留。若把外壳放进每个页面，切一次模块就重挂一次，
  * 折叠会被重置回展开。
  *
- * 三条尺寸来自实施方案第五章：侧栏展开 224px / 折叠 64px、顶栏 56px、内容区用
- * 最大宽度约束而非通栏铺满。前两条在各自的组件里，第三条在这里 —— 它是外壳的
- * 职责，页面不该各自决定自己的宽度上限，否则不同页面之间的正文左边距会不一致，
- * 而这种不一致在单页上看不出来，只有来回切换时才觉得「页面在跳」。
+ * 三条尺寸来自 UI 合并方案对齐原 UI 的实测值：侧栏展开 240px / 折叠 72px、顶栏
+ * 72px、内容区通栏铺满。前两条在各自的组件里，第三条在这里 —— 它是外壳的职责，
+ * 页面不该各自决定自己的宽度上限。旧版曾用 `max-w-[1080px]` 居中，UI 改造后按原
+ * UI 的做法取消居中列，让内容铺满，于是案例展示、一键启动与工作纪要三段落在同
+ * 一条栅格上。
  *
  * **整页高度锁死、由内容区独立滚动**（`h-screen` 加 `overflow-hidden`），而不是
  * 让整页滚动。侧栏与顶栏因此始终在位，翻长列表时不用回到顶部才能切模块。代价是
@@ -68,7 +69,10 @@ export function AppShell() {
   const roleName = ROLES.find((role) => role.code === user.role)?.name ?? user.role
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    // `relative` 是侧栏那个折叠按钮的定位上下文：它刻意渲染在 `<aside>` 之外
+    // （要骑在侧栏右缘上，留在 aside 内会被滚动容器裁掉），因此需要一个共同祖先
+    // 来承载它的绝对定位。见 `Sidebar` 的顶部注释。
+    <div className="relative flex h-screen overflow-hidden bg-background">
       <Sidebar items={visibleItems} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -81,10 +85,9 @@ export function AppShell() {
           }}
         />
 
-        <main className="flex-1 overflow-y-auto px-8 pt-2 pb-10">
-          <div className="mx-auto max-w-[1080px]">
-            <Outlet />
-          </div>
+        {/* 内容区：上 20 / 左右 48 / 下 0，与原 UI 的 main 同度量，且通栏铺满。 */}
+        <main className="flex-1 overflow-y-auto px-12 pt-5">
+          <Outlet />
         </main>
       </div>
     </div>
