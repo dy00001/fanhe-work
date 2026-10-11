@@ -143,16 +143,78 @@
 
 ## 十、待处理事项
 
-按优先级排列。
+按优先级排列。最后一列是 2026-10-11 15:40 的处置结果。
 
-| 优先级 | 事项 | 说明 | 阻塞范围 |
+| 优先级 | 事项 | 说明 | 处置结果（2026-10-11 15:40） |
 | --- | --- | --- | --- |
-| P0 | 决定 `dev` 分支走向 | 落后 main 4 个提交，需决定跟进或保留分叉 | 分支策略 |
-| P1 | 决定是否删除四处 `node_modules.old` | 忽略规则已隔离其影响，删除可回收空间 | 无 |
-| P1 | 创建首个用户账号 | 数据库 `users` 表为空，界面登录依赖它 | 端到端验证 |
-| P2 | 清理 `.tmp` 诊断脚本 | 其中 `sync-handoff.py`、`verify-migration.mjs` 有复用价值，可归档到 `infra/docs` | 无 |
-| P2 | 确认 `leak-baseline.json` 是否需要生成 | 属机制状态文件 | 无 |
-| P2 | 浏览器级端到端验证 | 需用户账号就绪 | 功能验收 |
+| P0 | 决定 `dev` 分支走向 | 落后 main 4 个提交，需决定跟进或保留分叉 | **已决：跟进。** `dev` 已快进对齐 `main`（两条分支同为 `2cfdb42`）并推送 `origin/dev`。原本设想的「dev 领先、main 稳定」从未发生 —— 一直是 main 领先，说明分支约定没有被真正执行；在出现实际的分叉需求之前，按「`dev` 跟随 `main`」处理 |
+| P1 | 决定是否删除四处 `node_modules.old` | 忽略规则已隔离其影响，删除可回收空间 | **已分析，暂不删除。** 结论明确是「应当删除」，依据见第十一节；删除与否等用户另行决定 |
+| P1 | 创建首个用户账号 | 数据库 `users` 表为空，界面登录依赖它 | **已完成。** owner `fanhe` 已建，`users` 行数 1；口令写入被忽略的 `.tmp\owner-credentials.txt`。副作用：`apps/api/test/setup.test.ts` 的 5 项首次初始化用例转为设计性跳过 |
+| P2 | 清理 `.tmp` 诊断脚本 | 其中 `sync-handoff.py`、`verify-migration.mjs` 有复用价值，可归档到 `infra/docs` | **已完成，但落点改了**：归档到 `projects/fanhe-work/tools/`。**不是 `infra/docs`** —— `infra\` 是工作区机制层，而这些脚本的内容全是 fanhe-work 的项目细节（`apps\api`、`schema.prisma`、pnpm 门禁），混进 `infra\` 会把两层搅在一起。盘符已换成向上查找 `.ws-root`；`.ps1` 补了 UTF-8 BOM（原因见 `tools\README.md`）；`.tmp\` 里的旧位置已删除 |
+| P2 | 确认 `leak-baseline.json` 是否需要生成 | 属机制状态文件 | 未处理 |
+| P2 | 浏览器级端到端验证 | 需用户账号就绪 | 未处理（账号现已就绪，具备执行条件） |
+
+其中「`.tmp` 重复的缓存与测试残留」是本轮新识别的一类：`node-compile-cache`、两个
+`fanhe-work-e2e-*` 浏览器用户数据目录、`tsx-*` 编译缓存共 **73.1 MB / 约 4900 个文件，
+占 `.tmp` 体积的 99%**，全部可重建。已按用户决定一并清理，`.tmp` 从 73.6 MB 降到
+0.4 MB，只留下日志与 `owner-credentials.txt`。
+
+---
+
+## 十一、`node_modules.old` 分析（为什么应当删除）
+
+四处目录：`projects\fanhe-work\`、`apps\api\`、`apps\web\`、`packages\shared\` 各一处。
+
+### 它是什么
+
+**它是工作区换盘符时留下的上一代依赖树，不是源码、不是缓存，也不是任何东西的备份。**
+
+证据是软链接指向：四处目录的顶层软链接**全部指向 `/e/fanhe Work/...`，指向 `/f/` 的
+为零**。工作区原先在 `E:` 盘，现在在 `F:` 盘，而 `E:\fanhe Work` 已经不存在
+（`E:` 盘还在，但上面是别的目录）。pnpm 的 `node_modules` 是一层指向 `.pnpm` 的软链接
+农场，换盘符后旧链接全部悬空，于是重建时把旧目录改名 `.old` 留了下来。
+
+三个量化事实：
+
+| 项目 | 数值 |
+| --- | --- |
+| 顶层软链接指向 `/e/` 的比例 | 27 / 27 = **100%**（根 8、api 7、web 11、shared 1） |
+| 实体文件（软链接不计） | 23 802 个，合计 **489 MB** |
+| `.pnpm` 条目数 | 旧 415 / 新 415 —— **与现役依赖树完全重复** |
+
+### 为什么应当删除
+
+1. **它已经不能用了。** 悬空软链接指向一个不存在的路径，`require` 任何东西都会失败。
+   它既不能回滚依赖，也不能提供任何东西 —— 作为「备份」它是不合格的。
+2. **它和现役依赖树完全重复，占 489 MB。** 其中 471.7 MB 在项目根，17.4 MB 在 `apps\web`。
+   工作区在 U 盘上，这 489 MB 会随每次整盘复制、克隆、备份一起搬运。
+3. **它污染门禁。** `node_modules/` 这类忽略规则匹配不到 `node_modules.old/`，于是被
+   eslint 与 prettier 扫到 —— 实测产生 **8803 条 lint 报错与 57 个格式违规**，全部与
+   源码无关。已在 `eslint.config.js` 与 `.prettierignore` 两处加规则隔离，但那只压住了
+   症状：目录还在，就还要靠两份忽略规则记得它。
+4. **它不在版本控制里，也不是交付物。** `git ls-files` 命中 0 条，且被忽略规则覆盖。
+5. **重建成本为零。** `pnpm-lock.yaml` 在版本控制内，`pnpm install` 可随时重建，且
+   重建出来的树会指向当前盘符 —— 这正是它当初被留下的原因，也是它现在必然过期的原因。
+
+### 唯一的反向考虑
+
+如果依赖树在某个特定提交上「恰好能跑」，而 `pnpm install` 之后 `pnpm-lock.yaml` 的解析
+结果变了（例如 registry 撤了某个版本），留着旧树**理论上**还有一点点价值。但这个价值
+兑现不了 —— 悬空软链接意味着它现在就跑不起来。所以这条不成立。
+
+### 结论
+
+**应当删除，风险接近于零。** 本轮按用户决定**暂不执行**，先把分析落档。删除方式：
+
+```bash
+rm -rf "projects/fanhe-work/node_modules.old" \
+       "projects/fanhe-work/apps/api/node_modules.old" \
+       "projects/fanhe-work/apps/web/node_modules.old" \
+       "projects/fanhe-work/packages/shared/node_modules.old"
+```
+
+删完跑一次 `pnpm install` 与四道门禁确认无碍即可。**不要删 `node_modules/`本身**，
+那会需要重新安装（几分钟量级）。
 
 ---
 

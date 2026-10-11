@@ -5,14 +5,16 @@
 >
 > 生成时间：2026-10-11。记录时工作树干净、与 `origin/main` 同步（领先 0）。
 >
-> 更新 2026-10-11 15:10。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
+> 更新 2026-10-11 15:40。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
 > 其一，远端仓库已由私有改为公开，绑定与两条访问链路见 `WORKSPACE-BINDING.md`。
-> 其二，新增 `dev` 开发分支，本地已建立跟踪，落后 `main` 4 个提交。
+> 其二，`dev` 与 `main` **已对齐**在同一提交（`2cfdb42`）并各自推送，不再是「dev 落后 4 个提交」。
 > 其三，数据库五个迁移全部应用，十张业务表齐备（另加 `_prisma_migrations`）。
 > 其四，四道门禁本日实跑多次，`test`、`lint`、`typecheck`、`format:check` 全部通过。
 > 其五，`node_modules.old` 此前未被忽略规则覆盖，会污染 lint 与 format，已修复。
 > 其六，首个 owner 账号已创建（登录名 `fanhe`，口令写入被忽略的 `.tmp/owner-credentials.txt`）；由此 `apps/api/test/setup.test.ts` 的 5 项首次初始化用例转为设计性跳过。
 > 其七，T3-05 纪要模型与接口已完成并提交（模型 + 八条接口 + 共享类型 + 31 项新测试），**界面尚未接上，属 T3-06**。
+> 其八，`.tmp` 里的诊断脚本已归档到 `projects/fanhe-work/tools/`（盘符改为向上查找 `.ws-root`，`.ps1` 补 UTF-8 BOM）；`.tmp` 内 99% 的可重建缓存已清理，体积 73.6 MB → 0.4 MB。
+> 其九，四处 `node_modules.old` **经分析确认应当删除但暂未删除**（约 489 MB、23802 个文件、软链接 100% 悬空于已不存在的 `E:` 盘），完整依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。
 
 ---
 
@@ -222,6 +224,7 @@ projects/fanhe-work/
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
 | 环境样例 | `apps/api/.env.example` |
 | 测试 | `apps/api/test/{note,launch-history}.test.ts`、`packages/shared/test/{note,launch}.test.mjs`、`apps/web/test/relative-time.test.mjs`、`apps/web/test/e2e-auth.mjs` |
+| 诊断脚本 | `projects/fanhe-work/tools/`（`README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
 | 规划与交接 | `docs/DEVELOPMENT-PLAN.md`、`docs/HANDOFF-2026-10-10.md`、`docs/HANDOFF-2026-10-11.md`、`docs/IMPLEMENTATION-PLAN.md` |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
 | 测试 / 界面令牌 | `.workbuddy-ai/memory/TESTING.md`、`.workbuddy-ai/memory/UI-TOKENS.md` |

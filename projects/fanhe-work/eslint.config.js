@@ -94,4 +94,16 @@ export default [
       globals: { ...globals.node, ...globals.browser },
     },
   },
+
+  // 诊断与校验脚本（tools/）。跑在 Node 里，直接碰文件系统与子进程，所以只给 Node
+  // 全局。不给这一层的话，js.configs.recommended 的 no-undef 会把 process 与
+  // console 报成未定义。
+  {
+    files: ['tools/**/*.{js,mjs}'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
 ]
