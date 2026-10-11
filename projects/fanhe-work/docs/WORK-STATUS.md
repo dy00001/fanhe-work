@@ -15,6 +15,7 @@
 > 其七，T3-05 纪要模型与接口已完成并提交（模型 + 八条接口 + 共享类型 + 31 项新测试），**界面尚未接上，属 T3-06**。
 > 其八，`.tmp` 里的诊断脚本已归档到 `projects/fanhe-work/tools/`（盘符改为向上查找 `.ws-root`，`.ps1` 补 UTF-8 BOM）；`.tmp` 内 99% 的可重建缓存已清理，体积 73.6 MB → 0.4 MB。
 > 其九，四处 `node_modules.old` **经分析确认应当删除但暂未删除**（约 489 MB、23802 个文件、软链接 100% 悬空于已不存在的 `E:` 盘），完整依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。
+> 其十，**T3-06 Markdown 编辑与预览已完成并提交**：纪要界面接通（编辑器 / 预览 / 标签 / 置顶 / 归档 / 删除），一级导航补上二级路径这一层（`/workbench/notes`），依赖新增 `react-markdown` 与 `remark-gfm`；四道门禁全绿，三包合计 **227 项**（shared 58 + api 159 + web 10）；另用真实 owner 跑通八条接口冒烟 **23 项**。**浏览器 e2e 尚未执行**（脚本要求空库，见第七节）。
 
 ---
 
@@ -61,12 +62,13 @@ projects/fanhe-work/
 | 阶段零 | 目录骨架 | ✅ 完成 |
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见第六节） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾，阶段二收口） |
-| 阶段三 | 个人工作台三板块（T3-01 ~ T3-05） | ✅ T3-01~T3-05 已完成并提交（T3-05 只含模型与接口，界面属 T3-06） |
+| 阶段三 | 个人工作台三板块（T3-01 ~ T3-06） | 🔄 T3-01~T3-06 已完成并提交（启动通道 4 项 + 纪要 3 项中的界面已接上；检索 T3-07 与草稿恢复 T3-08 未做，事件板块 T3-09 起未开始） |
 | 阶段四 | Electron 外壳 | ⬜ 未开始 |
 
 **阶段三验收清单**：
 - [x] 第一项：启动配置可新增、编辑、排序，可一键唤起
 - [x] 第二项：路径失效有提示与重新指定入口（T3-04，浏览器 e2e 62/62 全通过）
+- [ ] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **编辑预览、标签、置顶已在 T3-06 完成并可用**；检索属 T3-07、草稿恢复属 T3-08，两项未做，故整项不勾
 - 其余验收项（折叠记忆、占位页、子路由等）随阶段二已落定
 
 **最近提交**：
@@ -89,7 +91,7 @@ projects/fanhe-work/
   - 只读角色：`LaunchProfileRow` 的 `canWrite: false` 隐藏整行操作。
   - 相对时间：`lib/relative-time.ts`（`Intl.RelativeTimeFormat('zh-CN')`），前端零依赖单测 10 项。
 
-- **T3-05 纪要模型与接口**（本次重点，**只落模型与接口，界面属 T3-06**）：
+- **T3-05 纪要模型与接口**（**只落模型与接口，界面属 T3-06**，已于 T3-06 接上）：
   - 新增 `notes` 表与第五迁移 `20261011064829_add_notes`。至此五个迁移、十张业务表（另加 `_prisma_migrations`）。
   - 标签用 `text[]` 加 **GIN 索引**，不另开 `tags` / `note_tags` 关联表；归档用 `archivedAt` 记时刻而非布尔；沿用 `deletedAt` 软删除；两处复合索引覆盖列表与归档视图。
   - `packages/shared/src/note.ts`：纪要跨进程类型、`NOTE_LIMITS` 上限、`normalizeNoteTags` 归一（去空白 + 精确去重，不做大小写折叠）、`isValidNoteTag` 判定。
@@ -97,19 +99,32 @@ projects/fanhe-work/
   - `apps/api/src/routes/notes.ts`：八条路由 —— 列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档，读写分挂 `personal.note.read` 与 `personal.note.write`；`PATCH` 体要求 `minProperties: 1`；置顶与归档各自一条幂等 `PUT`。**不写审计**（私有用量，与启动配置同判）。
   - 测试：api 新增 21 项（`note.test.ts`）、shared 新增 10 项（`note.test.mjs`）。
 
-> 详细判断见 `DEVELOPMENT-PLAN.md` 9.28 ~ 9.32。
+- **T3-06 Markdown 编辑与预览**（本次重点，纪要界面已接通）：
+  - 新增 `apps/web/src/components/notes/`：`NotesPanel`（四态分派容器，照 `LaunchPanel`）、`NoteList`（只按服务端顺序渲染）、`NoteEditor`（草稿态 + 提交前校验）、`MarkdownPreview`（`react-markdown` + `remark-gfm`，**不引 `rehype-raw`**）、`TagInput`（芯片 + 候选，拆分规则来自共享包）。
+  - 新增 `apps/web/src/lib/notes.ts`：八条接口的会话感知封装、剥掉 `{notes}` / `{note}` / `{tags}` 信封、`noteFailureExit` 把 404 与其余失败分开。
+  - `lib/api.ts` 补八条传输函数；`NoteListQuery` 只把真正给了的条件拼进查询串（服务端 schema 是 `additionalProperties: false`）。
+  - **预览读草稿而不是已保存值** —— 这是验收要点「编辑与预览内容一致」的落点；草稿初值靠 `key` 区分新旧，不用 effect 同步。
+  - **路由补上二级路径这一层**：`routes.tsx` 由精确 `path={item.code}` 改为「父路由 + `index` 子路由 + `MODULE_SUB_ROUTES` 的子路由」，`/workbench/notes` 因此可达；`WorkbenchPage` 加板块切换（`NavLink` 激活态驱动，不用组件状态）并按地址分派。
+  - **共享包新增 `parseNoteTagInput`**：中英文逗号 + 换行三种分隔符，拆完复用 `normalizeNoteTags`；超长标签不丢弃、只标红。
+  - **修掉一个空库死角**：编辑器原先只画在「列表非空」分支里，导致全新库上「新建」点了没反应、第一条纪要永远建不出来；改为可写角色一律渲染「左列表 + 右编辑器」，只读角色空库时才回落空态。
+  - 依赖新增 `react-markdown@10.1.0` 与 `remark-gfm@4.0.1`（无 postinstall，`onlyBuiltDependencies: []` 不动）。
+  - 测试：shared 新增 8 项（`parseNoteTagInput` 的分隔符与边界）；**前端本轮未加单测**（界面逻辑已下沉共享包或由传输/数据层承担，其余用浏览器 e2e 覆盖更划算）。
+  - 接口冒烟：`.tmp/note-smoke.mjs` 以真实 owner 跑通 23 项（含「标题 trim / 正文不 trim」「空 body 的 PATCH 被 400 拒」「不存在 id 返回 404」「重复删除返回 `removed:false`」），跑完已清理残留。
+  - **浏览器 e2e 未执行**：`test/e2e-auth.mjs` 已补上纪要整段断言，但要求空库，见第七节。
+
+> 详细判断见 `DEVELOPMENT-PLAN.md` 9.28 ~ 9.33。
 
 ---
 
 ## 四、进行中开发
 
-**无。** T3-05 已实现并提交（`5d1883a`），下一项 T3-06 Markdown 编辑与预览尚未启动，无运行中开发服务（API 8787 / 前端 5173 端口当前无监听）。
+**无。** T3-06 已实现并提交，下一项 T3-07 全文检索尚未启动。本轮验证期间短暂起过一个 API 进程（8787）用于接口冒烟，验完即停；前端 5173 未启动。**浏览器 e2e 未跑**，原因见第七节第 1 条。
 
 ---
 
 ## 五、未提交的代码改动
 
-**无。** T3-05 的代码 + 测试已提交（`5d1883a`），本轮文档回填随本次一并提交。提交后本地 `main` 领先 `origin/main`，推送见第八节 8.5（必须走本地代理）。
+**无。** T3-06 的代码 + 测试 + 文档回填随本次一并提交。提交后推送见第八节 8.5（必须走本地代理）。
 
 ---
 
@@ -145,12 +160,13 @@ projects/fanhe-work/
 
 ## 七、后续计划
 
-1. **下一项 T3-06 Markdown 编辑与预览（P0）**：编辑器与预览（含标签输入），届时才把纪要接上界面。任务定义见 `DEVELOPMENT-PLAN.md` 第三章（第 185 行），阶段验收见第七章。
-   - T3-06 可直接复用的现成结构：后端八条接口已就位（见第三节 T3-05）；前端传输层照 `lib/api.ts`（只拼地址、不认会话）+ `lib/launch.ts`（`withAccessToken` 包一层、拆信封、按服务端错误码分流）两层写法；界面三态走 `components/StateView.tsx`；本机界面偏好走 `lib/preferences.ts`；私有数据的会话感知组件可照 `components/launch/LaunchPanel.tsx` 的四态分派容器。
-   - 新增颜色令牌要遵守 `DEVELOPMENT-PLAN.md` 9.2 中的三条令牌约定（`:root` 与 `.dark` 各写一份，令牌唯一来源是 `index.css` 两层结构，不改 shadcn 组件源码）。
-2. 阶段三其余：T3-07 全文检索（P1）、T3-08 草稿自动保存（P1），均属纪要板块。
-3. 事件记录（T3-09 起）另开板块。
-4. 阶段四 Electron 外壳（含 `agent.ts` 搬入主进程、凭据换 `safeStorage`）。
+1. **先办一件收尾事：跑一次浏览器 e2e。** `test/e2e-auth.mjs` 已补上工作纪要整段断言，但它要求数据库处于未初始化状态（`users` 表为空），而 owner 已经建好 —— 跑之前要先清库，跑完要重建 owner 并更新被忽略的 `.tmp/owner-credentials.txt`。重置语句见该文件头部注释（本次已补 `notes`）。**这段断言目前是「已写未验证」**，不要当成已通过的覆盖。当前库里除 owner 账号之外没有任何业务数据（启动配置 0 / 纪要 0 / 历史 0），因此清库的代价很低。
+
+2. **下一项 T3-07 全文检索（P1）**：覆盖标题与正文，验收要点是中文关键词可命中。任务定义见 `DEVELOPMENT-PLAN.md` 第三章（第 186 行）。可直接复用的现成结构：八条纪要接口与 `lib/notes.ts` 已就位，检索入口落在 `NotesPanel` 的列表上方；`GET /api/notes` 的查询串目前只认 `tag` / `archived` / `from` / `to`，加检索要新增参数与对应的 service 查询。
+   - **中文检索的难点是分词，这一点要先验证再定方案。** PostgreSQL 的 `to_tsvector` 默认分词不认中文，可行的方向是 `pg_trgm` 模糊匹配或 `ILIKE '%关键词%'`。别直接照搬英文全文检索那套（`tsvector` + GIN）——那条路在中文上会得出「搜不到」的结论，而现象看起来像是索引没生效。
+3. T3-08 草稿自动保存（P1）：依赖 T3-06（现已具备）。落点是 `NoteEditor` 的草稿态加一层本机存储（照 `lib/preferences.ts` 的读写与静默降级），验收要点是「关闭后重进可恢复未提交内容」。
+4. 阶段三收尾：T3-07 与 T3-08 完成后开事件记录（T3-09 起）。事件板块需要**新增第六个迁移**建 `events` 与 `event_logs` 两张表（目前不存在），且 `event_logs` 是只追加不修改的流水，设计时要与既有实体表的 `createdAt` / `updatedAt` / `deletedAt` 三件套区分开。
+5. 阶段四 Electron 外壳（含 `agent.ts` 搬入主进程、凭据换 `safeStorage`）。
 
 ---
 
@@ -240,8 +256,8 @@ projects/fanhe-work/
 5. **依赖重建**：经入口 `ws-run.cmd pnpm install`（store 随盘符失效会要求重建，非交互需 `CI=true`）。
 6. **构建**：经入口 `pnpm --filter @fanhe/shared build` → `pnpm db:generate`。
 7. **首次初始化**：启动后走引导建超级管理员，或 `pnpm db:create-owner` 恢复 owner。
-8. **门禁确认**：`ws-run.cmd pnpm test` / `lint` / `typecheck` / `build` / `format:check`；`test` 预期 **219 项**（shared 50 + api 159 + web 10），其中 api 有 **5 项因库里已存在 owner 而设计性跳过**（`setup.test.ts` 的首次初始化用例，属正常，不是失效）；浏览器级 `pnpm --filter @fanhe/web test:e2e`（截至 T3-05 预期 62/62；T3-06 接上纪要界面后该数字会变）。
-9. **继续 T3-06 Markdown 编辑与预览**：任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 185 行，可复用结构见第七节。
+8. **门禁确认**：`ws-run.cmd pnpm test` / `lint` / `typecheck` / `build` / `format:check`；`test` 预期 **227 项**（shared 58 + api 159 + web 10），其中 api 有 **5 项因库里已存在 owner 而设计性跳过**（`setup.test.ts` 的首次初始化用例，属正常，不是失效）；浏览器级 `pnpm --filter @fanhe/web test:e2e` **必须先清库**（脚本要求 `users` 表为空），**截至 T3-06 尚未跑过** —— 脚本里的纪要段断言属于「已写未验证」。
+9. **先跑 e2e，再做 T3-07 全文检索**：前者是 T3-06 的收尾，做法与代价见第七节第 1 条；后者的任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 186 行，难点（中文分词）见第七节第 2 条。
 
 ---
 
