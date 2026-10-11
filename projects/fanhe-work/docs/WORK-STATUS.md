@@ -5,7 +5,7 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填） |
 > | 对应提交 | 代码基线 `b03ddb5`（**T4-01 Electron 外壳脚手架**；UI 集成代码基线为 `2576388`，阶段三为 `a5370b0`）；本文档定稿于 T4-01 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
 > | 当前阶段 | **阶段零至三已完成（38/50）；阶段四已开工：T4-01 Electron 外壳脚手架完成（1/4）。** 下一项是 T4-02 服务地址切换 |
 > | 最后验证 | 四道门禁全绿（**360 项**）；浏览器 e2e **149 项**全通过（UI 集成后实跑，0 失败）；外壳冒烟 **PASS**（渲染出界面、console 零错误） |
@@ -658,7 +658,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，**9.40 记录本次 UI 集成的实施判断**。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，**9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等）**。 |
+| `docs/PHASE-SUMMARY-2026-10-12.md` | **阶段性工作总结（换机检查点）**：总体进度、已完成 / 进行中 / 待办、文件与版本状态、换机衔接步骤、下一步 T4-02。**换机或新会话接手时先读本文，再读主文档。** |
 | `docs/UI-INTEGRATION-2026-10-11.md` | **本次 UI 集成记录（最终态）**：18 项导航信息架构与分层路径、两批边界、改动文件清单、四个关键对接点、五项用户裁决、版本号的展示与更新方式、验证结果与实跑中修掉的六个渲染层问题。 |
 | `docs/NEXT-TASK-PREP-阶段四-2026-10-11.md` | 阶段四开工准备（T4-01 开工清单；§八 为阶段三收口后的收尾更新）。**下一阶段执行前先读这份**。 |
 | `docs/NEXT-TASKS-2026-10-12.md` | 下一步任务清单：**N-01（回填本文档）+ 阶段四主线 T4-01 ~ T4-04**，含优先级、先后顺序、预期产出与并行的长期线。 |
@@ -717,6 +718,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 0x:xx | **T4-01 实施（Electron 外壳脚手架）** | `apps/desktop` 从 `.gitkeep` 落成最小工程：`src/{main,preload,server}.ts` + `scripts/{ensure-electron,launch}.mjs` + `test/server.test.mjs`。主进程在回环上起内置静态服务托管 `apps/web/dist` 并把 `/api/*` 反代到服务地址（含 SPA 回退）；`apps/web` 一行未改。四道门禁全绿：**360 项 0 失败**（shared 83 + api 197 含 5 跳过 + web 70 + **desktop 10**） |
 | 10-12 0x:xx | **T4-01 外壳冒烟验证** | `pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`）→ **PASS**：`渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0`；另以活体 API 验证 `/api/health` 经反代返回 200 |
 | 10-12 0x:xx | **T4-01 提交推送** | `b03ddb5`（代码，13 文件 +980/-8）；`main` 与 `dev` 同步 |
+| 10-12 01:4x | **阶段性工作总结（换机检查点）** | 新增 `docs/PHASE-SUMMARY-2026-10-12.md`：总体进度 39/50（约 78%）、已完成 / 进行中 / 待办、文件与版本状态（四 ref 同点 `948b20c`）、换机衔接步骤、下一步 T4-02。核对仓库干净、门禁 360 项、四 ref 一致后落盘并登记入 §10 |
 
 **§十一 新增/修改的关键文件（T4-01）**：`apps/desktop/package.json`（**新**，`@fanhe/desktop`，`productName: 梵禾 Work`，`main: dist/main.js`，`devDependencies.electron: 44.7.0`，脚本 build / typecheck / test / ensure-electron / start / dev / smoke）、`apps/desktop/tsconfig.json`（**新**，`module`/`moduleResolution: NodeNext`，**刻意不写 `"type": "module"` 以产出 CJS**）、`apps/desktop/src/server.ts`（**新**，内置静态服务：MIME 表、逐跳头与剥离头、`startStaticServer` / `serveStatic`（SPA 回退 + 405 + 越界 403）/ `sendFile`（哈希资源长缓存、index 不缓存）/ `proxyToService`（剥 `host`/`content-length`/`accept-encoding`））、`apps/desktop/src/main.ts`（**新**，主进程：`DIST_ROOT`、`SERVICE_URL`（`FANHE_SERVICE_URL`）、`IS_SMOKE`、`no-proxy-server`、`buildWindow`、`setWindowOpenHandler`/`will-navigate` 白名单、`runSmoke`）、`apps/desktop/src/preload.ts`（**新**，`contextBridge` 暴露 `fanheDesktop`）、`apps/desktop/scripts/ensure-electron.mjs`（**新**，幂等二进制自检）、`apps/desktop/scripts/launch.mjs`（**新**，摘 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否 `--no-sandbox`）、`apps/desktop/test/server.test.mjs`（**新**，10 项）、`apps/desktop/.gitkeep`（删）；`pnpm-workspace.yaml`（`onlyBuiltDependencies: [electron]`）、根 `package.json`（加 `postinstall`）、`eslint.config.js`（`apps/desktop` 进 Node 全局块）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` / `apps/api` / `packages/shared` 本轮一行未改。**
 
