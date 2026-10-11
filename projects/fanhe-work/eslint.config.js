@@ -76,9 +76,18 @@ export default [
     },
   },
 
-  // Server and shared code, plus the tool configuration files.
+  // Server, desktop shell and shared code, plus the tool configuration files.
+  // The desktop shell is Node-side code (Electron main and preload processes),
+  // so it needs the Node globals for the same reason apps/api does.
   {
-    files: ['apps/api/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}', '**/*.config.{js,mjs,ts}'],
+    files: [
+      'apps/api/**/*.{ts,tsx}',
+      'apps/desktop/**/*.{ts,tsx}',
+      'apps/desktop/scripts/**/*.mjs',
+      'apps/desktop/test/**/*.mjs',
+      'packages/**/*.{ts,tsx}',
+      '**/*.config.{js,mjs,ts}',
+    ],
     languageOptions: {
       globals: { ...globals.node },
     },

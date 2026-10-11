@@ -12,6 +12,7 @@
     "dev:api": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api dev",
     "dev:all": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/web --filter @fanhe/api --parallel dev",
     "dev:shared": "pnpm --filter @fanhe/shared dev",
+    "postinstall": "node apps/desktop/scripts/ensure-electron.mjs",
     "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm --filter @fanhe/shared build && pnpm -r --if-present run typecheck",
     "test": "pnpm -r --if-present run test",

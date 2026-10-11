@@ -1,0 +1,21 @@
+{
+  "name": "@fanhe/desktop",
+  "productName": "梵禾 Work",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --experimental-strip-types --test \"test/*.test.mjs\"",
+    "ensure-electron": "node scripts/ensure-electron.mjs",
+    "start": "node scripts/launch.mjs",
+    "dev": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/launch.mjs",
+    "smoke": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/launch.mjs --smoke"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "electron": "44.7.0",
+    "typescript": "^6.0.3"
+  }
+}

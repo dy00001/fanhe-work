@@ -2,9 +2,20 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-# pnpm 10 blocks dependency lifecycle scripts by default and that default is
-# kept here on purpose. The esbuild binary ships as the optional platform
-# package @esbuild/win32-x64, so its postinstall only re-validates a version
-# that is already correct. Allowing it caused the install to abort with EBUSY
-# while spawning a child process, so the script stays blocked.
-onlyBuiltDependencies: []
+# pnpm 10 blocks dependency lifecycle scripts by default, so the field below is
+# an allow-list: only the packages named here may run their install scripts.
+#
+# esbuild is deliberately NOT in the list. Its binary ships as the optional
+# platform package @esbuild/win32-x64, so its postinstall only re-validates a
+# version that is already correct. Allowing it caused the install to abort with
+# EBUSY while spawning a child process, so its script stays blocked.
+#
+# electron is listed because its binary download is a lifecycle-script concern
+# and must not be blocked if a version ships one. Note that 44.7.0 ships **no**
+# install script at all (its tarball has no `scripts.postinstall`; the download
+# lives in `install.js`, exposed only as the `install-electron` bin). So this
+# entry is currently inert, and the binary is fetched by an explicit step that
+# runs on every install and self-heals when missing — see
+# apps/desktop/scripts/ensure-electron.mjs.
+onlyBuiltDependencies:
+  - electron

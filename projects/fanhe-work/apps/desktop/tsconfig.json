@@ -1,0 +1,19 @@
+{
+  // 与 apps/api 同一套设置，唯一的差别在 package.json：那边有 `"type": "module"`
+  // 所以 NodeNext 产出 ESM，这边没有，于是同一份配置产出 CommonJS。
+  //
+  // 桌面外壳刻意用 CommonJS：Electron 的主进程与**沙箱化的预加载脚本**都以 CJS
+  // 为默认形态（ESM 预加载要求关掉沙箱，代价比收益大），而 T4-03 之后预加载要
+  // 承担代理调用与凭据存储的 IPC，保持沙箱开启更稳妥。
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true
+  },
+  "include": ["src"]
+}
