@@ -4,6 +4,13 @@
 > 深度设计、架构判断与逐任务验收以 `DEVELOPMENT-PLAN.md`（第九章）为准；环境踩坑细节以 `.workbuddy-ai/memory/ENVIRONMENT.md` 为准。本文是它们的**索引与当日快照**。
 >
 > 生成时间：2026-10-11。记录时工作树干净、与 `origin/main` 同步（领先 0）。
+>
+> 更新 2026-10-11 14:45。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
+> 其一，远端仓库已由私有改为公开，绑定与两条访问链路见 `WORKSPACE-BINDING.md`。
+> 其二，新增 `dev` 开发分支，本地已建立跟踪，落后 `main` 4 个提交。
+> 其三，数据库四个迁移全部应用，九张业务表齐备。
+> 其四，四道门禁本日实跑，`test`、`lint`、`typecheck`、`format:check` 全部通过。
+> 其五，`node_modules.old` 此前未被忽略规则覆盖，会污染 lint 与 format，已修复。
 
 ---
 
@@ -11,7 +18,7 @@
 
 **梵禾 Work** 是一个桌面端个人工作台（实验版），按「账号权限 → 主框架 → 个人工作台三板块（纪要 / 事件 / 启动）→ 桌面外壳」分阶段实现。
 
-- **仓库**：整个工作空间根 `E:/fanhe Work`（U 盘可移动）整体推 `main`，远端 `https://github.com/dy00001/fanhe-work`（私有），凭据走 GCM。
+- **仓库**：整个工作空间根（可移动介质）整体推 `main`，远端 `https://github.com/dy00001/fanhe-work`（公开），凭据走 GCM。
 - **提交身份**：`梵禾 <dev@fanhe.local>`（仅本仓库局部配置）。
 - **项目目录**：`projects/fanhe-work/` 是代码主体；`infra/` 是工作空间机制；`.workbuddy-ai/` 被 Git 忽略（本地记忆，不随仓库走）。
 
