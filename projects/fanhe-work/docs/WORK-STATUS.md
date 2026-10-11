@@ -6,7 +6,7 @@
 > | 项 | 值 |
 > | -- | -- |
 > | 生成时间 | 2026-10-11 17:55 |
-> | 对应提交 | `3c402fa`（代码为 `95bdcf2`），`main` 与 `dev` 同在此提交，工作树干净 |
+> | 对应提交 | 代码基线 `95bdcf2`；本文档定稿于 `db7bc77`（当时 `main` 与 `dev` 在该提交对齐、工作树干净）。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
 > | 当前阶段 | 阶段三进行中，**7/12**（T3-01 ~ T3-07 已完成），下一项 T3-08 |
 > | 最后验证 | 四道门禁全绿（238 项），浏览器 e2e 85 项全通过 |
 >
@@ -127,10 +127,13 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - [ ] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **前四项均已完成并过浏览器验证**，只差「草稿恢复」（T3-08），故整项不勾
 - [ ] 第四~六项：事件列表分组与勾选切换、撤销入口、已完成详情 —— 事件板块未开始
 
-### 2.3 最近提交
+### 2.3 最近提交（截至本文档定稿）
+
+> 下表是截至文档定稿时的快照。定稿之后若只有对本文档本身的文档类提交，不会补进此表 —— 想知道最新提交直接 `git log --oneline -10`。
 
 | 提交 | 说明 |
 | -- | -- |
+| `db7bc77` | docs(交接): 重写为单文件自包含的完整工作总结与换机续接指南（本文档定稿于此） |
 | `3c402fa` | docs(阶段三): 回填 T3-07 实施判断与验证结果 |
 | `95bdcf2` | feat(阶段三): T3-07 纪要全文检索 |
 | `122931d` | docs(阶段三): 回填 T3-06 浏览器 e2e 验证结果并修正实施判断 |
@@ -562,5 +565,6 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 17:2x | T3-07 实施 | shared 63 + api 165 + web 10 = 238 项；e2e 新增 7 项 |
 | 17:4x | T3-07 浏览器验证 | 首跑崩于主题菜单时序（与本次改动无关，已修 `openThemeMenu`）；换 `E2E_CDP_PORT=19222` 后 **85/85 全通过** |
 | 17:5x | 提交推送 | `95bdcf2`（代码）+ `3c402fa`（文档），`main` 与 `dev` 同步；库回基线，端口释放 |
+| 18:0x | 文档重写与存档 | `WORK-STATUS.md` 整体重写为十一节的单文件交接主文档并推送（`db7bc77`），`main` 与 `dev` 同步 |
 
 **本次新增/修改的关键文件**：`packages/shared/src/note.ts`、`apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/NotesPanel.tsx`、`apps/web/test/e2e-auth.mjs`（新增 `openThemeMenu` 与 `E2E_CDP_PORT`）、三个测试文件、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
