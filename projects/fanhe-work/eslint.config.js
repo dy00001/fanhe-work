@@ -11,6 +11,9 @@ export default [
     ignores: [
       '**/dist/**',
       '**/node_modules/**',
+      // 依赖重建遗留的备份目录。它只含第三方包，名字却不匹配 node_modules，
+      // 于是被 lint 与 format 扫到，产生大量与源码无关的报错。
+      '**/node_modules.old/**',
       // Prisma 生成的客户端。机器产物，改动它的格式没有任何意义，
       // 而且下次 generate 会整体覆盖。
       '**/src/generated/**',
