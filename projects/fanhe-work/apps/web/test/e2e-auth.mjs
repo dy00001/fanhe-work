@@ -111,6 +111,62 @@ const NOTE_SEARCH = {
 const NOTE_ROW_TEXTS = `[...document.querySelectorAll('main ul li button')].map((item) => item.textContent)`
 
 /**
+ * 草稿自动保存验证用的内容（T3-08）。
+ *
+ * 名字同样带 `zz_e2e_` 前缀，与别的验证数据互不包含 —— 行定位用的是 `includes`，
+ * 名字互相包含会让「找到的那一行」变得取决于 DOM 顺序。
+ *
+ * `body` 里刻意放一段多行 Markdown：草稿存的是原文而不是渲染结果，因此正文能原样
+ * 回来才说明存对了（若哪天有人改成存 HTML，这里会立刻失败）。
+ */
+const NOTE_DRAFT = {
+  title: 'zz_e2e_草稿',
+  body: '# 草稿标题\n\n还没提交的正文。\n',
+}
+
+/**
+ * 清掉本机所有草稿槽，返回清掉几个。
+ *
+ * **只动 `fanhe-work.draft.note.` 前缀。** 会话令牌与主题偏好都躺在这同一份
+ * localStorage 里，按前缀外扫会把它们一起删掉，后面那些用例会以「莫名其妙要重新
+ * 登录」「主题变成浅色」这类与草稿毫无关系的现象失败。
+ */
+function clearDraftKeysFinder() {
+  return `(() => {
+    const prefix = 'fanhe-work.draft.note.'
+    const keys = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key !== null && key.startsWith(prefix)) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+    return keys.length
+  })()`
+}
+
+/** 某个草稿槽的原始值，没有则为空串 —— 用来等一次自动保存真的落了盘。 */
+function draftFinder(noteId) {
+  const key = `fanhe-work.draft.note.${noteId ?? 'new'}`
+  return `(window.localStorage.getItem(${JSON.stringify(key)}) ?? '')`
+}
+
+/** 当前有几个草稿槽。用来断言「改了又改回原样之后草稿被清掉」。 */
+function draftCountFinder() {
+  return `(() => {
+    const prefix = 'fanhe-work.draft.note.'
+    let count = 0
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index)
+      if (key !== null && key.startsWith(prefix)) count += 1
+    }
+    return count
+  })()`
+}
+
+/** 页面上有没有「已恢复上次未保存的内容」这条提示。 */
+const DRAFT_BANNER_VISIBLE = `document.querySelector('main').innerText.includes('已恢复上次未保存的内容')`
+
+/**
  * 一条形态合法但**一定不存在**的路径，用来验证「路径失效」的提示与重新指定入口。
  *
  * 用盘符写法而不是临时目录：客户端的形态校验只认盘符、UNC 与 `/` 开头的路径，而它
@@ -2251,6 +2307,214 @@ async function main() {
       waitFor(`document.querySelector('main').innerText.includes('还没有纪要')`, 10000, '回到空态'),
     )
     record('检索验证用的两条纪要已清理，回到空态', true, '')
+
+    // 9h. 草稿自动保存（T3-08）。
+    //
+    //     验收要点是「关闭后重进可恢复未提交内容」。这一段**必须在浏览器里跑**：
+    //     接口层的用例碰不到 localStorage，也复现不了「打完最后一个字就关掉页面」
+    //     那个时序 —— 那时防抖还没到期，靠的是页面隐藏时的立即落盘。
+    //
+    //     其中第 7 项**只有这里拦得住**，别处都看不见：提交成功时父组件先换选中项、
+    //     编辑器随之重挂，而旧实例的卸载 flush 是在重挂**之后**才执行的；那一刻它
+    //     手上的 `note` 还是 null，「有没有改动」恒为真，于是刚提交的内容被写回
+    //     「新建」槽 —— 表现是「新建 → 提交 → 再点新建」时，编辑器里躺着上一条已经
+    //     存过的纪要。单测与类型检查在这个错误面前是全绿的。
+    await evaluate(client, clearDraftKeysFinder())
+    record('草稿验证前置：本机草稿槽已清空', true, '')
+
+    // 第一件：新建态写一半，等防抖到期自动落盘，再整页重载。
+    await evaluate(client, clickMainButton('新建'))
+    await evaluate(client, fillInput('#note-title', NOTE_DRAFT.title))
+    await evaluate(client, fillInput('#note-content', NOTE_DRAFT.body))
+    await evaluate(
+      client,
+      waitFor(
+        `${draftFinder(null)}.includes(${JSON.stringify(NOTE_DRAFT.title)})`,
+        8000,
+        '防抖后草稿落盘',
+      ),
+    )
+    record('输入停下后，未提交的内容自动存进本机', true, '')
+    await screenshot(client, '9h-notes-draft-saving')
+
+    const draftReload = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await draftReload
+    // 重载后要走一次「初始化状态 + 静默续期」的往返，编辑器不是立刻就在的。
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') !== null`, 20000, '重载后编辑器挂回'),
+    )
+    const restoredTitle = await evaluate(client, `document.querySelector('#note-title').value`)
+    const restoredBody = await evaluate(client, `document.querySelector('#note-content').value`)
+    record(
+      '重载后未提交的标题与正文都被恢复',
+      restoredTitle === NOTE_DRAFT.title && restoredBody === NOTE_DRAFT.body,
+      `标题「${restoredTitle}」`,
+    )
+    record(
+      '恢复时给出提示条，说明这是上次未保存的内容',
+      (await evaluate(client, DRAFT_BANNER_VISIBLE)) === true,
+      '',
+    )
+    await screenshot(client, '9h-notes-draft-restored')
+
+    // 第二件：点「丢弃草稿」回到库里的版本。这里是新建态，库里没有这一条，因此应当
+    // 回到空白，且提示条随之消失 —— 留着提示条会让人以为内容还在草稿里。
+    await evaluate(client, clickMainButton('丢弃草稿'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('#note-title').value === '' && ${DRAFT_BANNER_VISIBLE} === false`,
+        8000,
+        '丢弃后回到库里的版本',
+      ),
+    )
+    record('点「丢弃草稿」后编辑器回到库里的版本，提示条消失', true, '')
+
+    // 第三件：打完字**立刻**关掉页面，不等防抖。这一条与第一件验的是两条不同的路径：
+    // 那一条是定时保存，这一条只有页面隐藏时的立即落盘能救。
+    await evaluate(client, fillInput('#note-title', NOTE_DRAFT.title))
+    await evaluate(client, fillInput('#note-content', NOTE_DRAFT.body))
+    const abruptReload = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await abruptReload
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('#note-title')?.value === ${JSON.stringify(NOTE_DRAFT.title)}`,
+        20000,
+        '没等到防抖就重载后仍能恢复',
+      ),
+    )
+    record('打完字立刻关掉页面也不丢（页面隐藏时立即落盘）', true, '')
+
+    // 第四件：切板块往返。编辑器会被卸载重挂，靠的是卸载时落盘。
+    await evaluate(client, fillInput('#note-content', `${NOTE_DRAFT.body}\n## 切板块前写的\n`))
+    await evaluate(client, clickNavByLabel('一键登录通道'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') === null`, 10000, '离开纪要板块'),
+    )
+    await evaluate(client, clickNavByLabel('工作纪要'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('#note-title')?.value === ${JSON.stringify(NOTE_DRAFT.title)}`,
+        15000,
+        '切回纪要后内容还在',
+      ),
+    )
+    record('切到别的板块再切回来，未提交的内容还在（卸载时落盘）', true, '')
+
+    // 第五件：提交成功之后，草稿要清掉、重进要**不**恢复。
+    await evaluate(client, clickMainButton('丢弃草稿'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title').value === ''`, 8000, '清场回到空白'),
+    )
+    await evaluate(client, fillInput('#note-title', NOTE_DRAFT.title))
+    await evaluate(client, fillInput('#note-content', NOTE_DRAFT.body))
+    await evaluate(client, clickMainButton('创建'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('已创建')`, 10000, '创建提示'),
+    )
+    await evaluate(
+      client,
+      waitFor(
+        `[...document.querySelectorAll('main ul li button')].some((item) => item.textContent.includes(${JSON.stringify(NOTE_DRAFT.title)}))`,
+        10000,
+        '列表出现草稿验证用的那一条',
+      ),
+    )
+    const draftAfterCreate = await evaluate(client, draftFinder(null))
+    record(
+      '提交成功后本机草稿被清掉',
+      draftAfterCreate === '',
+      draftAfterCreate === '' ? '' : String(draftAfterCreate).slice(0, 40),
+    )
+
+    const submitReload = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await submitReload
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') !== null`, 20000, '重载后编辑器挂回'),
+    )
+    record(
+      '保存成功的内容重进后不弹「恢复」提示（显示的是库里的值）',
+      (await evaluate(client, DRAFT_BANNER_VISIBLE)) === false,
+      '',
+    )
+
+    // 第六件：这一条专打那个只有浏览器能复现的坑。提交成功 → 父组件换选中项 → 编辑器
+    // 重挂 → 旧实例的卸载 flush 在重挂之后跑，把刚提交的内容写回「新建」槽。
+    //
+    // 用「读值 + 断言」而不是「等待某个条件成立」：条件不成立时后者会超时抛错、把整轮
+    // 脚本打断，而这一条恰恰是「出问题时也必须把结论打印出来」的那种。
+    await evaluate(client, clickMainButton('新建'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') !== null`, 8000, '新建态编辑器'),
+    )
+    await sleep(300)
+    const newTitle = await evaluate(client, `document.querySelector('#note-title').value`)
+    const newBody = await evaluate(client, `document.querySelector('#note-content').value`)
+    record(
+      '新建 → 提交 → 再点新建：编辑器是空的，没有带出上一条已提交的内容',
+      newTitle === '' && newBody === '',
+      `标题「${newTitle}」`,
+    )
+
+    // 第七件：改了又改回原样，草稿要清掉 —— 否则重进时会弹一次「已恢复未保存的内容」，
+    // 而恢复出来的东西与库里一模一样，纯噪音。
+    await evaluate(client, clickNoteRow(NOTE_DRAFT.title))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('#note-title').value === ${JSON.stringify(NOTE_DRAFT.title)}`,
+        10000,
+        '编辑器载入刚创建的那一条',
+      ),
+    )
+    await evaluate(client, fillInput('#note-content', `${NOTE_DRAFT.body}\n改一下\n`))
+    await evaluate(client, waitFor(`${draftCountFinder()} === 1`, 8000, '改动后草稿落盘'))
+    await evaluate(client, fillInput('#note-content', NOTE_DRAFT.body))
+    await evaluate(client, waitFor(`${draftCountFinder()} === 0`, 8000, '改回原样后草稿被清掉'))
+    record('把内容改回与库里一致之后，草稿槽被清掉而不是留着', true, '')
+
+    const revertReload = client.once('Page.loadEventFired')
+    await client.send('Page.reload', { ignoreCache: true })
+    await revertReload
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#note-title') !== null`, 20000, '重载后编辑器挂回'),
+    )
+    record(
+      '改了又改回原样，重进不出现恢复提示',
+      (await evaluate(client, DRAFT_BANNER_VISIBLE)) === false,
+      '',
+    )
+
+    // 清场。把验证用的那条纪要删掉（纪要是软删除，真正的清理靠数据库，见文件头部），
+    // 本机草稿槽也清回基线 —— 残留会让下一次重跑这一段时看到上一次的内容。
+    await evaluate(client, clickMainButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('[role="dialog"]') !== null`, 5000, '删除确认框'),
+    )
+    await evaluate(client, clickDialogButton('删除'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('main').innerText.includes('还没有纪要')`, 10000, '回到空态'),
+    )
+    const clearedDrafts = await evaluate(client, clearDraftKeysFinder())
+    record(
+      '草稿验证用的纪要已删除，本机草稿槽清回基线',
+      clearedDrafts === 0,
+      `还剩 ${clearedDrafts} 个草稿槽`,
+    )
 
     // 10. 渲染层无错误。这是本脚本存在的理由。
     record(
