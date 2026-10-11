@@ -5,13 +5,13 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填） |
-> | 对应提交 | 代码基线 `a7069de`（T3-10 收口）；本文档定稿于 `db7bc77`，之后只做回填。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
-> | 当前阶段 | 阶段三进行中，**10/12**（T3-01 ~ T3-10 已完成），下一项 T3-11 |
-> | 最后验证 | 四道门禁全绿（**306 项**）；浏览器 e2e **118 项**全通过（T3-10 本轮实跑） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填） |
+> | 对应提交 | 代码基线 `a3c08bf`（T3-11 收口）；本文档定稿于 `db7bc77`，之后只做回填。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
+> | 当前阶段 | 阶段三进行中，**11/12**（T3-01 ~ T3-11 已完成），下一项 T3-12 |
+> | 最后验证 | 四道门禁全绿（**311 项**）；浏览器 e2e **135 项**全通过（T3-11 本轮实跑，一次通过） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
-> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.37），本文已把结论汇总，需要细节时再翻过去。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.38），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
@@ -19,7 +19,7 @@
 
 **这个项目是什么**：一个桌面端个人工作台（实验版），用来管自己的软件启动通道、工作纪要、事件记录，后面会包成 Electron 外壳、并支持局域网/远程两种服务地址。
 
-**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」与「工作纪要」两个板块已经完成并可用；工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。**纪要链到此收口。** 「事件记录」板块的模型、接口与**列表视图**也都已就位（`events` 与 `event_logs` 两张表、八条接口、状态变更一律追加流水），界面上能做到未完成与已完成分组、已完成默认折叠、行内四要素（勾选框 / 标签 / 截止时间 / 优先级）、检索与增删改；**勾选切换与撤销（T3-11）、已完成详情面板（T3-12）还没做**。再往后是桌面外壳。
+**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」与「工作纪要」两个板块已经完成并可用；工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。**纪要链到此收口。** 「事件记录」板块的模型、接口、**列表视图与勾选切换**也都已就位（`events` 与 `event_logs` 两张表、八条接口、状态变更一律追加流水），界面上能做到未完成与已完成分组、已完成默认折叠、行内四要素（勾选框 / 标签 / 截止时间 / 优先级）、检索与增删改，**勾一下即完成、再点提示条上的「撤销」即恢复**（乐观更新、失败回滚都在）；**只剩已完成详情面板（T3-12）没做**。再往后是桌面外壳。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -113,7 +113,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段零 | 目录骨架（T0-01 ~ T0-07） | ✅ 完成 |
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾） |
-| 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | 🔄 **10/12**：T3-01 ~ T3-10 已完成；**纪要链收口**、**事件链过半（模型 / 接口 / 列表视图已就位）**，下一项 T3-11；勾选切换与详情面板未做 |
+| 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | 🔄 **11/12**：T3-01 ~ T3-11 已完成；**纪要链收口**、**事件链只剩详情面板（T3-12）** |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ⬜ 未开始 |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
@@ -125,7 +125,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - [x] 第一项：启动配置可新增、编辑、排序，可一键唤起
 - [x] 第二项：路径失效有提示与重新指定入口（T3-04）
 - [x] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **五项全部完成并逐条过浏览器验证**（编辑预览 / 标签 / 置顶 T3-06，检索 T3-07，**草稿恢复 T3-08**）
-- [ ] 第四~六项：事件列表分组与勾选切换、撤销入口、已完成详情 —— **第四项前半句已完成**（分组、已完成默认折叠、行内四要素在 T3-10 落地并逐条过浏览器验证），后半句（勾选切换乐观更新可回滚）属 T3-11；第五、六项属 T3-11 / T3-12，**故整组仍不勾**
+- [x] 第四项：事件列表分组正确，勾选切换乐观更新可回滚 —— 前半句 T3-10（分组、已完成默认折叠、行内四要素），后半句 T3-11（乐观更新与失败回滚，e2e 用「把切换请求拖后 1.2 秒、断言回话之前界面已改」与「服务端已删仍照样先勾上」两条把「乐观」与「等回话」分开）
+- [x] 第五项：撤销入口可恢复状态并清除完成时间（T3-11；e2e 既查界面（入口出现与收起、该行回到未完成组），也经接口查服务端 `status` 回 `todo`、`completedAt` 与 `completedBy` 一起变 `null`）
+- [ ] 第六项：已完成详情展示耗时、操作人与变更历史 —— 属 T3-12
 
 ### 2.3 最近提交（截至本文档定稿）
 
@@ -133,6 +135,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `a3c08bf` | feat(阶段三): T3-11 勾选切换与撤销（乐观更新 + 失败回滚 + 撤销入口） |
+| `f77c563` | docs(阶段三): 回填 T3-10 实施判断与验证结果 |
 | `a7069de` | feat(阶段三): T3-10 事件列表视图（分组折叠 + 行内四要素 + 事件检索与增删改） |
 | `d252107` | feat(阶段三): T3-09 事件模型与接口（第六个迁移 + 八条接口） |
 | `fcfc7aa` | feat(阶段三): T3-08 草稿自动保存 |
@@ -150,10 +154,10 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **306 项，0 失败** | `packages/shared` **69** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **40**（T3-10 起由 23 增至 40，新增 17 项事件展示规则单测） |
+| `pnpm test` | **311 项，0 失败** | `packages/shared` **69** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **45**（T3-10 起由 23 → 40，T3-11 再 → 45，新增 5 项 `applyEventStatus` 用例） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
-| 浏览器 e2e | **118 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 T3-10 时的结果**（原 98，事件段新增 20 项）。首轮 115/116，唯一那条失败是断言写错（事件乙吃的是默认优先级「普通」而断言期望「低」），修法见 4.1 与 9.37 |
+| 浏览器 e2e | **135 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 T3-11 时的结果**（原 118，本轮新增 17 项），**一次通过、无首轮失败**。T3-10 那次的首轮 115/116 与修法见 9.37（与本轮无关，但归因过程值得一读） |
 | 数据库 | 6 个迁移、**12 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行（跑完 e2e 已清库并重建 owner） |
 
 ---
@@ -195,9 +199,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **T2-06 折叠偏好记忆**：`lib/preferences.ts` 读写本机偏好（键 `fanhe-work.ui.sidebar-collapsed`），读写失败静默降级。
 - **T2-07 主题令牌**：`index.css` 新增 `@custom-variant dark` 与 `.dark` 块（覆盖 `:root` 全部颜色原始值），`index.html` 内联脚本在样式生效前定下主题初值，`lib/theme.ts` 提供三档（含跟随系统）与系统配色变化监听。
 
-### 3.4 阶段三 · 个人工作台（T3-01 ~ T3-10，进行中）
+### 3.4 阶段三 · 个人工作台（T3-01 ~ T3-11，进行中）
 
-**已经能用的三块：启动通道、工作纪要、事件记录（列表与增删改）。事件板块还剩勾选切换与详情面板。**
+**已经能用的三块：启动通道、工作纪要、事件记录（列表、增删改与勾选切换）。事件板块只剩详情面板。**
 
 #### 启动通道（T3-01 ~ T3-04）
 
@@ -215,34 +219,42 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 > 界面入口：`/workbench` 是启动通道，`/workbench/notes` 是工作纪要，`/workbench/events` 是事件记录，靠 `WorkbenchPage` 顶部的板块切换按地址分派。
 
-#### 事件记录（T3-09 模型与接口、T3-10 列表视图已完成；**勾选切换与详情面板未做**）
+#### 事件记录（T3-09 ~ T3-11 已完成；**只剩详情面板 T3-12**）
 
 - **T3-09 模型与接口**：第六个迁移 `20261011132819_add_events` 建起 **`events`** 与 **`event_logs`** 两张表，八条路由（列表 / 标签清单 / 单条 / 状态变更历史 / 新增 / 修改 / 状态切换 / 删除），统一挂 `personal.event.read` 与 `personal.event.write`。
 - **T3-10 列表视图**：`components/events/` 四件（`EventsPanel` 四态分派容器、`EventList` 分组与折叠、`EventRow` 行内四要素、`EventFormDialog` 新增 / 编辑表单）＋ `lib/event-display.ts`（展示规则的纯函数）＋ `lib/events.ts`（会话感知数据层）＋ `lib/api.ts` 六条传输函数；`WorkbenchPage` 加第三块板块，`routes.tsx` 的模块子路由补 `events`。
 - **界面上现在能做到什么**：未完成与已完成分两组（**已完成默认折叠**，组头带条数）、每行左侧勾选框、中间标题与最多三个标签、右侧截止时间与优先级徽标；**已过截止时间且未完成**的那条标出「已逾期 · …」；检索走与纪要同一条链路（防抖 250ms、丢弃过期响应、空态分「库里没有」与「没搜到」两种说法）；新增 / 编辑 / 删除都在，写完一律重拉列表（**排序在服务端，界面不自己排**）。
-- **勾选框本轮是只读的**：它如实反映状态（已完成的是勾上的），但 `disabled`、不接受点击。**这是有意留白** —— 乐观更新、失败回滚与可撤销入口是 T3-11 的范围，提前做掉会让那一轮没有干净的接线点。用 `disabled:opacity-100` 抵消组件自带的半透明，免得整块列表看起来像坏了。
+- **T3-11 勾选切换与撤销**：点行内勾选框即完成，再点即取消完成；两条路都走 `PUT /api/events/:id/status`，**后端与共享包一行未改**（T3-09 那条路径早就把「写完成时刻与完成人」「三列一起清空」「同事务追加流水」做完了）。改动集中在三处：`EventRow` 的勾选框去掉 `disabled` 并接上 `onCheckedChange`；`lib/event-display.ts` 增 `applyEventStatus` 纯函数（乐观改本地那一条）；`EventsPanel` 增 `changeStatus`、`switching` 串行化与提示条上的**撤销入口**。
+- **勾选框现在可点了，两种「点不动」分得很开**：只读角色（没有 `PERSONAL_EVENT_WRITE`）永远点不动，这种禁用补 `disabled:opacity-100` —— 一整片半透明的勾选框看起来像列表坏了，而实际只是没权限；切换中的临时禁用保留组件自带的半透明，那正好表达「正在处理」。判据按 `canWrite` 取而不是按 `disabled` 取。
+- **乐观更新只改 `status`，不伪造 `completedAt` / `completedBy`**：那两个是服务端的时间与身份快照，而列表这一版也不展示它们（展示要给 T3-12）。乐观阶段写一个「本地现在」进去，界面上会短暂出现一个可能偏掉的时刻，而权威值紧随其后被重拉覆盖。
+- **成功之后仍然重拉列表**：乐观值负责「点下去到响应到达之间」那段空窗（完成一条会让整行跳进默认折叠的组、也就是从眼前消失），而**顺序始终来自服务端那一次重拉** —— 界面从头到尾没有定义过任何顺序。这条不违背 9.37 立的规矩，而是它的一个用例。
+- **失败的回滚是「重新对齐服务端」，不是手工改回去**：切换失败时的正确状态只有服务端知道（可能刚被别处删掉、可能令牌刚失效），所以失败路径做的是「提示 + 重拉」，直接复用 `eventFailureExit` 的 404 / 其余分流。
+- **切换是串行的**（`EventsPanel` 的 `switching: string | null`）：同一时刻只允许一条在飞，否则先回来的那次重拉会把另一条还没落库的乐观值覆盖成旧值，表现为「另一行的勾选框自己弹回去、过一会儿又勾上」。串行化期间所有勾选框都进 `disabled`，**不是「能点但被静默忽略」**。
+- **撤销入口只在「刚标成完成」之后给，且不自动消失**：那一步会把行从眼前拿走，点错了当场看不见它去了哪 —— 这是唯一真正需要反悔入口的方向；反方向的「恢复」是把行放回眼前，做错了再点一次即可。不设定时器是因为「定时消失」= 「用户还没读完入口就没了」，而且会引入一个测试必须等待的时钟。撤销之后也不再给「重做」。
+- **这张表与纪要怎么区分**：`events` 是实体表（带 `createdAt` / `updatedAt` / `deletedAt`），`event_logs` 是**只追加流水**，**只有 `createdAt`** —— 给它加 `updatedAt` 会让人以为这行改过，而它的价值就在于「记的是当时发生的事」。
 - **这张表与纪要怎么区分**：`events` 是实体表（带 `createdAt` / `updatedAt` / `deletedAt`），`event_logs` 是**只追加流水**，**只有 `createdAt`** —— 给它加 `updatedAt` 会让人以为这行改过，而它的价值就在于「记的是当时发生的事」。
 - **状态是怎么存的**：`events` 上的 `status` / `completedAt` / `completedById` / `completedByName` 是**可重建的冗余**，权威来源在 `event_logs` 里；每次 `todo ↔ done` 的流转都**追加一行**（`created` / `completed` / `reopened`），从不修改已有那行，两件事在**同一个事务**里。撤销完成是追加 `reopened`，不是删掉 `completed`。
 - **不写日志的那一类**：编辑标题 / 描述 / 标签 / 优先级**刻意不写日志** —— 详情面板要回答的是「状态怎么变的」，混进编辑记录就变成另一份东西了。因此 `PATCH` 的 schema 里**没有 `status` 项**，改状态只能走 `PUT /api/events/:id/status`。
-- **相关规则位置**：取值域与传输类型在 `packages/shared/src/event.ts`，读写与事务在 `apps/api/src/event/events.ts`，接口在 `apps/api/src/routes/events.ts`，展示规则在 `apps/web/src/lib/event-display.ts`，界面在 `apps/web/src/components/events/`。判断见 9.36 与 9.37。
+- **相关规则位置**：取值域与传输类型在 `packages/shared/src/event.ts`，读写与事务在 `apps/api/src/event/events.ts`，接口在 `apps/api/src/routes/events.ts`，展示规则与乐观改状态的纯函数在 `apps/web/src/lib/event-display.ts`，界面在 `apps/web/src/components/events/`。判断见 9.36、9.37 与 9.38。
 
 ---
 
 ## 四、待办事项
 
-### 4.1 下一项：T3-11 勾选切换与撤销（P0，可直接开工）
+### 4.1 下一项：T3-12 已完成详情面板（P0，可直接开工）
 
-- **任务定义**：列出行内勾选后的**乐观更新、失败回滚、可撤销入口**。**验收要点：切换后写入完成时间与操作人，撤销可恢复。**
-- **依赖**：T3-10（已具备）。
-- **接线点已经留好**：`EventRow.tsx` 里的 `Checkbox` 现在是 `disabled` 的、且 `checked={done}` 由 props 算出来 —— 把 `disabled` 去掉、接上 `onCheckedChange` 即可，行结构与样式一行都不用动。`disabled:opacity-100` 那条类名届时可以撤掉（它只是为只读态服务的）。
-- **接口已就绪，不用动后端**：`PUT /api/events/:id/status` 接受 `{ status }`，服务端负责写 `completedAt` / `completedById` / `completedByName` 并**在同一事务里追加 `event_logs`**；返回的是更新后的事件。`lib/events.ts` 里目前**没有**这个方法的封装（T3-10 刻意只封装了列表 / 标签 / 新增 / 修改 / 删除五条），要补一个 `setEventStatus`。
-- **三件必须想清楚的事**：① **乐观更新**要就地翻本地那一份 `status`，否则用户点完要等一个往返才看到勾上；② **失败回滚**要把它翻回去并给出说法 —— 注意回滚不能靠「重拉列表」，那是另一个失败点，要直接恢复被改的那一条；③ **撤销入口**是一条带超时的提示（`EventsPanel` 已经有 `notice` 这一套，可复用），超时后不再可撤。撤销本身也是一次接口调用（`reopened`），不是把本地状态翻回去就算完。
-- **别顺手做掉 T3-12**：点标题打开详情面板、展示耗时 / 操作人 / 变更历史是 T3-12 的范围。
-- **别踩的坑**：**不要给 `events` 表加「乐观更新专用」的本地字段或缓存层** —— 列表是权威副本，写完重拉即可（见 `EventsPanel` 顶部注释）。另外回滚文案要与「404 → `gone`」分流说清楚（`lib/events.ts` 的 `eventFailureExit`）：那条事件已经不在时为它「回滚」没有意义，直接重拉列表更有用。
+- **任务定义**：已完成的条目展开后可看**详情、耗时、操作人、变更历史**。**验收要点：历史来源为 `event_logs`，有据可查。**
+- **依赖**：T3-09（已具备）。**T3-10 / T3-11 都已做完，这是事件链的最后一块。**
+- **接口已就绪，不用动后端**：`GET /api/events/:id/logs` 早已在（T3-09 的八条之一），返回 `{ logs: EventLog[] }`，按时间倒序。`lib/api.ts` 与 `lib/events.ts` **都还没有它的封装** —— 这一轮要各补一条（`eventLogsRequest` / `loadEventLogs`）。
+- **一个必须记住的前提**：`event_logs` 表**没有 `user_id` 列**，它的归属完全靠 `events` 那一次确认来保证。服务端 `listEventLogs` **先确认事件归属再读日志**，漏掉这一步就是一个「拿到任意 eventId 就能读别人历史」的口子（集成测试里有一条专门打它）。所以前端这一层不需要也不应该自己做归属判断 —— 拿到 404 就按 `eventFailureExit` 的 `gone` 走。
+- **数据是现成的**：耗时不需要新字段，`completedAt` 减去创建时的时刻即可（`event_logs` 里那一行 `created` 就是它）；操作人是 `completedBy`（显示名快照）。两者都在 `Event` / `EventLog` 上，**不要为此加表或加列**。
+- **`action` 的类型是 `string` 而不是联合类型**，这是有意的（见 `event.ts` 的说明）：一个动作码在写入之后才被引入时，旧版本的代码读它必须能原样展示。因此界面这一侧要用共享包的 `isEventLogAction` 判断认不认识，不认识就把动作码本身显示出来 —— 收窄成三选一会让「库里有第四种动作」这件事在界面上被吃掉。
+- **入口落在标题上**：T3-10 特意没把整行做成 `<button>`（行里已经有勾选框与行内菜单两个可交互元素），当时留的话就是「打开详情面板是 T3-12 的事，到那时入口会落在标题上」。
+- **别顺手做掉 T3-11 之外的东西**：这一轮只做详情呈现。**`description` 的 Markdown 渲染**用 `MarkdownPreview` 那一个组件（纪要靠它），不要再写第二份渲染器。
 
 ### 4.2 阶段三剩余的链
 
-事件记录剩下 **T3-11 勾选切换与撤销**、**T3-12 已完成详情面板**两块。模型、接口与列表视图（T3-09 / T3-10）都已就位，这两块只需改前端 —— **T3-11 不必再碰后端**，T3-12 也只是多读一条 `GET /api/events/:id/logs`（接口已在，前端尚未封装）。
+事件记录只剩 **T3-12 已完成详情面板**一块。模型、接口、列表、勾选切换都已就位，这一块**也只需改前端** —— 只多读一条 `GET /api/events/:id/logs`（接口已在，前端尚未封装）。
 
 ### 4.3 后三个阶段
 
@@ -279,7 +291,10 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **列表分页未做**：`GET /api/events` 一次返回该用户全部未删除事件，没有分页参数（与纪要同量级、同一判断）。
 - **没有「归档」**：需要收起来时用的是软删除。真出现「要留但要退出列表」的需求再加，那是一个独立的迁移。
 - **行上最多显示 3 个标签**，多出来的在后面记一句 `+N`；完整标签列表留给详情面板（T3-12）。
-- **行内勾选框是只读的**（`disabled`），这是 T3-10 的有意留白，不要因为「它看起来该能点」而提前放开 —— 切换、回滚与撤销的入口归 T3-11。
+- **勾选切换是串行的**（同一时刻只允许一条在飞），期间所有勾选框都进 `disabled`。这不是性能问题而是观感问题：允许并发会让后一次重拉把另一条还没落库的乐观值抹掉（表现为另一行的勾选框自己弹回去）。单用户本机应用的通行做法，代价在几百毫秒的量级、实际看不见。
+- **撤销入口不自动消失、不给「重做」、不写 `comment`**：服务端支持 `comment`，但界面的勾选是「做完了」这一个动作，没有可填备注的位置 —— `setEventStatusRequest` 因此刻意不收这个参数。真需要「撤销原因」时再加，那会是一次独立的改动。
+- **没有批量勾选**（一次一条，配合串行化）。
+- **`EventRow` 的 `locked` 与 `switching` 是两个 prop 而不是一个枚举**：「点不动」与「正在处理的是我」在界面上确实是两件事（前者不压暗、后者压暗），合成一个之后会需要在这两个量之间做一次没有信息量的映射。
 - `description` 的 Markdown 渲染与变更历史展示属 T3-12。
 
 **账号与权限**
@@ -481,8 +496,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **12 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **306 项、0 失败**（shared 69 + api 197 含 5 跳过 + web 40）；其余三条全绿 |
-| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **118 项全通过**（T3-10 时的结果） |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **311 项、0 失败**（shared 69 + api 197 含 5 跳过 + web 45）；其余三条全绿 |
+| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **135 项全通过**（T3-11 时的结果；改界面就要重跑） |
 
 **换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
 
@@ -518,7 +533,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
   - 它以**数据库未初始化（`users` 表为空）**为前置条件 → **每跑一次都要先清库，跑完重建 owner** 并更新 `.tmp/owner-credentials.txt`。重置语句见该文件头部注释（**依次 `event_logs` → `events` → `notes` → … → `users`**；`event_logs` 跟着事件走、`notes` 排在 `users` 之前都是外键的缘故）。**`event_logs` 与 `events` 从 T3-09 起必须带上**：三张表都走软删除，不清的话上一轮留下的 `deletedAt` 非空行会让这一轮的「空态」不可达，而症状只是某条空态断言失败，看起来像界面坏了。
   - 想在不破坏数据的前提下验证接口，用 `.tmp/note-smoke.mjs` 那类脚本（以现有 owner 登录，只碰自己创建的数据，跑完清理）。
   - 用法：`node test/e2e-auth.mjs <应用地址> <截图目录>`，截图目录给 `.tmp/` 下的路径，**别落进仓库**。
-  - **界面做不了的准备动作可以走接口**，但要写清理由：T3-10 需要「已完成」的数据来验分组与折叠，而界面上还没有把事件置为完成的手段（属 T3-11）。脚本里因此有 `apiAccessToken()` 与 `apiCompleteEvent()` 两个辅助函数，各自的注释里都说明了「本轮验的是拿到数据之后怎么分组与显示，不是怎么把状态改掉」。**这不是绕开验证，是把两件事分开**。
+  - **界面做不了的准备动作可以走接口**，但要写清理由：T3-10 需要「已完成」的数据来验分组与折叠，而当时界面上还没有把事件置为完成的手段。脚本里因此有 `apiAccessToken()` 与 `apiCompleteEvent()` 两个辅助函数，各自的注释里都说明了「本轮验的是拿到数据之后怎么分组与显示，不是怎么把状态改掉」。**这不是绕开验证，是把两件事分开**。T3-11 起界面有了入口，同样的数据改由界面自己造（`apiCompleteEvent` 因此只留在 T3-10 那一段）；T3-11 反过来用接口做了一件界面做不到的事 —— **先让服务端把那条删掉**，好在界面上制造一次必然失败的切换（见 9.38）。
+  - **断言要对得上它声称要证明的事**：T3-11 的「乐观更新」是这条的最新例子。直接点一下再断言「界面变了」证明不了乐观 —— 本机回环几十毫秒的响应，那个变化也可能来自回话之后的重拉。做法是给切换请求装一个 1.2 秒的延迟钩子，把断言预算压到 0.9 秒。**遇到「这条断言其实证不了它说的那件事」时，先想「要把它与什么区分开」，再决定加什么手段。**
 - **三个启动前置**：① API 用 `ACCESS_TOKEN_TTL_SECONDS=60` 起（否则等不到续期，「静默续期」那项必失败）；② 前端 dev server 在 5173（**它自己也要加 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD`，否则起不来 —— 见 6.7**）；③ 调试端口上**没有别的监听者**。
 - **调试端口现在可以换**：脚本默认 9222，实测可能被一个**非 CDP 的监听者**占住（任何路径都返回 `Content-Length: 0` 的 404），而脚本自带的占用检查判的是 `response.ok`，**因此拦不住你**，症状是 30 秒后的「CDP 页面目标未就绪」。**用 `E2E_CDP_PORT=<端口>` 换一个端口跑。**
 - **菜单类控件（Radix 下拉）点之前先等上一个菜单从 DOM 里消失**：关闭动画期间它仍在 DOM 里，此间的点击会被触发器忽略，脚本**直接抛错中断整轮**（不是记一条 FAIL 继续）。`openThemeMenu` 与 `openRowMenu` 都已按这个模式封好，**新增菜单交互照抄**。
@@ -558,7 +574,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 审计 | `apps/api/src/audit/audit.ts`、`packages/shared/src/audit.ts` |
 | 启动通道（含代理核心） | `apps/api/src/launch/{agent,profiles,status,history}.ts`、`apps/api/src/routes/launch.ts` |
 | 工作纪要（含检索） | `apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`packages/shared/src/note.ts` |
-| 事件记录（T3-09 模型与接口、T3-10 列表视图） | 后端：`apps/api/src/event/events.ts`、`apps/api/src/routes/events.ts`、`packages/shared/src/event.ts`；前端：`apps/web/src/components/events/`（`EventsPanel` / `EventList` / `EventRow` / `EventFormDialog`）、`apps/web/src/lib/events.ts`、`apps/web/src/lib/event-display.ts`（展示规则纯函数，可被 Node 单测直跑） |
+| 事件记录（T3-09 模型与接口、T3-10 列表视图、T3-11 勾选切换） | 后端：`apps/api/src/event/events.ts`、`apps/api/src/routes/events.ts`、`packages/shared/src/event.ts`；前端：`apps/web/src/components/events/`（`EventsPanel` / `EventList` / `EventRow` / `EventFormDialog`）、`apps/web/src/lib/events.ts`、`apps/web/src/lib/event-display.ts`（展示规则与乐观改状态的纯函数，可被 Node 单测直跑） |
 | 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
 | 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
 | 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
@@ -585,7 +601,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.37）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端）与勾选切换为何留白。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.38）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了）。 |
 | `docs/T3-08-IMPLEMENTATION-PLAN.md` | T3-08 的施工图（含开工前的环境复位记录）。**任务已完成，此文档作为实施依据留档**。 |
 | `docs/NEXT-TASK-PREP-2026-10-11.md` | 2026-10-11 的进度核对与开工清单（当时面向 T3-08）。**数字已过期，以本文为准**。 |
 | `docs/IMPLEMENTATION-PLAN.md` | 实施层面的方案对照 |
@@ -624,8 +640,13 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 21:56 | T3-10 浏览器验证（首轮） | 116 项 **115 通过 / 1 失败**；唯一那条「低优先级也有文字」是**断言写错**（事件乙吃的是默认的「普通」而断言期望「低」），不是产品缺陷 |
 | 22:0x | T3-10 浏览器验证（重跑） | 修掉那条断言（补一次「低」的点击），并加两条断言（编辑回填优先级的按下态、新建默认停「普通」）→ **118/118 全通过**，0 失败 |
 | 22:0x | 提交与收尾 | `a7069de`（代码）+ 文档回填；库回基线（6 迁移 / 12 表、`users` 1、种子 11 / 4 / 29）、owner 第四次重建、8787 / 5173 释放、无残留进程 |
+| 22:1x | T3-11 实施 | `lib/api.ts` 补 `setEventStatusRequest`、`lib/events.ts` 补 `setEventStatus`、`lib/event-display.ts` 增 `applyEventStatus` + 5 项单测；`EventRow` 勾选框接线（去掉 `disabled`、加 `locked` / `switching`）、`EventList` 透传并将组标题改用 `EVENT_STATUS_LABELS`、`EventsPanel` 增 `changeStatus` / `switching` / 撤销入口。三包 **311 项 0 失败**；`lint` / `typecheck` / `format:check` 全绿 |
+| 22:1x | T3-11 浏览器验证 | e2e 段新增 17 项，**一次跑通 135/135 全通过**，无首轮失败。关键两条：给切换请求装 1.2 秒延迟钩子后断言「回话之前未完成组 2 → 1」；经接口删掉那条再点它的勾选框，断言界面「照样先勾上」（404 之后回滚） |
+| 22:2x | 提交与收尾 | `a3c08bf`（代码）+ 文档回填；库回基线（6 迁移 / 12 表、`users` 1、种子 11 / 4 / 29）、owner 第五次重建、8787 / 5173 释放、无残留进程 |
 
-**§十一 新增/修改的关键文件（T3-10）**：`apps/web/src/lib/event-display.ts`（新）、`apps/web/src/lib/events.ts`（新）、`apps/web/src/components/events/{EventsPanel,EventList,EventRow,EventFormDialog}.tsx`（四个皆新）、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/TagInput.tsx`、`apps/web/src/pages/WorkbenchPage.tsx`、`apps/web/src/routes.tsx`、`apps/web/test/event-display.test.mjs`（新）、`apps/web/test/e2e-auth.mjs`（新增事件段 20 项 + 两个接口辅助函数 + 重置语句补 `event_logs` / `events`）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**（T3-09 的八条接口够用）。
+**§十一 新增/修改的关键文件（T3-11）**：`apps/web/src/lib/api.ts`（增 `setEventStatusRequest`）、`apps/web/src/lib/events.ts`（增 `setEventStatus`）、`apps/web/src/lib/event-display.ts`（增 `applyEventStatus`）、`apps/web/src/components/events/EventRow.tsx`（勾选框接线 + `locked` / `switching`）、`apps/web/src/components/events/EventList.tsx`（透传 + 组标题改用常量）、`apps/web/src/components/events/EventsPanel.tsx`（`changeStatus` / `switching` / 撤销入口 / `Notice.undo`）、`apps/web/test/event-display.test.mjs`（增 5 项）、`apps/web/test/e2e-auth.mjs`（新增 T3-11 段 17 项 + `eventCheckboxFinder` + `installStatusDelay` + `apiEventFacts` / `apiDeleteEvent` + 组计数与撤销入口的取数表达式）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**，**行结构一行未改**。
+
+**上一轮新增/修改的关键文件（T3-10）**：`apps/web/src/lib/event-display.ts`（新）、`apps/web/src/lib/events.ts`（新）、`apps/web/src/components/events/{EventsPanel,EventList,EventRow,EventFormDialog}.tsx`（四个皆新）、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/TagInput.tsx`、`apps/web/src/pages/WorkbenchPage.tsx`、`apps/web/src/routes.tsx`、`apps/web/test/event-display.test.mjs`（新）、`apps/web/test/e2e-auth.mjs`（新增事件段 20 项 + 两个接口辅助函数 + 重置语句补 `event_logs` / `events`）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**（T3-09 的八条接口够用）。
 
 **上一轮新增/修改的关键文件（T3-09）**：`packages/shared/src/event.ts`（新）、`packages/shared/src/index.ts`、`packages/shared/test/event.test.mjs`（新）、`apps/api/prisma/schema.prisma`、`apps/api/prisma/migrations/20261011132819_add_events/`（新）、`apps/api/src/event/events.ts`（新）、`apps/api/src/routes/events.ts`（新）、`apps/api/src/app.ts`、`apps/api/test/event.test.ts`（新）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` 本轮一行未改。**
 
