@@ -2,14 +2,14 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.24 |
+| 版本 | v1.25 |
 | 日期 | 2026-10-12 |
 | 上游文档 | `projects/fanhe-work/docs/IMPLEMENTATION-PLAN.md` |
 | 交接文档 | `projects/fanhe-work/docs/HANDOFF-2026-10-10.md` 与 `projects/fanhe-work/docs/HANDOFF-2026-10-11.md` |
 | 选定界面方案 | 方案 B 现代极简，`projects/fanhe-work/docs/mockups/option-b-minimal.html` |
 | 方案对比入口 | `projects/fanhe-work/docs/mockups/index.html` |
 | 载体 | `projects/fanhe-work/` |
-| 当前状态 | 阶段一（T1-01 至 T1-12）与阶段二（T2-01 至 T2-07）均已完成，阶段二验收清单 6 项全部勾选；阶段一验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选。**阶段三已完成（T3-01 至 T3-12 共 12 项全绿），阶段三验收清单 6 项全部勾选**。**界面层已按最终 UI 方案整体整合（两批：导航 18 项 + 首页三段式 + 版本号），业务逻辑一行未改**，记录见 `UI-INTEGRATION-2026-10-11.md`。**下一项是阶段四的 T4-01 Electron 外壳脚手架**。四道门禁全绿，三包合计 **350 项**（shared 83 + api 197，其中 5 项因 owner 已存在而设计性跳过 + web 70）。浏览器 e2e **149 项全通过**（UI 集成后实跑，一次跑通）。数据库为 6 个迁移、**12 张业务表**，处于基线：`users` 1（owner `fanhe`）、其余业务表 0 行、种子 11 / 4 / 29 完好。依据见 9.28 ~ 9.40 与 `WORK-STATUS.md` |
+| 当前状态 | 阶段一（T1-01 至 T1-12）与阶段二（T2-01 至 T2-07）均已完成，阶段二验收清单 6 项全部勾选；阶段一验收清单尚余「关键操作在 `audit_logs` 有记录」一项，待账号与角色管理接口落地后勾选。**阶段三已完成（T3-01 至 T3-12 共 12 项全绿），阶段三验收清单 6 项全部勾选**。**界面层已按最终 UI 方案整体整合（两批：导航 18 项 + 首页三段式 + 版本号），业务逻辑一行未改**，记录见 `UI-INTEGRATION-2026-10-11.md`。**阶段四已开工：T4-01 Electron 外壳脚手架完成（1/4），外壳能打开并渲染出界面，`/api` 经反代连通；下一项是 T4-02 服务地址切换**。四道门禁全绿，四包合计 **360 项**（shared 83 + api 197，其中 5 项因 owner 已存在而设计性跳过 + web 70 + **desktop 10**）。浏览器 e2e **149 项全通过**（UI 集成后实跑，一次跑通）；外壳冒烟 **PASS**。数据库为 6 个迁移、**12 张业务表**，处于基线：`users` 1（owner `fanhe`）、其余业务表 0 行、种子 11 / 4 / 29 完好。依据见 9.28 ~ 9.41 与 `WORK-STATUS.md` |
 
 ---
 
@@ -361,7 +361,7 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 
 交付物为 Electron 外壳、本机代理、服务地址切换。
 
-- [ ] 外壳加载本机服务可用
+- [x] 外壳加载本机服务可用（T4-01，见 9.41；外壳打开并渲染出界面，`/api` 经内置服务反代连通，冒烟 PASS）
 - [ ] 外壳加载远程地址可用
 - [ ] 本机代理可成功启动外部软件
 - [ ] 启动自检可报出失效配置
@@ -451,10 +451,11 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T3-10 事件列表视图 | 已完成 | 新增 `apps/web/src/lib/event-display.ts`（**可被 Node 单测直跑的纯函数**：`groupEvents` 分组、`isOverdue` 逾期判定、`formatDueAt` 文案、`toDateTimeLocalValue` / `fromDateTimeLocalValue` 时间往返，以及三张取值到文案与样式的映射表）与 `lib/events.ts`（会话感知数据层：`loadEvents` / `loadEventTags` / `createEvent` / `updateEvent` / `removeEvent` 与 `eventFailureExit`）；`lib/api.ts` 补六条传输函数；新增 `components/events/`（`EventsPanel` 四态分派容器 + `EventList` 分组与折叠 + `EventRow` 行内四要素 + `EventFormDialog` 新增/编辑表单）；`components/notes/TagInput.tsx` 增 `maxTags` prop（上限从写死改为注入）；`WorkbenchPage` 加第三块板块、`routes.tsx` 的模块子路由补 `events`。**行内勾选框本轮是只读的**（`disabled` + `disabled:opacity-100`），切换与撤销属 T3-11（**已在该轮接线，见 9.38**）。新增 17 项 web 单测；四道门禁全绿，三包合计 **306 项**；**浏览器 e2e 118 项全通过**（原 98，新增 20）。判断见 9.37 |
 | T3-11 勾选切换与撤销 | 已完成 | `lib/api.ts` 增第六条传输函数 `setEventStatusRequest`（`PUT /api/events/:id/status`），`lib/events.ts` 增 `setEventStatus`（会话感知封装，返回服务端更新后的**整条**事件 —— `completedAt` 与 `completedBy` 是服务端的时间与身份快照，界面猜不出来）；`lib/event-display.ts` 增 `applyEventStatus` 纯函数（改一条的状态、其余按原引用带过去、找不到 id 时原样返回，可被 Node 单测直跑）；`EventRow` 的勾选框去掉 `disabled` 并接上 `onCheckedChange`，新增 `locked` / `switching` 两个 prop 把「现在能不能点」与「正在切的是哪一条」分开；`EventList` 透传并将组标题改用 `EVENT_STATUS_LABELS`（消除与 `event-display.ts` 的重复字面量）；`EventsPanel` 增 `changeStatus`（乐观更新 → 发请求 → 成功重拉 / 失败重拉回滚）、`switching` 串行化（同一时刻只允许一条切换在飞）与提示条上的**撤销入口**。**后端与共享包一行未改** —— `PUT .../status` 与「撤销即设回 `todo`、三列完成信息一起清空」在 T3-09 就已就位。新增 5 项 web 单测（乐观改状态、不伪造完成信息、找不到 id、不改原数组）；四道门禁全绿，三包合计 **311 项**；**浏览器 e2e 135 项全通过**（原 118，新增 17）。判断见 9.38 |
 | T3-12 已完成详情面板 | 已完成 | `lib/api.ts` 增第七条传输函数 `eventLogsRequest`（`GET /api/events/:id/logs`），`lib/events.ts` 增 `loadEventLogs`（只读不回写，归属由服务端确认，404 按 `gone` 走）；`lib/event-display.ts` 增 `EVENT_LOG_ACTION_LABELS` / `eventLogActionText`（认不出的动作码原样返回）/ `eventLogTransitionText`（只在动作码认不出时才用）/ `formatMoment`（年份永远在，历史可能跨年）/ `formatDuration`（取最大两个单位、整值省略第二项、区间反过来返回 `null`）；新增 `components/events/EventDetailDialog.tsx`（**头部用列表那一份数据，只有时间线在等接口**，日志单独三态；描述复用 `MarkdownPreview`；完整标签、创建 / 截止 / 完成时间、完成用时、完成人；时间线来自 `event_logs`）；`EventRow` 的标题由 `<span>` 改为 `button` 作为详情入口（行仍然不是按钮），`EventList` 透传 `onOpenDetail`；`EventsPanel` 托管 `detailId` + `detailOpen` 两个量（关闭时不清 id，见 9.39）。**未完成的事件也能打开**（描述在列表上无处可看，这是对规格的有意扩展）；**详情里不放编辑入口与勾选框**。新增 17 项 web 单测；四道门禁全绿，三包合计 **328 项**；**浏览器 e2e 146 项全通过**（原 135，新增 11），连跑两次均全绿。**后端与共享包一行未改。** 判断见 9.39 |
+| T4-01 Electron 外壳脚手架 | 已完成 | 新增 `apps/desktop`（`package.json` / `tsconfig.json` / `src/{main,preload,server}.ts` / `scripts/{ensure-electron,launch}.mjs` / `test/server.test.mjs`）；主进程在回环上起**内置静态服务**托管 `apps/web/dist` 并把 `/api/*` **反代**到服务地址（含 SPA 回退），**`apps/web` 一行未改**（单一来源前提继续成立）；桌面端**刻意用 CJS** 以保住沙箱化的预加载脚本；补 `scripts/ensure-electron.mjs` 并由根 `postinstall` 调用，解决 **Electron 44.7.0 无安装脚本导致二进制不随依赖落地**的问题；启动器摘掉 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否关沙箱、渲染进程 `no-proxy-server`。四道门禁全绿，四包合计 **360 项**（desktop 新增 10 项，覆盖 SPA 回退 / 404 / 越界 / 405 / 反代 / 502）；**外壳冒烟 PASS**（渲染出界面、console 零错误），另以活体 API 验证 `/api/health` 经反代返回 200。判断见 9.41 |
 
 ### 9.2 待办
 
-1. **阶段三已完成（T3-01 至 T3-12 共 12 项全绿），界面层已按最终 UI 方案整体整合（导航 18 项 + 首页三段式 + 版本号，业务逻辑一行未改，见 9.40），下一项是阶段四的 T4-01 Electron 外壳脚手架（P0）**，任务定义见第三章（第 199 行），阶段验收见第七章。**四道门禁全绿**（shared 83 + api 197 + web 70 = 350 项，其中 api 5 项因 owner 已存在而设计性跳过；`lint` / `typecheck` / `format:check` 全绿），**浏览器 e2e 149 项全通过**（UI 集成后实跑，一次跑通）。续接时先读 9.40、9.39、9.38、`UI-INTEGRATION-2026-10-11.md`、`NEXT-TASK-PREP-阶段四-2026-10-11.md`、`NEXT-TASKS-2026-10-12.md` 与 `HANDOFF-2026-10-11.md`。
+1. **阶段三已完成（T3-01 至 T3-12 共 12 项全绿），界面层已按最终 UI 方案整体整合（导航 18 项 + 首页三段式 + 版本号，业务逻辑一行未改，见 9.40），阶段四已开工：T4-01 Electron 外壳脚手架完成（见 9.41），外壳能打开并渲染界面（阶段四验收第一项已达成），下一项是 T4-02 服务地址切换（P0）**，任务定义见第三章（第 200 行），阶段验收见第七章。**四道门禁全绿**（shared 83 + api 197 + web 70 + desktop 10 = 360 项，其中 api 5 项因 owner 已存在而设计性跳过；`lint` / `typecheck` / `format:check` 全绿），**浏览器 e2e 149 项全通过**（UI 集成后实跑，一次跑通；T4-01 无界面改动未重跑），**外壳冒烟 PASS**。续接时先读 9.41、9.40、9.39、`WORK-STATUS.md` §3.5 与 §8.5、`NEXT-TASK-PREP-阶段四-2026-10-11.md`、`NEXT-TASKS-2026-10-12.md` 与 `HANDOFF-2026-10-11.md`。
 
    **本轮 e2e 首轮是失败的，而失败与产品无关 —— 这一条本身值得记下来。** 同一份脚本三跑两败在「回话之前未完成组已经少了一条」上，报的是「等待超时」。加探针复现后发现：CDP 的合成鼠标事件组（`mouseMoved / Pressed / Released`）偶尔会被**整组丢掉**，也就是点击根本没送达。改法是行内的点击改用 `element.click()` —— Radix 的下拉菜单必须走真实指针事件（`pointerdown` / `pointerup`），但勾选框与标题都是普通 `onClick`，两者不能一刀切。**这条教训不只是修一处脚本：断言失败时先问「这一击真的发生了吗」，再问产品对不对。** 另外顺手查清了一个早先没弄明白的现象：截图里对话框半透明、背后文字透过来，不是 `bg-background` 没生效，而是 `waitFor` 一返回就抓帧，拍到了对话框淡入动画（200ms）的中间帧 —— T3-10 的截图同样如此。截图前等 350ms 之后，元信息与时间线都清楚（这个等待只影响截图，断言读的是 DOM 不是像素）。跑 e2e 的代价与前置条件不变（清库 → 跑 → 重建 owner → 更新 `.tmp/owner-credentials.txt`），本轮已按此收尾；`assertUninitialized` 报错信息里那条重置语句也补全了事件两张表（原来漏掉，症状是「空态断言失败」，看起来像界面坏了）。
 
@@ -467,7 +468,7 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 2. 组件清单与令牌规格已在 T2-01 落定，见 9.21。**新增界面一律从 `apps/web/src/components/ui/` 取组件，不要再手写等价元素**：同一件东西两种实现时，差异只会在改令牌或换主题时才暴露，而那时已经很难判断是哪一处漏改。T2-02 已把 `NavRail` 换掉，剩余的 `AuthLayout` 与 `HomePage` 内容区手写元素随 T2-03 一并处理。
 3. `users.passwordChangedAt` 已在 T1-01 建表时留下，schema 注释写的是「改密后旧令牌立即失效」，但 T1-04 签发访问令牌时并未把它写进载荷，因此目前改密不会让已签发的访问令牌失效。补齐需要在访问令牌里加 `pwd` 声明并在校验时比对，属于改密流程的一部分，等该功能排期时一并处理。
 4. username 的大小写归一已在 T1-08 落地，`packages/shared/src/account.ts` 是唯一实现，账号创建与登录查询两侧都走它。尚未覆盖的是**改名**：账号管理功能排期后，改名必须复用同一个 `normalizeUsername`，并在改名前用归一后的值查一次冲突，否则会出现「改成一个只差大小写的名字」而库侧唯一约束恰好拦不住的情形。目前用得上唯一约束冲突检测的入口只有首次初始化。
-5. 权限点的可见范围目前只有 `system` 与 `personal` 两段，共 11 个。客户信息平台与运营信息平台的对象清单尚未确定，等阶段三这两个模块定下来后再追加常量与权限行，不需要改表结构。**追加时要同步改 `packages/shared/src/navigation.ts` 里对应导航项的 `module`**：三个占位项现在填的是 `null`，含义是「尚无权限点可绑，对所有已认证用户可见」，模块落地后要改成各自的模块段，否则它们会一直对所有人可见。`navigation.test.mjs` 里那条「占位项对已认证用户一律可见」的断言届时也要一并改掉。
+5. 权限点的可见范围目前只有 `system` 与 `personal` 两段，共 11 个。客户信息平台与运营信息平台的对象清单尚未确定，等阶段三这两个模块定下来后再追加常量与权限行，不需要改表结构。**追加时要同步改 `packages/shared/src/navigation.ts` 里对应导航项的 `module`**：导航重构后共 18 项，除首页（`personal`）与系统设置（`system`）外，其余 **16 项现在填的是 `null`**（含 11 个预留槽位），含义是「尚无权限点可绑，对所有已认证用户可见」，模块落地后要改成各自的模块段，否则它们会一直对所有人可见。`navigation.test.mjs` 里那条「占位项对已认证用户一律可见」的断言届时也要一并改掉。
 6. 「四种角色登录后可见范围符合预期」已在 T1-11 勾选，依据与边界见 9.18。
 7. 审计的写入链路已完成，但「授权变更」与「删除」两类事件还没有接口可挂：账号与角色管理功能尚未实现。这些功能排期时在它们的 service 里调一次 `recordAudit` 即可，写入层不需要改。验收清单中的「关键操作在 `audit_logs` 有记录」因此也暂不勾选，见 9.15。
 
@@ -1389,6 +1390,28 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 **验证结果（2026-10-12）。** 四道门禁全绿：`test` 为 `packages/shared` **83 项**（导航 18 项 / 分层路径 / `navCodeFromPath` 断言扩写）、`apps/api` **197 项，192 通过 / 5 跳过 / 0 失败**、`apps/web` **70 项**（新增 `version.test.mjs` 8 项），三包合计 **350 项，0 失败**；`lint` / `typecheck` / `format:check` 全绿。**浏览器 e2e 149 项全通过、一次跑通**（原 146，新增 3 项：导航 18 项形态、首页三段式、顶栏版本号）。数据库无改动（仍 **6 个迁移、12 张业务表**），e2e 后经 `pg_dump` 备份恢复基线。提交：`2576388`（代码）+ `fe92cb4`（文档）。
 
 **未完成部分（记下来，别当成缺陷）。** **案例展示没有数据源**（原型是 9 张 webp 占位卡，落地前要先定封面素材与来源）；**六个 AI 模块卡是静态占位**（右上角带「开发中」）；**搜索能力先占位**（一级导航项「搜索」进统一占位页）；**16 个导航项的 `module` 为 `null`**（除首页 `personal` 与系统设置 `system` 外，含 11 个预留槽位，对已认证用户一律可见），模块落地时改成对应模块段并同步改 `navigation.test.mjs` 断言。
+
+### 9.41 T4-01 Electron 外壳脚手架实施中的几处判断
+
+**外壳用「主进程内置静态服务」，不用 `file://`。** 这是本任务唯一一个需要先推翻候选方案的决定。`file://` 有两条硬伤：其一，`file://` 页面的来源是 **`null`**，向 `http://127.0.0.1:8787` 发 `fetch` 是跨源请求，而 API **从不发 CORS 头**（它的单一来源前提建立在 Vite 代理上，见 9.21），因此登录、纪要、事件、启动全都会以跨源被拒；其二，前端是 `BrowserRouter`（history API），`file://` 下 `pushState` 与深链接刷新都会失败。两条都不是加一个 `base` 能解决的，故改为在回环上起一个静态服务托管 `apps/web/dist`，并**把 `/api/*` 反代到服务地址**（含 SPA 回退）。**`apps/web` 一行未改。**
+
+**反代让「单一来源」这条前提继续成立。** 开发期靠 Vite 把 `/api` 桥到 8787，服务端因此从不需要 CORS；外壳照抄这个形状，前端那侧的 `API_BASE_URL`（默认空串）一行不用动，业务代码对「跑在浏览器里还是外壳里」毫无感知。代价是外壳多了一段反代代码，但它换来的是**宿主可替换而应用不知情** —— T4-02 切远程地址时改的只是这一段的上游。
+
+**桌面端刻意用 CommonJS 而不是 ESM。** `apps/desktop/package.json` **不写 `"type": "module"`**，于是 `module: NodeNext` 产出 CJS。理由是 Electron 的主进程与**沙箱化的预加载脚本**都以 CJS 为默认形态，而 ESM 预加载要求关掉沙箱；T4-03 之后预加载要承担代理与凭据的 IPC，保持沙箱开启更稳妥。这是「配置决定模块格式」的一处刻意选择，改它之前先确认预加载是否还允许沙箱。
+
+**Electron 二进制不随依赖安装落地 —— 44.7.0 的 tarball 里没有 `scripts.postinstall`。** 核查 registry 的 `hasInstallScript` 为 `null`，也就是说 `pnpm-workspace.yaml` 里的 `onlyBuiltDependencies: [electron]` 对它其实是**空操作**：装完依赖不等于二进制就位，`node_modules/electron` 下既无 `dist/` 也无 `path.txt`，而 `pnpm rebuild electron` 同样什么都不做（它没有可跑的安装脚本）。补了 `apps/desktop/scripts/ensure-electron.mjs`（按 `path.txt` + `dist/` 判存在，缺则跑包内 `install.js`），并由根 `postinstall` 调用；幂等、换机可复现，压缩包经 `ELECTRON_*` 落在工作区 `.cache/electron`（沿用 9.4 的镜像与缓存重定向）。**这条与版本绑定**：将来升级 Electron 若恢复了安装脚本，`onlyBuiltDependencies` 才会真正生效，届时 `ensure-electron` 可退化为兜底。
+
+**启动器必须摘掉 `ELECTRON_RUN_AS_NODE`。** 该变量一旦为真，electron 会**退化成纯 Node** —— 不建窗口，`require('electron')` 返回可执行文件路径字符串。症状是启动即抛 `Cannot read properties of undefined (reading 'on')`（在 `app.on` 处），看起来像 Electron 没装好。而 CI、部分 IDE 终端与自动化会话都会带上它，所以 `scripts/launch.mjs` 一律先 `delete process.env.ELECTRON_RUN_AS_NODE` 再 spawn，**不要绕过启动器直接调 `electron .`**。
+
+**沙箱默认开启，受限环境用环境变量显式降级。** 在没有桌面会话的环境（服务进程、容器、部分 CI）里 Chromium 的渲染进程沙箱起不来，症状是加载以**不含任何原因**的 `ERR_FAILED (-2)` 结束 —— 同一个报错也可能来自产物缺失或内置服务没起来，所以**先确认是这个原因再关**。开关做成 `FANHE_NO_SANDBOX=1` 才加 `--no-sandbox`，**不写进代码或脚本默认值**：关沙箱是安全降级，不该是常态。另加 `app.commandLine.appendSwitch('no-proxy-server')`，否则系统/环境代理会把 `127.0.0.1` 的回环请求也送出去，同样得到 `ERR_FAILED`。
+
+**`exactOptionalPropertyTypes` 拒绝显式的 `body: undefined`。** 反代里 GET / HEAD 不带请求体，但 `fetch` 的 `RequestInit.body` 在该选项下不接受 `undefined` 字面量（TS2379）。改法是先构造 `init`，仅在确有请求体时才 `init.body = body`，而不是把 `body: undefined` 塞进去。
+
+**冒烟的判据是 DOM，不是 HTTP 200。** `smoke` 隐藏窗口加载一次，在渲染进程里探 `#root` 的子元素数、`document.title`、路径与预加载桥，打印一行结论并按成败设退出码。只看 200 不够 —— 那只说明文件在，说明不了界面画出来了（产物缺 JS 时 HTML 照样 200）。判据是 `#root` 里有元素且 console 零错误。
+
+**验证结果（2026-10-12）。** 四道门禁全绿：`test` 为 `packages/shared` **83** + `apps/api` **197**（192 通过 / 5 跳过）+ `apps/web` **70** + **`apps/desktop` 10**（内置静态服务的 SPA 回退 / 带扩展名 404 / 路径越界 403 / 405 / HEAD / 反代路径·查询串·方法·请求体 / 上游不可达 502），合计 **360 项，0 失败**；`lint` / `typecheck` / `format:check` 全绿。外壳冒烟 **PASS**（`渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0`），另以活体 API 验证 `/api/health` 经反代返回 200。e2e 无界面改动未重跑（仍 149）。提交：`b03ddb5`（代码，13 文件 +980/-8）。
+
+**一处待决的取舍（记下来）。** Electron 的 `userData`（Chromium 缓存、GPU 缓存等）默认落在**系统盘** `%APPDATA%`，而本项目其余一切都在 U 盘上。保持默认与「数据库刻意不进 U 盘」是同一类判断（缓存写入量大、伤 U 盘寿命），但若希望外壳完全便携，需要显式把 `userData` 重定向进工作区。**T4-01 未做这个重定向**，只把应用名定为「梵禾 Work」以得到一个正常目录名；是否重定向留待用户裁决。
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 

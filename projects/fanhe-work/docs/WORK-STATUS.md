@@ -5,13 +5,13 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态） |
-> | 对应提交 | 代码基线 `2576388`（**最终 UI 集成**：导航 18 项 + 首页三段式 + 版本号；阶段三代码基线为 `a5370b0`）；本文档定稿于 N-01 提交 `ac30023`，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
-> | 当前阶段 | **阶段三已完成（12/12，验收六项全勾）；UI 集成两批已完成并推送。** 下一项是阶段四的 T4-01 Electron 外壳脚手架 |
-> | 最后验证 | 四道门禁全绿（**350 项**）；浏览器 e2e **149 项**全通过（UI 集成后实跑，0 失败） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**） |
+> | 对应提交 | 代码基线 `b03ddb5`（**T4-01 Electron 外壳脚手架**；UI 集成代码基线为 `2576388`，阶段三为 `a5370b0`）；本文档定稿于 T4-01 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
+> | 当前阶段 | **阶段零至三已完成（38/50）；阶段四已开工：T4-01 Electron 外壳脚手架完成（1/4）。** 下一项是 T4-02 服务地址切换 |
+> | 最后验证 | 四道门禁全绿（**360 项**）；浏览器 e2e **149 项**全通过（UI 集成后实跑，0 失败）；外壳冒烟 **PASS**（渲染出界面、console 零错误） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
-> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.40），本文已把结论汇总，需要细节时再翻过去。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.41），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
@@ -21,7 +21,9 @@
 
 **现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」「工作纪要」「事件记录」三个板块**全部完成并可用**。工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。事件记录（`events` 与 `event_logs` 两张表、八条接口、状态变更一律追加流水）能未完成 / 已完成分组、已完成默认折叠、行内四要素（勾选框 / 标签 / 截止时间 / 优先级）、检索与增删改；**勾一下即完成、再点提示条上的「撤销」即恢复**（乐观更新、失败回滚都在）；**点标题打开详情面板** —— 完整描述（Markdown 渲染）、创建 / 截止 / 完成时间、完成用时、完成人，以及来自 `event_logs` 的**完整变更历史时间线**。**阶段三到此收口。**
 
-**界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。再往后是桌面外壳（阶段四）。
+**界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。
+
+**桌面外壳已开工**（阶段四）：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。下一项是 T4-02 服务地址切换（本机 / 远程两档，仅改配置即生效）。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -56,7 +58,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 层 | 选型 |
 | -- | -- |
-| 桌面外壳 | Electron（阶段四，尚未实现） |
+| 桌面外壳 | Electron 44.7.0（阶段四，T4-01 脚手架已落地） |
 | 前端 | React 19 + TypeScript 6.0.3 + Vite 8 + Tailwind 4（方案 B 现代极简，shadcn/ui） |
 | 后端 | Node 22.22.2 + Fastify 5 + Prisma 7.10.0 |
 | 数据库 | PostgreSQL `postgres:16-alpine`（容器，数据在命名卷，**不随 U 盘移动**） |
@@ -91,7 +93,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 │   ├── apps/
 │   │   ├── api/                   ← Fastify 后端 + Prisma + 迁移 + 测试
 │   │   ├── web/                   ← React 前端（Vite）
-│   │   └── desktop/               ← Electron 外壳（阶段四，目前基本为空）
+│   │   └── desktop/               ← Electron 外壳（阶段四，T4-01 已落地）
 │   ├── packages/shared/           ← 跨应用共享类型与工具（构建型，先构建后用）
 │   ├── docs/                      ← 规划与交接文档（本文所在处）
 │   ├── tools/                     ← 诊断脚本归档（checks/ prisma/ oneoff/）
@@ -116,7 +118,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾）；**UI 集成两批已完成**（导航 18 项 + 首页三段式 + 版本号），见 `UI-INTEGRATION-2026-10-11.md` |
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
-| 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ⬜ 未开始 |
+| 阶段四 | Electron 外壳（T4-01 ~ T4-04） | 🔄 进行中：**T4-01 外壳脚手架完成**，T4-02 ~ T4-04 未开始 |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
 
@@ -137,6 +139,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `b03ddb5` | feat(阶段四): T4-01 Electron 外壳脚手架（**外壳代码基线**） |
+| `c8f7a4d` | docs: WORK-STATUS 头部标注 N-01 定稿提交号 |
 | `9502591` | docs: 梳理下一步任务（N-01 与阶段四主线） |
 | `b5c0e7f` | docs(阶段四): 补充 T4-01 开工准备清单 |
 | `fe92cb4` | docs(UI集成): 回填最终态集成记录（`UI-INTEGRATION-2026-10-11.md`） |
@@ -163,10 +167,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **350 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70**。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
+| `pnpm test` | **360 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70** + **`apps/desktop` 10**（T4-01 新增：内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
-| 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39；UI 集成期间又抓到并修掉三类渲染层时序问题（主题子菜单改 hover 展开、坐标点击在入场动画中漂移、`openHomeSection` 调用形态写错），修法见 8.2 的新增两条 |
+| 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T4-01 无界面改动，未重跑。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
+| 外壳冒烟 | **PASS** | `pnpm --filter @fanhe/desktop smoke`：隐藏窗口加载产物 → 探 DOM → 打印一行结论并按成败设退出码。判据是 `#root` 里有元素 + console 零错误（见 8.5）。**受限环境需 `FANHE_NO_SANDBOX=1`** |
 | 数据库 | 6 个迁移、**12 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行（跑完 e2e 已清库并重建 owner） |
 
 ---
@@ -252,18 +257,33 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **详情面板里没有编辑入口、没有勾选框**：编辑走行内菜单、状态走行内勾选框，把它们再搬进面板只会给同一个动作两条路径。要在详情里改状态是以后可能的独立改动。
 - **相关规则位置**：取值域与传输类型在 `packages/shared/src/event.ts`，读写与事务在 `apps/api/src/event/events.ts`，接口在 `apps/api/src/routes/events.ts`，展示规则与乐观改状态的纯函数在 `apps/web/src/lib/event-display.ts`，界面在 `apps/web/src/components/events/`。判断见 9.36、9.37、9.38 与 9.39。
 
+### 3.5 阶段四 · 桌面外壳（T4-01 完成，T4-02 ~ T4-04 未开始）
+
+**这一阶段改的是运行宿主，不是业务代码。** T4-01 只做一件事：让外壳打开并渲染出已有界面。
+
+- **工程落点**：`apps/desktop`（此前只有 `.gitkeep`）。最小集合为 `package.json`（`@fanhe/desktop`，`main` 指向 `dist/main.js`）、`tsconfig.json`、`src/main.ts`（主进程）、`src/preload.ts`（预加载）、`src/server.ts`（内置静态服务）、`scripts/`（下载与启动两个脚本）、`test/server.test.mjs`。
+- **用 CommonJS 而不是 ESM**：`package.json` **刻意不写 `"type": "module"`**，于是 `module: NodeNext` 产出 CJS。理由是 Electron 的主进程与**沙箱化的预加载脚本**都以 CJS 为默认形态，而 ESM 预加载要求关掉沙箱；T4-03 之后预加载要承担代理与凭据的 IPC，保持沙箱开启更稳妥。
+- **外壳怎么拿到前端**：主进程在回环上起一个服务，托管 `apps/web/dist` 并把 `/api/*` 反代到服务地址（含 SPA 回退）。**`apps/web` 一行未改。** 为什么不能用 `file://`、为什么必须反代而不是直连 API，见 8.5 与 9.41。
+- **`/api` 反代让「单一来源」这条前提继续成立**：开发期靠 Vite 代理把 `/api` 桥到 8787，服务端因此**从不需要 CORS**；外壳照抄这个形状，前端那侧（`API_BASE_URL` 默认空串）一行不用动。
+- **Electron 二进制不随依赖安装落地**：44.7.0 的 tarball 里**没有 `scripts.postinstall`**，所以 `onlyBuiltDependencies` 对它其实是空操作，装完依赖不等于二进制就位。补了 `scripts/ensure-electron.mjs` 并由根 `postinstall` 调用，幂等、换机可复现，压缩包经 `ELECTRON_*` 落在工作区 `.cache/electron`。
+- **启动器要摘掉 `ELECTRON_RUN_AS_NODE`**：该变量一旦为真，electron 会退化成纯 Node（不建窗口、`require('electron')` 返回路径字符串），而 CI、部分 IDE 终端与自动化会话都会带上它。见 8.5。
+- **沙箱默认开启**：受限环境（无桌面会话）里 Chromium 沙箱起不来，表现为不含原因的 `ERR_FAILED (-2)`，此时用 `FANHE_NO_SANDBOX=1` 显式关闭。**关沙箱是安全降级，不设为默认值。**
+- **判断见 9.41**；验收对照阶段四第一项「外壳可打开并渲染界面」。
+
 ---
 
 ## 四、待办事项
 
-### 4.1 下一项：T4-01 Electron 外壳脚手架（P0，可直接开工）
+### 4.1 下一项：T4-02 服务地址切换（P0，可直接开工）
 
-> **阶段三 12 项全部完成，事件链与纪要链都收口。** 下一阶段是桌面外壳（T4-01 ~ T4-04），任务定义见 `DEVELOPMENT-PLAN.md` 第四章，验收要点见第七章。
+> **T4-01 外壳脚手架已完成，外壳能打开并渲染界面（阶段四验收第一项已达成）。** 下一项是 T4-02，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 200 行，阶段四验收见第七章。
 
-- **为什么阶段四可以「直接开工」而不需要回头改业务代码**：T3-09 把事件链设计对了，此后 T3-10 / T3-11 / T3-12 三块加起来**只改了 `apps/web`**，后端与共享包一行未动。同理纪要链的后三块也没有碰过数据层。**接口是稳定的**，外壳要接的是产物而不是这套业务代码。
-- **外壳第一件事是把 `launch/agent.ts` 原样搬进主进程**：那个文件从 T3-02 起就**刻意不认识数据库、认证与 HTTP**、只接受回环来源，就是为了这一刻。搬的时候不要给它加依赖。
-- **阶段四的既定范围**（T4-01 ~ T4-04）：外壳脚手架、本机 / 远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程、启动自检；另把 `credential.ts` 的存储后端换成主进程 `safeStorage`。**这一轮别顺手做阶段五的容器化。**
-- **`apps/desktop` 目录已在阶段零建好**，但里面只有空壳；真正开工前先读 `DEVELOPMENT-PLAN.md` 第四章的任务定义，确认当前 Electron 版本与打包目标（历史版本选择有坑，见 9.4）。
+- **T4-02 要做什么**：把「服务地址」从 T4-01 的环境变量常量（`FANHE_SERVICE_URL`）升级为**可持久化的配置项**，支持本机地址与远程地址两档切换，切换后**仅改配置**即可生效。
+- **落地位置已经现成**：T4-01 把「渲染进程只访问自己的来源、由主进程决定上游」这条结构定好了，因此 T4-02 改的是 `apps/desktop` 里那个 `apiBaseUrl` 的**来源**（配置文件 / 主进程存储 + 界面入口），**不动反代与静态托管本身**，也不动 `apps/web`。
+- **验收口径已定（用户裁决，2026-10-12）：可配置即算。** 只验「改配置能切到远程 URL 且请求真的打到那个 URL」，用本地起一个假端点验证；**不假装远程已经存在**（真实远程要到阶段五 T5-04）。见 `NEXT-TASKS-2026-10-12.md` 第 2.3 节。
+- **阶段四剩余范围**：T4-03 把 `launch/agent.ts` 原样搬进外壳主进程（它从 T3-02 起就**刻意不认识数据库、认证与 HTTP**，只接受回环来源，就是为了这一刻 —— 搬的时候不要给它加依赖）；T4-04 启动自检。另有一项**不在编号内但属既定范围**：`credential.ts` 的存储后端换成主进程 `safeStorage`，建议单独一笔排在 T4-01 之后。
+- **别顺手做阶段五的容器化。**
+- **一处待你决定的取舍**：Electron 的 `userData`（Chromium 缓存、GPU 缓存等）默认落在**系统盘** `%APPDATA%`，而本项目其余一切都在 U 盘上。保持默认与「数据库刻意不进 U 盘」是同一类判断（缓存写入量大、伤 U 盘寿命），但若希望外壳完全便携，需要显式把 `userData` 重定向进工作区。**T4-01 未做这个重定向**，只把应用名定为「梵禾 Work」以得到一个正常目录名。
 - **改界面就会让 e2e 失效**：外壳接入会动到 dev server 与路由，届时基线不再是 149 项，见 2.4 的口径。
 
 ### 4.2 阶段三已无待办
@@ -512,8 +532,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **12 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **350 项、0 失败**（shared 83 + api 197 含 5 跳过 + web 70）；其余三条全绿 |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **360 项、0 失败**（shared 83 + api 197 含 5 跳过 + web 70 + desktop 10）；其余三条全绿 |
 | 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **149 项全通过**（UI 集成后的结果；改界面就要重跑） |
+| 11 | **外壳（阶段四起）** | 经入口 `pnpm --filter @fanhe/web build` 重建产物 → `pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`） | 输出 `[smoke] PASS`，且 `console错误=0`；详见 8.5 |
 
 **换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
 
@@ -581,6 +602,17 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - ❌ **给 `notes` 表加 `LIKE` 元字符转义**（除非你打算把它换成原生 `$queryRaw`）。
 - ❌ **改动 shadcn 组件源码来适配本项目风格** —— 差异在令牌层消化。
 - ❌ **忘了 `pnpm --filter @fanhe/shared build`** —— 共享包是构建型包，改了不构建，下游看到的是旧 `dist`。
+- ❌ **在受限环境里默认关掉 Chromium 沙箱** —— 需要时用 `FANHE_NO_SANDBOX=1` 显式声明，别写进代码或脚本默认值。
+
+### 8.5 跑外壳与验证外壳
+
+- **加载的是构建产物，不是 dev server**：`pnpm --filter @fanhe/desktop smoke` 前必须先 `pnpm --filter @fanhe/web build`，否则加载到的是上一轮的界面（`dist` 不入版本控制，换机后是空的）。
+- **冒烟（`smoke`）是外壳的验收手段**：隐藏窗口加载一次，在渲染进程里探 DOM，打印 `渲染元素/标题/路径/预加载桥/console错误` 一行并按成败设退出码。判据是 `#root` 里有元素且 console 零错误 —— 只看 HTTP 200 不够，那只说明文件在，说明不了界面画出来了。
+- **受限环境（没有桌面会话的服务进程、容器、部分 CI）必须加 `FANHE_NO_SANDBOX=1`**：那里 Chromium 的渲染进程沙箱起不来，症状是加载以**不含任何原因**的 `ERR_FAILED (-2)` 结束。**先确认是这个原因再关**，因为同一个报错也可能是产物缺失或内置服务没起来。
+- **`ELECTRON_RUN_AS_NODE=1` 会让 electron 退化成纯 Node**：不建窗口，`require('electron')` 返回可执行文件路径，症状是启动即抛 `Cannot read properties of undefined (reading 'on')`，看起来像 Electron 没装好。启动器 `scripts/launch.mjs` 已摘掉它，**别绕过启动器直接调 `electron .`**。
+- **渲染进程不走代理**：外壳只加载自己的回环服务，`main.ts` 里已 `appendSwitch('no-proxy-server')`。缺了它，系统/环境代理会把 `127.0.0.1` 的请求也送出去、同样得到 `ERR_FAILED`。
+- **Electron 二进制要单独确认**：44.7.0 没有安装脚本，`pnpm install` **不会**下载它。判据是 `node_modules/.pnpm/electron@*/node_modules/electron/dist/electron.exe` 与 `path.txt` 存在；缺了就 `pnpm --filter @fanhe/desktop ensure-electron`（根 `postinstall` 也会自动跑，幂等）。
+- **内置服务有单测**：`pnpm --filter @fanhe/desktop test`，10 项，覆盖 SPA 回退、带扩展名 404、路径越界 403、405、HEAD、反代路径/查询串/方法/请求体、上游不可达 502。**改 `server.ts` 就重跑它**，这些行为只有跑起来才看得见。
 
 ---
 
@@ -601,6 +633,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
 | 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
 | 前端首页三段式与版本号（**UI 集成新增**） | `apps/web/src/components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`、`apps/web/src/pages/HomePage.tsx`、`apps/web/src/lib/{nav-icons,version}.ts`；版本常量由 `apps/web/vite.config.ts` 的 `define` 注入 |
+| 桌面外壳（**阶段四 T4-01**） | `apps/desktop/src/{main,preload,server}.ts`（主进程 / 预加载 / 内置静态服务）、`apps/desktop/scripts/{ensure-electron,launch}.mjs`（二进制下载 / 启动器）、`apps/desktop/test/server.test.mjs`、`apps/desktop/{package.json,tsconfig.json}`；根 `package.json` 的 `postinstall` 调 `ensure-electron` |
 | 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
 | 前端工作纪要 UI | `apps/web/src/components/notes/`（`NotesPanel` / `NoteList` / `NoteEditor` / `MarkdownPreview` / `TagInput`）、`apps/web/src/lib/notes.ts` |
 | 前端本机草稿暂存（T3-08） | `apps/web/src/lib/note-draft.ts`（槽名、带版本号的序列化、过期与容量清理、写失败重试；接口注入 storage 以便单测） |
@@ -610,7 +643,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
 | 环境变量样例 | `apps/api/.env.example` |
 | 种子 | `apps/api/src/db/seed.ts` |
-| 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft,event-display,version}.test.mjs`、`apps/web/test/e2e-auth.mjs`（`apps/web` 的 `test` 脚本是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
+| 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft,event-display,version}.test.mjs`、**`apps/desktop/test/server.test.mjs`**、`apps/web/test/e2e-auth.mjs`（`apps/web` 与 `apps/desktop` 的 `test` 脚本都是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
 | 诊断脚本归档 | `projects/fanhe-work/tools/`（其 `README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
 | 规划与交接 | `projects/fanhe-work/docs/`（本文所在处） |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
@@ -681,6 +714,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 0x:xx | UI 集成提交推送 | `2576388`（代码）+ `fe92cb4`（文档回填）；`main` 与 `dev` 同步 |
 | 10-12 0x:xx | 阶段四准备与任务梳理 | `b5c0e7f`（T4-01 开工准备清单）、`9502591`（下一步任务 N-01 与阶段四主线） |
 | 10-12 0x:xx | **N-01 回填本文档** | 头部与 §0/§2.1/§2.3/§2.4/§3.2/§4.1/§4.4/§7/§8.2/§9/§10 同步至最终态：验证基线 328 → **350**、e2e 146 → **149**、导航口径统一为 **18 项**、`NavRail.tsx` → `Sidebar.tsx`、「三个占位导航项」→ **16 项**；`DEVELOPMENT-PLAN.md` 追加 9.40 |
+| 10-12 0x:xx | **T4-01 实施（Electron 外壳脚手架）** | `apps/desktop` 从 `.gitkeep` 落成最小工程：`src/{main,preload,server}.ts` + `scripts/{ensure-electron,launch}.mjs` + `test/server.test.mjs`。主进程在回环上起内置静态服务托管 `apps/web/dist` 并把 `/api/*` 反代到服务地址（含 SPA 回退）；`apps/web` 一行未改。四道门禁全绿：**360 项 0 失败**（shared 83 + api 197 含 5 跳过 + web 70 + **desktop 10**） |
+| 10-12 0x:xx | **T4-01 外壳冒烟验证** | `pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`）→ **PASS**：`渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0`；另以活体 API 验证 `/api/health` 经反代返回 200 |
+| 10-12 0x:xx | **T4-01 提交推送** | `b03ddb5`（代码，13 文件 +980/-8）；`main` 与 `dev` 同步 |
+
+**§十一 新增/修改的关键文件（T4-01）**：`apps/desktop/package.json`（**新**，`@fanhe/desktop`，`productName: 梵禾 Work`，`main: dist/main.js`，`devDependencies.electron: 44.7.0`，脚本 build / typecheck / test / ensure-electron / start / dev / smoke）、`apps/desktop/tsconfig.json`（**新**，`module`/`moduleResolution: NodeNext`，**刻意不写 `"type": "module"` 以产出 CJS**）、`apps/desktop/src/server.ts`（**新**，内置静态服务：MIME 表、逐跳头与剥离头、`startStaticServer` / `serveStatic`（SPA 回退 + 405 + 越界 403）/ `sendFile`（哈希资源长缓存、index 不缓存）/ `proxyToService`（剥 `host`/`content-length`/`accept-encoding`））、`apps/desktop/src/main.ts`（**新**，主进程：`DIST_ROOT`、`SERVICE_URL`（`FANHE_SERVICE_URL`）、`IS_SMOKE`、`no-proxy-server`、`buildWindow`、`setWindowOpenHandler`/`will-navigate` 白名单、`runSmoke`）、`apps/desktop/src/preload.ts`（**新**，`contextBridge` 暴露 `fanheDesktop`）、`apps/desktop/scripts/ensure-electron.mjs`（**新**，幂等二进制自检）、`apps/desktop/scripts/launch.mjs`（**新**，摘 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否 `--no-sandbox`）、`apps/desktop/test/server.test.mjs`（**新**，10 项）、`apps/desktop/.gitkeep`（删）；`pnpm-workspace.yaml`（`onlyBuiltDependencies: [electron]`）、根 `package.json`（加 `postinstall`）、`eslint.config.js`（`apps/desktop` 进 Node 全局块）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` / `apps/api` / `packages/shared` 本轮一行未改。**
 
 **§十一 新增/修改的关键文件（UI 集成）**：`packages/shared/src/navigation.ts`（18 项 / 分组 / `slug` / `buildNavSections` / `navCodeFromPath` 重写）、`packages/shared/src/permissions.ts`（运维信息平台改名）、`packages/shared/test/navigation.test.mjs`（重写，32 项）；`apps/web/src/components/Sidebar.tsx`（重写）、`TopBar.tsx`（五项菜单 + 版本号行）、`AppShell.tsx`（外层 `relative`）、`components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`（新）、`pages/HomePage.tsx`（新）、`pages/WorkbenchPage.tsx`（按地址分派）、`routes.tsx`（`routePath` + `MODULE_SUB_ROUTES`）、`lib/nav-icons.ts`（重写）、`lib/version.ts`（新）、`vite-env.d.ts`、`index.css`（hero 令牌族）、`vite.config.ts`（`define` 注入构建常量）、根 `package.json`（`0.0.0` → `0.1.0`）；`apps/web/test/e2e-auth.mjs`（新外壳同步 + `mouseMove` / `elementCenter` / `selectThemeOption` / `openHomeSection`）、`apps/web/test/version.test.mjs`（新，8 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS,UI-INTEGRATION-2026-10-11}.md`。**业务逻辑（四个面板与 `lib/` 数据层）一行未改。**
 
