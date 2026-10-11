@@ -794,10 +794,15 @@ async function main() {
     // 5b. 左侧导航按权限过滤。owner 同时持有 personal 与 system 两段权限，五项应当
     //     全部可见。四种角色的差异由 packages/shared/test/navigation.test.mjs 覆盖：
     //     造出另外三个角色的账号需要账号管理接口，那是阶段三的功能。
+    //
+    //     选择器必须限定在侧栏的 `aside` 里，不能用全局的 `nav a`。T3-06 给个人工作台
+    //     加了板块切换（`<nav aria-label="工作台板块">`，含「一键登录通道」「工作纪要」
+    //     两个链接），全局查询会把这它们一并数进来，于是「五项」变成七项 —— 而界面本身
+    //     完全正确。断言比被测对象宽，就会把正确的东西判成错的。
     const navLabels = JSON.parse(
       await evaluate(
         client,
-        `JSON.stringify([...document.querySelectorAll('nav a')].map((item) => item.textContent.trim()))`,
+        `JSON.stringify([...document.querySelectorAll('aside nav a')].map((item) => item.textContent.trim()))`,
       ),
     )
     record('owner 可见全部五个导航项', navLabels.length === 5, navLabels.join(' / '))
@@ -1873,11 +1878,34 @@ async function main() {
       (await evaluate(client, mainHasButtonFinder('保存'))) === true,
       '',
     )
+
+    // 创建之后编辑器必须载入刚保存的那一条，而不只是换个按钮文案。
+    //
+    // 这一项是补上的：它曾经真的失败过，而当时的断言只看按钮文案，恰好放过了那个 bug。
+    // 成因是父组件先 `setSelectedId(created.id)` 再重拉列表，编辑器由此重挂，而重挂
+    // 那一刻列表里还没有这一条、`note` 仍是 null，草稿被初始化成空白且此后再无同步
+    // 时机。界面表现为「左侧列表好好有条目，右侧编辑器一片空白、标题计数 0/200」，
+    // 且保存按钮还亮着，点下去只会得到「标题不能为空」。
+    const titleAfterCreate = await evaluate(client, `document.querySelector('#note-title').value`)
+    record(
+      '创建后编辑器载入该条：标题回填',
+      titleAfterCreate === NOTE_TITLE,
+      String(titleAfterCreate),
+    )
+
+    // 只数个数不够：数量对而内容错（比如串了两个别的标签）同样是坏的。这里连标签
+    // 文案一起比，顺带证明「全角逗号分隔」这条规则真的走到了界面。
     const tagChips = await evaluate(
       client,
       `[...document.querySelectorAll('main button[aria-label^="移除标签"]')].map((item) => item.getAttribute('aria-label'))`,
     )
-    record('中英文逗号都能分隔成标签芯片', tagChips.length === 2, JSON.stringify(tagChips))
+    record(
+      '中英文逗号都能分隔成标签芯片，且文案与录入一致',
+      tagChips.length === 2 &&
+        tagChips.includes(`移除标签 ${NOTE_TAG_A}`) &&
+        tagChips.includes(`移除标签 ${NOTE_TAG_B}`),
+      JSON.stringify(tagChips),
+    )
     await screenshot(client, '9c-notes-created')
 
     // 置顶是独立的一条幂等 PUT。成功后由服务端重排列表，界面照着重绘。

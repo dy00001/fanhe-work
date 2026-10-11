@@ -18,10 +18,11 @@ import { TagInput } from './TagInput'
  * 他已经失去「一边写一边核对」的机会 —— 纪要里写表格、写代码块时，这个差别很明显。
  * 因此这里维护一份草稿，左右两栏是同一份值的两种投影。
  *
- * **草稿的初始值只在这里算一次。** 父组件用 `key` 区分「新建」与「某一条」，
- * 换一条就重挂一次，不需要用 effect 去同步 `note` —— `useEffect` + `setState`
- * 的同步写法会在父组件重渲染时把用户正在输入的内容冲掉，而那个 bug 只在「加载完
- * 数据的同时用户已经打字」时出现，极难复现。
+ * **草稿的初始值在这里算，并按「正在编辑哪一条」的身份变化补一次同步。** 父组件用
+ * `key` 区分「新建」与「某一条」，换一条就重挂一次；但只靠重挂不够，因为「新建成功」
+ * 那次换 key 早于数据到达（详见下方 `syncedNoteId` 的注释）。同步的判据是 note 的
+ * **id**，不是整个 note 对象：同一条纪因列表重拉而换了引用时不能重置草稿，否则会
+ * 把用户正在输入的内容冲掉 —— 那正是不能用 `useEffect` 无条件同步 `note` 的原因。
  *
  * **只读访客走另一条分支**：直接渲染 Markdown 预览，不给输入框。把输入框置灰也行，
  * 但一个全是灰输入框的页面看起来像是坏了，而这里想传达的是「你有权看这条」。
@@ -78,6 +79,24 @@ export function NoteEditor({
 }) {
   const [values, setValues] = useState<NoteFormValues>(() => valuesFrom(note))
   const [problem, setProblem] = useState<string | null>(null)
+  const [syncedNoteId, setSyncedNoteId] = useState<string | null>(note?.id ?? null)
+
+  // 只在「正在编辑哪一条」的身份变化时补一次同步。
+  //
+  // 为什么单靠父组件的 `key` 不够：新建成功那一刻，父组件先 `setSelectedId(created.id)`
+  // 再重拉列表，key 由 `'new'` 变成新 id、组件重挂，而重挂时列表里还没有这一条，
+  // `note` 仍是 null，草稿于是初始化成空白，且此后再无同步时机 —— 表现是「刚创建的
+  // 纪要，右侧编辑器一片空白、标题计数 0/200、预览显示空态提示」，而左侧列表里它好好
+  // 地躺着。保存按钮还因为 `hasChanges(null, 空白)` 为真而亮着，点下去只会收到
+  // 「标题不能为空」。
+  //
+  // 判据用 id 而不是整个 note：同一条纪要因列表重拉而换了对象引用时不重置草稿，
+  // 否则用户正在输入的内容会被冲掉。
+  const noteId = note?.id ?? null
+  if (noteId !== syncedNoteId) {
+    setSyncedNoteId(noteId)
+    setValues(valuesFrom(note))
+  }
 
   const isNew = note === null
 
