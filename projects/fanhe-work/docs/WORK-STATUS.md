@@ -5,12 +5,14 @@
 >
 > 生成时间：2026-10-11。记录时工作树干净、与 `origin/main` 同步（领先 0）。
 >
-> 更新 2026-10-11 14:45。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
+> 更新 2026-10-11 15:10。以下事实点已变化，最新进度见 `PROGRESS-REVIEW-2026-10-11.md`。
 > 其一，远端仓库已由私有改为公开，绑定与两条访问链路见 `WORKSPACE-BINDING.md`。
 > 其二，新增 `dev` 开发分支，本地已建立跟踪，落后 `main` 4 个提交。
-> 其三，数据库四个迁移全部应用，九张业务表齐备。
-> 其四，四道门禁本日实跑，`test`、`lint`、`typecheck`、`format:check` 全部通过。
+> 其三，数据库五个迁移全部应用，十张业务表齐备（另加 `_prisma_migrations`）。
+> 其四，四道门禁本日实跑多次，`test`、`lint`、`typecheck`、`format:check` 全部通过。
 > 其五，`node_modules.old` 此前未被忽略规则覆盖，会污染 lint 与 format，已修复。
+> 其六，首个 owner 账号已创建（登录名 `fanhe`，口令写入被忽略的 `.tmp/owner-credentials.txt`）；由此 `apps/api/test/setup.test.ts` 的 5 项首次初始化用例转为设计性跳过。
+> 其七，T3-05 纪要模型与接口已完成并提交（模型 + 八条接口 + 共享类型 + 31 项新测试），**界面尚未接上，属 T3-06**。
 
 ---
 
@@ -57,7 +59,7 @@ projects/fanhe-work/
 | 阶段零 | 目录骨架 | ✅ 完成 |
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见第六节） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾，阶段二收口） |
-| 阶段三 | 个人工作台三板块（T3-01 ~ T3-04） | ✅ T3-01~T3-04 功能完成并已提交推送 |
+| 阶段三 | 个人工作台三板块（T3-01 ~ T3-05） | ✅ T3-01~T3-05 已完成并提交（T3-05 只含模型与接口，界面属 T3-06） |
 | 阶段四 | Electron 外壳 | ⬜ 未开始 |
 
 **阶段三验收清单**：
@@ -66,6 +68,7 @@ projects/fanhe-work/
 - 其余验收项（折叠记忆、占位页、子路由等）随阶段二已落定
 
 **最近提交**：
+- `5d1883a` feat(阶段三): T3-05 纪要模型与接口
 - `dba6198` docs(阶段三): 回填 T3-04 验证结果与迁移计数
 - `bb29055` feat(阶段三): T3-04 启动记录与路径失效提示
 
@@ -76,7 +79,7 @@ projects/fanhe-work/
 - **T3-01 启动配置模型与接口**：`LaunchProfile` 模型、配置 CRUD 接口、按所有者隔离（`where` 恒带 `userId`）。
 - **T3-02 本机代理与进程启动**：`apps/api/src/launch/agent.ts` 不依赖数据库/认证/HTTP，入参为已取好的 `LaunchProfile`，便于阶段四搬进 Electron 主进程。
 - **T3-03 启动配置管理界面**：前端 `lib/api.ts`（只拼地址、不认会话）+ `lib/launch.ts`（`withAccessToken` 包一层、拆信封、按服务端错误码分流 `launchRunRecovery`）；界面三态走 `components/StateView.tsx`。
-- **T3-04 启动记录与路径失效提示**（本次收尾重点）：
+- **T3-04 启动记录与路径失效提示**（已提交 `bb29055`，含文档回填 `dba6198`）：
   - 新增 `launch_history` 表与第四迁移 `20261010180508_launch_history`。
   - `history.ts`：记录真实启动尝试（成功 / `executable_missing` / `spawn_failed`），去重命中不记；按用户保留最近 500 条；`loadLastRuns` / `loadLastSuccessAt` 分组查询。
   - `status.ts`：独立 `GET /api/launch/profiles/status`（挂 `read`，与列表分开），并发做文件系统检查 + 历史摘要。
@@ -84,23 +87,40 @@ projects/fanhe-work/
   - 只读角色：`LaunchProfileRow` 的 `canWrite: false` 隐藏整行操作。
   - 相对时间：`lib/relative-time.ts`（`Intl.RelativeTimeFormat('zh-CN')`），前端零依赖单测 10 项。
 
-> 详细判断见 `DEVELOPMENT-PLAN.md` 9.28 ~ 9.31。
+- **T3-05 纪要模型与接口**（本次重点，**只落模型与接口，界面属 T3-06**）：
+  - 新增 `notes` 表与第五迁移 `20261011064829_add_notes`。至此五个迁移、十张业务表（另加 `_prisma_migrations`）。
+  - 标签用 `text[]` 加 **GIN 索引**，不另开 `tags` / `note_tags` 关联表；归档用 `archivedAt` 记时刻而非布尔；沿用 `deletedAt` 软删除；两处复合索引覆盖列表与归档视图。
+  - `packages/shared/src/note.ts`：纪要跨进程类型、`NOTE_LIMITS` 上限、`normalizeNoteTags` 归一（去空白 + 精确去重，不做大小写折叠）、`isValidNoteTag` 判定。
+  - `apps/api/src/note/notes.ts`：所有权在 service 层强制（`where` 恒带 `userId`），归属不符与不存在**统一返回 404**（不用 403，避免 UUID 存在性试探）；标题 trim、**正文不 trim**（Markdown 前导空白有意义）；先归一去重再判数量上限；列表排序三级键（置顶 → 更新时间 → 创建时间）；标签清单走 `unnest` 原生 SQL，**已归档计入、已删除不计**。
+  - `apps/api/src/routes/notes.ts`：八条路由 —— 列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档，读写分挂 `personal.note.read` 与 `personal.note.write`；`PATCH` 体要求 `minProperties: 1`；置顶与归档各自一条幂等 `PUT`。**不写审计**（私有用量，与启动配置同判）。
+  - 测试：api 新增 21 项（`note.test.ts`）、shared 新增 10 项（`note.test.mjs`）。
+
+> 详细判断见 `DEVELOPMENT-PLAN.md` 9.28 ~ 9.32。
 
 ---
 
 ## 四、进行中开发
 
-**无。** T3-05 尚未启动，工作树干净，无未提交改动、无运行中开发服务（API 8787 / 前端 5173 端口当前无监听）。
+**无。** T3-05 已实现并提交（`5d1883a`），下一项 T3-06 Markdown 编辑与预览尚未启动，无运行中开发服务（API 8787 / 前端 5173 端口当前无监听）。
 
 ---
 
 ## 五、未提交的代码改动
 
-**无。** `git status` 显示与 `origin/main` 同步（领先 0），工作树干净。T3-04 的代码 + 测试 + 文档已全部提交并推送。
+**无。** T3-05 的代码 + 测试已提交（`5d1883a`），本轮文档回填随本次一并提交。提交后本地 `main` 领先 `origin/main`，推送见第八节 8.5（必须走本地代理）。
 
 ---
 
 ## 六、遗留问题与已知边界
+
+### T3-05 的明确边界（非缺陷，是有意留白）
+- **界面尚未接上**：本轮只落模型与接口，`apps/web` 里没有纪要入口，前端测试数不变（10 项），端到端仍 62 项。**不要把「接口能测通」当成「功能可用」。**
+- **列表分页未做**：`GET /api/notes` 目前一次返回该用户全部未删除纪要，没有分页参数；数据量上来后需要补。
+- **全文检索属 T3-07**：标题与正文的中文关键词检索尚未实现。
+- **`PATCH` 不接受 `pinned` / `archivedAt`**：这两个状态各有独立幂等 `PUT`，是有意设计而非遗漏。
+- **标签无独立元数据**：没有颜色、描述，也不跨用户共享；「标签重命名」目前需要逐条改标签数组。
+- **正文上限 10 万字符是防超大请求体的闸门**，不是业务约束。列类型是 `text` 不设宽度，改上限只需改 `NOTE_LIMITS.CONTENT_MAX` 与 schema 注释，**不需要迁移**。
+- **`@updatedAt` 副作用**：置顶 / 归档都会刷新 `updatedAt`，取消置顶后该条会落到「最近修改」首位 —— 有意保留，与用户「我刚操作过它」的直觉一致。
 
 ### T3-04 的明确边界（非缺陷，是有意留白）
 - `canWrite: false` 已隐藏 `LaunchProfileRow` 全行操作，但**浏览器级验证只覆盖 owner**；其他角色的真实渲染与状态重查失败反馈仍属后续边界，不能把服务端 403 或代码隐藏逻辑算作多角色浏览器验收。
@@ -123,10 +143,11 @@ projects/fanhe-work/
 
 ## 七、后续计划
 
-1. **下一项 T3-05 纪要模型与接口（P0）**：`notes` 表与接口，支持标签、置顶、时间归档查询。任务定义见 `DEVELOPMENT-PLAN.md` 第三章，阶段验收见第七章。
-   - 可复用的现成结构：本机界面偏好走 `lib/preferences.ts`；「用户私有、按所有者隔离」的数据表照 `apps/api/src/launch/profiles.ts` 写法；界面三态走 `components/StateView.tsx`；前端数据层照 `lib/launch.ts` 两层结构。
-2. 阶段三其余：T3-06 Markdown 编辑预览（P0）、T3-07 全文检索（P1，属纪要）。
-3. 事件记录（T3-08 起）另开板块。
+1. **下一项 T3-06 Markdown 编辑与预览（P0）**：编辑器与预览（含标签输入），届时才把纪要接上界面。任务定义见 `DEVELOPMENT-PLAN.md` 第三章（第 185 行），阶段验收见第七章。
+   - T3-06 可直接复用的现成结构：后端八条接口已就位（见第三节 T3-05）；前端传输层照 `lib/api.ts`（只拼地址、不认会话）+ `lib/launch.ts`（`withAccessToken` 包一层、拆信封、按服务端错误码分流）两层写法；界面三态走 `components/StateView.tsx`；本机界面偏好走 `lib/preferences.ts`；私有数据的会话感知组件可照 `components/launch/LaunchPanel.tsx` 的四态分派容器。
+   - 新增颜色令牌要遵守 `DEVELOPMENT-PLAN.md` 9.2 中的三条令牌约定（`:root` 与 `.dark` 各写一份，令牌唯一来源是 `index.css` 两层结构，不改 shadcn 组件源码）。
+2. 阶段三其余：T3-07 全文检索（P1）、T3-08 草稿自动保存（P1），均属纪要板块。
+3. 事件记录（T3-09 起）另开板块。
 4. 阶段四 Electron 外壳（含 `agent.ts` 搬入主进程、凭据换 `safeStorage`）。
 
 ---
@@ -157,7 +178,8 @@ projects/fanhe-work/
   ../../infra/portable/ws-run.cmd pnpm db:seed
   ../../infra/portable/ws-run.cmd pnpm db:ping   # 自检：列出表与行数
   ```
-- **迁移目录名字典序 ≠ 实际创建顺序**：现有四个迁移中 `launch_profiles` 依赖 `init` 的 `users`，`launch_history` 依赖 `users` 与 `launch_profiles`；当前字典序恰好满足这两组依赖，**不能宣称全部迁移互相独立**。新增迁移若引用更晚创建的对象，要查的是迁移间是否真的独立。
+- **迁移目录名字典序 ≠ 实际创建顺序**：现有五个迁移中 `launch_profiles` 依赖 `init` 的 `users`，`launch_history` 依赖 `users` 与 `launch_profiles`，`add_notes` 只依赖 `init` 的 `users` 和自身外键；当前字典序恰好满足这几组依赖，**不能宣称全部迁移互相独立**。新增迁移若引用更晚创建的对象，要查的是迁移间是否真的独立。当前共**十个业务表**（`users` / `roles` / `permissions` / `role_permissions` / `refresh_tokens` / `login_attempts` / `audit_logs` / `launch_profiles` / `launch_history` / `notes`），另加 `_prisma_migrations`。
+- **owner 账号**：本机已于 2026-10-11 创建首个 owner（登录名 `fanhe`，显示名「梵禾」，状态 active），强随机口令写在被忽略的 `.tmp/owner-credentials.txt`（`.gitignore` 第 3 行 `.tmp/` 覆盖）。换机后该文件不随盘走，需重新执行 `pnpm db:create-owner` 或走首次初始化引导。
 
 ### 8.4 Prisma 7 三处硬性差异（钉 7.10.0，两包同版本，不要 `@latest`）
 1. 强制驱动适配器：`@prisma/adapter-pg` + `pg`。
@@ -192,13 +214,14 @@ projects/fanhe-work/
 | 项目根 | `projects/fanhe-work/` |
 | 后端代码 | `projects/fanhe-work/apps/api/src/` |
 | 启动相关 | `apps/api/src/launch/{agent,profiles,status,history}.ts`、`apps/api/src/routes/launch.ts` |
+| 纪要相关 | `apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`packages/shared/src/note.ts` |
 | 共享包 | `packages/shared/src/`（类型）、`packages/shared/test/` |
 | 前端启动 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,relative-time}.ts` |
 | Prisma 配置 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
-| 迁移目录 | `apps/api/prisma/migrations/`（4 个） |
+| 迁移目录 | `apps/api/prisma/migrations/`（5 个） |
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
 | 环境样例 | `apps/api/.env.example` |
-| 测试 | `apps/api/test/launch-history.test.ts`、`packages/shared/test/launch.test.mjs`、`apps/web/test/relative-time.test.mjs`、`apps/web/test/e2e-auth.mjs` |
+| 测试 | `apps/api/test/{note,launch-history}.test.ts`、`packages/shared/test/{note,launch}.test.mjs`、`apps/web/test/relative-time.test.mjs`、`apps/web/test/e2e-auth.mjs` |
 | 规划与交接 | `docs/DEVELOPMENT-PLAN.md`、`docs/HANDOFF-2026-10-10.md`、`docs/HANDOFF-2026-10-11.md`、`docs/IMPLEMENTATION-PLAN.md` |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
 | 测试 / 界面令牌 | `.workbuddy-ai/memory/TESTING.md`、`.workbuddy-ai/memory/UI-TOKENS.md` |
@@ -214,16 +237,19 @@ projects/fanhe-work/
 5. **依赖重建**：经入口 `ws-run.cmd pnpm install`（store 随盘符失效会要求重建，非交互需 `CI=true`）。
 6. **构建**：经入口 `pnpm --filter @fanhe/shared build` → `pnpm db:generate`。
 7. **首次初始化**：启动后走引导建超级管理员，或 `pnpm db:create-owner` 恢复 owner。
-8. **门禁确认**：`ws-run.cmd pnpm test` / `lint` / `typecheck` / `build` / `format:check`；浏览器级 `pnpm --filter @fanhe/web test:e2e`（预期 62/62）。
-9. **继续 T3-05**：任务定义见 `DEVELOPMENT-PLAN.md` 第三章，可复用结构见第七节。
+8. **门禁确认**：`ws-run.cmd pnpm test` / `lint` / `typecheck` / `build` / `format:check`；`test` 预期 **219 项**（shared 50 + api 159 + web 10），其中 api 有 **5 项因库里已存在 owner 而设计性跳过**（`setup.test.ts` 的首次初始化用例，属正常，不是失效）；浏览器级 `pnpm --filter @fanhe/web test:e2e`（截至 T3-05 预期 62/62；T3-06 接上纪要界面后该数字会变）。
+9. **继续 T3-06 Markdown 编辑与预览**：任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 185 行，可复用结构见第七节。
 
 ---
 
 ## 十一、权威文档索引
 
-- `docs/DEVELOPMENT-PLAN.md` — 总体方案、任务表、阶段验收、**第九章逐任务实施判断（9.28~9.31 为阶段三）**。
+- `docs/DEVELOPMENT-PLAN.md` — 总体方案、任务表、阶段验收、**第九章逐任务实施判断（9.28~9.32 为阶段三）**。
 - `docs/HANDOFF-2026-10-10.md` — 整体进度、设计决策、迁移核验、换机步骤 7.x。
 - `docs/HANDOFF-2026-10-11.md` — T3-04 当日补记（已验证、已提交状态）。
+- `docs/PROGRESS-REVIEW-2026-10-11.md` — 任务进度盘点（完成 / 进行中 / 未开始、九条风险 R1~R9、下一步优先级）。
+- `docs/SYNC-COMPARE-2026-10-11.md` — 工作空间与远端仓库逐项对比（文件结构 / 内容 / 版本状态 / 变更记录四维度）。
+- `docs/WORKSPACE-BINDING.md` — 工作空间与远端仓库绑定登记、两条访问链路（本地 git 可读写 / 连接器只读）。
 - `docs/IMPLEMENTATION-PLAN.md` — 实施层面的方案对照。
 - `infra/docs/PORTABLE-WORKSPACE.md` — 工作空间机制、入口、重定向、换机修复。
 - `.workbuddy-ai/memory/ENVIRONMENT.md` — 逐机环境事实与踩坑（代理、编码、TEMP、Docker）。

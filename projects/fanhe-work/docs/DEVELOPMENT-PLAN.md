@@ -442,15 +442,16 @@ T0-01 → T0-02 → T1-01 → T1-04 → T1-07 → T2-01 → T2-02 → T3-01 → 
 | T3-01 启动配置模型与接口 | 已完成 | 新增 `packages/shared/src/launch.ts`（软件标识清单与判定、字段上限、绝对路径判定、请求与响应类型；启动参数用 `String[]` 而不是拼接字符串）；`schema.prisma` 加 `LaunchProfile` 模型与迁移 `20261010165220_launch_profiles`（软删除、复合索引 `(user_id, deleted_at, sort_order)`、外键级联）；新增 `apps/api/src/launch/profiles.ts`（所有权在 service 层强制，重名检查不用数据库约束）与 `src/routes/launch.ts` 五条路由（列表 / 新增 / 重排 / 修改 / 删除，统一挂 `personal.launch.*` 权限）；api 新增 18 项集成测试、shared 新增 7 项。判断见 9.28 |
 | T3-02 本机代理与进程启动 | 已完成 | 新增 `apps/api/src/launch/agent.ts`（**代理核心**：`buildLaunchCommand` 纯函数 + `runLaunchProfile`，不认识数据库、认证与 HTTP，阶段四原样搬进外壳主进程）、`src/launch/loopback.ts`（回环来源判定）、`profiles.ts` 增 `getProfile`、`routes/launch.ts` 增 `POST /api/launch/profiles/:id/run`（只接受配置 id，来源必须是回环，挂 `personal.launch.write`）；失败原因新增 `executable_missing`(409) 与 `spawn_failed`(500)；api 新增 18 项测试（含 8 项纯函数）。判断见 9.29 |
 | T3-03 启动配置管理界面 | 已完成 | 新增 `apps/web/src/components/launch/`（`LaunchPanel.tsx` 四态分派容器与删除确认、`LaunchProfileRow.tsx` 单行、`LaunchProfileDialog.tsx` 新增/编辑表单）；新增 `components/StateView.tsx`（空、加载、错误三态收敛到一处，`EmptyState.tsx` 删除、五处调用点改指向）与 `components/ui/dialog.tsx`、`ui/textarea.tsx`（依赖加 `@radix-ui/react-dialog`）；新增 `lib/launch.ts`（六条接口的会话感知封装与启动失败分流）与 `lib/launch-icons.ts`（软件名、图标查找表与解析键）；`lib/api.ts` 补六条传输函数并把方法域扩到 PUT/PATCH/DELETE；`pages/WorkbenchPage.tsx` 接入板块并移除阶段二的账号与权限点诊断内容；端到端从 42 项扩到 56 项（新增 14 项覆盖空态、校验、增删改与排序）。判断见 9.30 |
-| T3-04 启动记录与路径失效提示 | 功能已完成 | 新增 `launch_history` 模型与第四迁移 `20261010180508_launch_history`、`launch/history.ts` 与 `launch/status.ts`；启动真实尝试的成功与两类失败落库，去重不记；独立 `GET /api/launch/profiles/status` 提供路径状态与近期历史，启动模块共七条路由；界面有失效徽标、重新指定路径与启动摘要，`canWrite: false` 隐藏 Row 全行操作；新增 api 历史测试 17 项、web 相对时间测试 10 项（纳入根 `test`），shared 启动测试由 7 增至 9 项。浏览器 e2e 62/62 全通过、无渲染异常，`zz_e2e` 残留已清；最终门禁结果待本轮核验回填（预计 188 项，待主代理确认），fresh deploy 待补验，工作树未提交。见 9.31 |
+| T3-04 启动记录与路径失效提示 | 已完成 | 新增 `launch_history` 模型与第四迁移 `20261010180508_launch_history`、`launch/history.ts` 与 `launch/status.ts`；启动真实尝试的成功与两类失败落库，去重不记；独立 `GET /api/launch/profiles/status` 提供路径状态与近期历史，启动模块共七条路由；界面有失效徽标、重新指定路径与启动摘要，`canWrite: false` 隐藏 Row 全行操作；新增 api 历史测试 17 项、web 相对时间测试 10 项（纳入根 `test`），shared 启动测试由 7 增至 9 项。浏览器 e2e 62/62 全通过、无渲染异常，`zz_e2e` 残留已清；最终门禁已核验全绿（shared 40 + api 138 + web 10 = 188 项，0 跳过），fresh deploy 经空库实测通过。见 9.31 |
+| T3-05 纪要模型与接口 | 已完成 | 新增 `packages/shared/src/note.ts`（纪要跨进程类型、字段上限 `NOTE_LIMITS`、标签归一 `normalizeNoteTags` 与合法性判定）与 `schema.prisma` 的 `Note` 模型、第五迁移 `20261011064829_add_notes`（标签用 `text[]` 加 GIN 索引、两处复合索引、外键级联、软删除）；新增 `apps/api/src/note/notes.ts`（所有权在 service 层强制、五种失败原因、排序三级键、标签走 `unnest` 原生查询）与 `src/routes/notes.ts` 八条路由（列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档，统一挂 `personal.note.read` 与 `personal.note.write`）；api 新增 21 项集成测试、shared 新增 10 项；四道门禁全绿，三包合计 219 项（含 5 项因 owner 已存在而设计性跳过）。**本轮只落模型与接口，界面属 T3-06。** 判断见 9.32 |
 
 ### 9.2 待办
 
-1. **阶段三进行中：T3-01 至 T3-04 功能已完成，下一项是 T3-05 纪要模型与接口（P0，本轮未开启）**，任务定义见第三章，阶段验收见第七章。T3-04 收尾已完成：**最终门禁已核验全绿**（shared 40 + api 138 + web 10 = 188 项，0 跳过；lint / typecheck / build / format:check 全绿；浏览器 e2e 62/62 全通过），第四迁移（launch_history）的 fresh deploy 经空库实测通过（九张业务表，seed 11 / 4 / 29）。T3-04 已提交（bb29055），待推送 origin/main。续接时先读 9.31、`HANDOFF-2026-10-11.md` 与 `HANDOFF-2026-10-10.md` 的 5.1、5.4。
+1. **阶段三进行中：T3-01 至 T3-05 已完成，下一项是 T3-06 Markdown 编辑与预览（P0）**，任务定义见第三章（第 185 行），阶段验收见第七章。T3-05 收尾已完成：`notes` 表与第五迁移 `20261011064829_add_notes` 应用到位（十个业务表 + `_prisma_migrations`），八条纪要接口与共享类型落地，**四道门禁全绿**（shared 50 + api 159 + web 10 = 219 项，其中 api 5 项因 owner 已存在而设计性跳过；`lint` / `typecheck` / `format:check` 全绿）。T3-05 已提交推送。续接时先读 9.32、9.31、`HANDOFF-2026-10-11.md` 与 `HANDOFF-2026-10-10.md` 的 5.1、5.4。
 
-   T3-04 两项功能均已落地：路径失效现在有行内徽标与重新指定入口；`launch_history` 记录真实启动尝试（成功、`executable_missing`、`spawn_failed`），去重不记。浏览器 e2e 62/62 全通过，阶段三验收第二项已勾选；其他角色的真实渲染与状态重查失败反馈仍属明确边界，见 9.31。
+   **T3-05 只落模型与接口，界面上还没有入口** —— 这是本轮最重要的边界，不要把「接口能跑」当成「功能可用」。下一项 T3-06 的范围是 Markdown 编辑器与预览（含标签输入），届时才接上 `apps/web`：沿用私有数据的 `where` 恒带 `userId`、前端传输层（`lib/api.ts` 只拼地址）与会话层（`lib/launch.ts` 式的 `withAccessToken` 包一层）分离、界面三态统一走 `components/StateView.tsx` 等现成结构。前端新增颜色令牌要遵守下面第 3 段的令牌约定。
 
-   后续 T3-05 的范围是 `notes` 表与接口，支持标签、置顶、时间归档查询；沿用私有数据的 `where` 恒带 `userId`、前端传输层与会话层分离、统一 `StateView` 等现成结构，不在本轮开启实现。
+   T3-04 至此已完整收口（含提交推送与 fresh deploy 实测），路径失效有行内徽标与重新指定入口，`launch_history` 记录真实启动尝试；其他角色的真实渲染与状态重查失败反馈仍属明确边界，见 9.31。
 
    与界面直接相关的三条既有约定：**令牌的唯一来源是 `index.css` 的两层结构**（`:root` 原始值加 `@theme inline` 映射），不要在组件里写死颜色；**方案 B 与 shadcn 默认风格的差异在令牌层消化**（`--shadow-xs/sm` 归零、只覆盖 `--radius-md` 到 8px），不要改组件源码；**新增颜色令牌要同时在 `:root` 与 `.dark` 两块里各写一份**，只写一处会得到一个只在亮色（或只在暗色）下正确的界面，而这类缺陷在默认配色下完全看不出来。
 2. 组件清单与令牌规格已在 T2-01 落定，见 9.21。**新增界面一律从 `apps/web/src/components/ui/` 取组件，不要再手写等价元素**：同一件东西两种实现时，差异只会在改令牌或换主题时才暴露，而那时已经很难判断是哪一处漏改。T2-02 已把 `NavRail` 换掉，剩余的 `AuthLayout` 与 `HomePage` 内容区手写元素随 T2-03 一并处理。
@@ -1124,5 +1125,35 @@ bash ../../infra/portable/ws-run.sh pnpm install
 **写入时机：路由层等写完再回响应。** 界面收到启动结果后会重拉状态，等待写入可避免正常落库时读到旧摘要；写入异常被记录并吞掉，主流程仍保持真实启动结果。这不意味着历史写入失败时也保证摘要更新。
 
 **浏览器验证与收尾状态（2026-10-11）。** 浏览器 e2e 已证实 **62/62 全通过，无渲染异常**，阶段三验收第二项据此勾选；最后调用已清掉 `zz_e2e` 残留。路径失效徽标的断言用 **`[data-slot=badge]` 精确匹配徽标文本**，避开名称 `zz_e2e_路径失效` 导致正文包含匹配的假判据。终门禁已核验全绿：shared 40 + api 138 + web 10 = **188 项**，0 跳过；lint / typecheck / build / format:check 全绿。第四迁移 `20261010180508_launch_history` 的 fresh deploy 已在空库实测通过（九张业务表齐全，seed 写入 11 / 4 / 29，与主库一致）；当前共九张业务表，`launch_profiles` 依赖 init 的 `users`，history 依赖 `users` / `launch_profiles`，字典序满足这两组依赖，前两个旧迁移互相独立的历史结论不扩展到全部迁移。**T3-04 功能已完成并提交（bb29055），下一项 T3-05 纪要模型与接口，本轮未开启；待推送 origin/main。**
+
+### 9.32 T3-05 实施中的几处判断
+
+**本次只落模型与接口，界面留给 T3-06。** T3-05 的范围是 `notes` 表与八条接口（列表 / 标签清单 / 单条 / 新增 / 修改 / 删除 / 置顶 / 归档）加上标签、置顶、时间归档查询；Markdown 编辑与预览属 T3-06，全文检索属 T3-07。因此本轮**没有前端改动**，`apps/web` 的 10 项测试数不变，端到端仍是 62 项 —— 不能把「接口能跑」当成「功能可用」，界面上现在还没有入口。
+
+**`notes` 表与第五个迁移。** 迁移目录名 `20261011064829_add_notes`，字典序排在 `launch_history` 之后。它依赖 `users`（init 建的）与自身的外键级联，与前面两个旧迁移互相独立的历史结论不冲突。至此共**五个迁移、十一张表**（十张业务表加 `_prisma_migrations`）。列类型：`title` 用 `varchar(200)` 与共享包的 `NOTE_LIMITS.TITLE_MAX` 对齐；`content` 用 `text` **不设宽度**，长度上限由应用层强制 —— 上限只是防超大请求体的闸门，改它不该需要一次迁移。
+
+**标签用 `text[]` 加 GIN 索引，不另开 `tags` / `note_tags` 两张关联表。** 个人工作台的标签是轻量场景：没有颜色、描述这类独立元数据，也不需要跨用户共享。开两张表换来的查询能力（标签重命名、标签统计）用数组加一次聚合同样能做，代价是两处级联维护与两次连接查询。标签名过滤走 `has`（数组包含），**B-tree 用不上数组的包含判断**，因此单建一条 `@@index([tags], type: Gin)`。这条判断与 `LaunchProfile.args` 用 `String[]` 同源。
+
+**正文按 Markdown 原文存，不做 trim；标题做 trim。** Markdown 的前导空白有意义：缩进决定列表层级与代码块，首尾空行在编辑器里是用户看得见的东西。归一正文等于悄悄改写用户写下的内容，而他在大纲视图里看不出哪里变了。标题归一则是必要的 —— 前端漏做一次，库里就会并存两个「看起来一样」的标题。正文允许为空（先起标题、内容回头再补是记纪要时最常见的动作），标题不允许（一条没有标题的纪要，在列表上看起来就像一行渲染错误）。存原文而不存渲染后的 HTML：渲染是前端的事，存 HTML 意味着换一个渲染器就要重写全部历史数据，而且 HTML 里能塞脚本。
+
+**置顶与归档各自一条幂等 `PUT`，不并入 `PATCH`。** `PUT /api/notes/:id/pin` 与 `PUT /api/notes/:id/archive` 用 PUT 是因为它们替换的是这个状态整体，天然幂等（设成与当前相同的值不报错）。不并进 `PATCH /api/notes/:id` 的理由是：它们表达的是「用户对这条纪要做的动作」，与「编辑正文」是两件事，混在一条路径上会让失败处理与界面反馈都变复杂 —— 改标题失败与置顶失败对用户是两回事。`PATCH` 的 body 因此只含 `title` / `content` / `tags` 三个字段，并要求 `minProperties: 1`：空 body 等于什么都没改却会走完一次查询与一次写入，`updatedAt` 随之变化，让「这条纪要什么时候被改过」失真。
+
+**归档记时刻而不是布尔。** `archivedAt` 为 `timestamptz(3)` 且可空，null 表示未归档。布尔表达不了「什么时候归档的」，而这个问题（「这个月归档了哪些」）在回头看时有用。再次归档会得到新时刻，不沿用上一次 —— 保留旧时刻会让这个答案停在几个月前。归档的纪要**仍可读、可改、可取消归档**，只是退出默认列表；这一点与 `deletedAt` 的软删除不同，删除的不再出现在任何默认视图里。列表筛选的 `archived` 只有两档（`null` / `not null`），**没有「两者一起看」这一档** —— 界面上归档与未归档是两个视图，多一个档就要在每个视图里多一次判断。
+
+**归属不符与真的不存在，对外是同一种结果（404），不是 403。** 与 `launch/profiles.ts` 同一条规则：所有权在 service 层强制，每个函数都要求传入 `userId` 且所有查询都把它写进 `where`。403 等于确认「这个 id 存在，只是不属于你」，而 id 是 UUID，能问出存在性就意味着可以逐个试探。`removeNote` 用 `updateMany` 而不是「先查再 update」：一条语句同时完成归属校验与写入，返回的 `count` 天然表达「本次是否真的改动了一行」，重复删除返回 `removed: false` 而不是报错。
+
+**`NoteListFilter` 的四个可选字段显式带上 `| undefined`。** 这个对象在路由层由查询参数拼出来，参数缺省时读到的就是 `undefined`；项目开了 `exactOptionalPropertyTypes`，不加这一项就必须为每个字段写一次条件赋值，而那只是语法噪音 —— 对筛选条件而言，「字段缺失」与「显式 undefined」是同一件事，都表示不过滤。**这个宽松只留给筛选对象**：请求体类型（`UpdateNoteRequest` 等）不跟随，在那里「没传这个字段」表示不改、「传了 undefined」是需要被拒绝的非法输入，两者必须能区分开。
+
+**校验分两层：schema 管形状，service 管业务规则，这里曾让一条测试失败。** 路由的 JSON schema 管类型与长度上限（挡住超大请求体），service 管「标题归一后不能为空」「标签归一与计数」「时间范围能不能解析」。分工的接缝上出过一次真实的失败：测试往 `tags` 里塞了一个空串 `''` 想验证「归一丢掉空串」，结果被 schema 的 `minLength: 1` 先挡在门外（`body/tags/2 must NOT have fewer than 1 characters`）。结论是**归一与合法性判断不是同一件事**：schema 挡明显非法的形状，`normalizeNoteTags` 负责「哪些算是同一个标签」。测试因此改成只留一个纯空白项（空白项能过 `minLength`）去触发 service 的归一。另一个顺序判断同理：**先归一去重再判数量上限**，否则「提交 25 个标签其中有 10 个重复、归一后 15 个」这样一次合法提交会被误拒。
+
+**列表排序是三级键：置顶倒序 → 更新时间倒序 → 创建时间倒序。** 第三级键有必要：同一秒内创建或批量导入的纪要，`updatedAt` 会撞到一起，那时排序结果随数据库物理顺序变化，表现为「刷新一次顺序就变一次」。副作用要记住：`@updatedAt` 会随置顶/归档一起刷新，因此取消置顶后这条纪要会落到「最近修改」的第一位 —— 用户刚刚确实操作过它，这个位置符合直觉。
+
+**标签清单走原生 SQL，不用 `groupBy`。** `groupBy` 对标量列分组，而标签在数组里，只能用 `unnest` 展开再分组；`userId` 用参数绑定而不是字符串拼接 —— 拼接在这个位置会直接变成一个注入口。计数口径：**已归档的计入，已删除的不计**。归档是「收起来」不是「不要了」，按标签找东西时把归档排除掉会让「这个标签下只有两条」这种结论失真；删除的连标题都不该再出现，它的标签自然也不该再被推荐。排序按条数倒序、标签名升序，次级键不写就会随物理顺序变化。
+
+**不写审计。** 与启动配置同一条判断：纪要是用户自己的私有数据，增删改的影响范围不超出他本人，记审计只会让 `audit_logs` 里混进大量噪音。权限点用 `personal.note.read` / `personal.note.write` 两个（这两个常量在 T1-02 时已定义，本次只是第一次真正挂上路由），只读访客这一档因此能看到纪要但改不了任何一条，这条限制**由服务端强制** —— 前端隐藏按钮只承担体验职责。
+
+**本次验证结果（2026-10-11）。** 四道门禁全绿：`format:check` 报 `All matched files use Prettier code style!`；`lint` 退出码 0；`typecheck` 退出码 0；`test` 结果为 `packages/shared` **50 项全通过**（原 40，本次新增 10 项）、`apps/web` **10 项全通过**（本轮无前端改动，数量不变）、`apps/api` **159 项，154 通过 / 5 跳过 / 0 失败**（原 138，本次新增 21 项）。三包合计 **219 项**。**那 5 项跳过是本次创建 owner 账号的直接后果**：`apps/api/test/setup.test.ts` 里的首次初始化用例以「库里是否已有 owner」为前置条件，`fanhe` 建好之后它们自动转入跳过并注明原因（`库里已存在 owner`），这是设计内的行为，不是失效。
+
+**T3-05 已完成并提交，下一项 T3-06。**
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
