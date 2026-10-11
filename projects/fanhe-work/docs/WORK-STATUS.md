@@ -5,13 +5,13 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:2x 随 T3-08 回填） |
-> | 对应提交 | 代码基线 `fcfc7aa`（T3-08 收口）；本文档定稿于 `db7bc77`，之后只做回填。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
-> | 当前阶段 | 阶段三进行中，**8/12**（T3-01 ~ T3-08 已完成），下一项 T3-09 |
-> | 最后验证 | 四道门禁全绿（**251 项**），浏览器 e2e **98 项**全通过 |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填） |
+> | 对应提交 | 代码基线 `d252107`（T3-09 收口）；本文档定稿于 `db7bc77`，之后只做回填。想知道手上这份文档自己是哪个版本：`git log -1 -- docs/WORK-STATUS.md` |
+> | 当前阶段 | 阶段三进行中，**9/12**（T3-01 ~ T3-09 已完成），下一项 T3-10 |
+> | 最后验证 | 四道门禁全绿（**289 项**）；浏览器 e2e **98 项**全通过（T3-08 时的结果，T3-09 无界面改动故未跑） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
-> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.35），本文已把结论汇总，需要细节时再翻过去。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.36），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
@@ -19,7 +19,7 @@
 
 **这个项目是什么**：一个桌面端个人工作台（实验版），用来管自己的软件启动通道、工作纪要、事件记录，后面会包成 Electron 外壳、并支持局域网/远程两种服务地址。
 
-**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」与「工作纪要」两个板块已经完成并可用；工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。**纪要链到此收口。** 剩下整个「事件记录」板块（T3-09 ~ T3-12，要从第六个迁移、两张新表起步），再往后是桌面外壳。
+**现在到哪了**：账号与权限体系、主框架与 UI 骨架、个人工作台的「启动通道」与「工作纪要」两个板块已经完成并可用；工作纪要支持编辑、Markdown 预览、标签、置顶、归档、删除、**中文全文检索**与**草稿自动保存**（未提交的内容落在本机，误关、切板块、被检索筛掉之后再回来都能接着写）。**纪要链到此收口。** 「事件记录」板块的**模型与接口也已就位**（第六个迁移建起 `events` 与 `event_logs`，八条接口可用，**状态变更一律追加流水、从不原地修改**），界面留待 T3-10 ~ T3-12。再往后是桌面外壳。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -113,7 +113,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段零 | 目录骨架（T0-01 ~ T0-07） | ✅ 完成 |
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾） |
-| 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | 🔄 **8/12**：T3-01 ~ T3-08 已完成；**纪要链收口**，下一项 T3-09；事件板块未开始 |
+| 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | 🔄 **9/12**：T3-01 ~ T3-09 已完成；**纪要链收口**、**事件板块的模型与接口就位**，下一项 T3-10；事件界面未开始 |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ⬜ 未开始 |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
@@ -125,7 +125,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - [x] 第一项：启动配置可新增、编辑、排序，可一键唤起
 - [x] 第二项：路径失效有提示与重新指定入口（T3-04）
 - [x] 第三项：纪要支持编辑预览、标签、置顶、检索、草稿恢复 —— **五项全部完成并逐条过浏览器验证**（编辑预览 / 标签 / 置顶 T3-06，检索 T3-07，**草稿恢复 T3-08**）
-- [ ] 第四~六项：事件列表分组与勾选切换、撤销入口、已完成详情 —— 事件板块未开始
+- [ ] 第四~六项：事件列表分组与勾选切换、撤销入口、已完成详情 —— **T3-09 已完成模型与接口，界面（T3-10 ~ T3-12）未开始，故整组不勾**
 
 ### 2.3 最近提交（截至本文档定稿）
 
@@ -133,6 +133,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `d252107` | feat(阶段三): T3-09 事件模型与接口（第六个迁移 + 八条接口） |
 | `fcfc7aa` | feat(阶段三): T3-08 草稿自动保存 |
 | `4d43dae` | fix(web): 补齐 NavLink className 回调的类型标注（换盘重建依赖后 `typecheck` 才暴露出来的既有疏漏） |
 | `db7bc77` | docs(交接): 重写为单文件自包含的完整工作总结与换机续接指南（本文档定稿于此） |
@@ -148,11 +149,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **251 项，0 失败** | `packages/shared` 63 + `apps/api` 165（**160 通过 / 5 跳过**）+ `apps/web` **23** |
+| `pnpm test` | **289 项，0 失败** | `packages/shared` **69** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` 23 |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
-| 浏览器 e2e | **98 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」 |
-| 数据库 | 5 个迁移、**10 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行 |
+| 浏览器 e2e | **98 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 T3-08 时的结果**：T3-09 只动后端、无界面可验，故未跑 |
+| 数据库 | 6 个迁移、**12 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行 |
 
 ---
 
@@ -193,9 +194,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **T2-06 折叠偏好记忆**：`lib/preferences.ts` 读写本机偏好（键 `fanhe-work.ui.sidebar-collapsed`），读写失败静默降级。
 - **T2-07 主题令牌**：`index.css` 新增 `@custom-variant dark` 与 `.dark` 块（覆盖 `:root` 全部颜色原始值），`index.html` 内联脚本在样式生效前定下主题初值，`lib/theme.ts` 提供三档（含跟随系统）与系统配色变化监听。
 
-### 3.4 阶段三 · 个人工作台（T3-01 ~ T3-08，进行中）
+### 3.4 阶段三 · 个人工作台（T3-01 ~ T3-09，进行中）
 
-**已经能用的两块：启动通道、工作纪要。**
+**已经能用的两块：启动通道、工作纪要；事件板块的模型与接口已就位，界面未做。**
 
 #### 启动通道（T3-01 ~ T3-04）
 
@@ -213,21 +214,30 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 > 界面入口：`/workbench` 是启动通道，`/workbench/notes` 是工作纪要，靠 `WorkbenchPage` 顶部的板块切换按地址分派。
 
+#### 事件记录（T3-09 已完成模型与接口，**界面未开始**）
+
+- **T3-09 模型与接口**：第六个迁移 `20261011132819_add_events` 建起 **`events`** 与 **`event_logs`** 两张表，八条路由（列表 / 标签清单 / 单条 / 状态变更历史 / 新增 / 修改 / 状态切换 / 删除），统一挂 `personal.event.read` 与 `personal.event.write`。
+- **这张表与纪要怎么区分**：`events` 是实体表（带 `createdAt` / `updatedAt` / `deletedAt`），`event_logs` 是**只追加流水**，**只有 `createdAt`** —— 给它加 `updatedAt` 会让人以为这行改过，而它的价值就在于「记的是当时发生的事」。
+- **状态是怎么存的**：`events` 上的 `status` / `completedAt` / `completedById` / `completedByName` 是**可重建的冗余**，权威来源在 `event_logs` 里；每次 `todo ↔ done` 的流转都**追加一行**（`created` / `completed` / `reopened`），从不修改已有那行，两件事在**同一个事务**里。撤销完成是追加 `reopened`，不是删掉 `completed`。
+- **不写日志的那一类**：编辑标题 / 描述 / 标签 / 优先级**刻意不写日志** —— 详情面板要回答的是「状态怎么变的」，混进编辑记录就变成另一份东西了。因此 `PATCH` 的 schema 里**没有 `status` 项**，改状态只能走 `PUT /api/events/:id/status`。
+- **相关规则位置**：取值域与传输类型在 `packages/shared/src/event.ts`，读写与事务在 `apps/api/src/event/events.ts`，接口在 `apps/api/src/routes/events.ts`。判断见 9.36。
+
 ---
 
 ## 四、待办事项
 
-### 4.1 下一项：T3-09 事件模型与接口（P0，可直接开工）
+### 4.1 下一项：T3-10 事件列表视图（P0，可直接开工）
 
-- **任务定义**：新增 `events` 与 `event_logs` 两张表及接口。**验收要点：状态变更追加日志，不做原地修改。**
-- **依赖**：T1-07（账号与权限，已具备）。
-- **落点**：`apps/api/prisma/schema.prisma` + **第六个迁移**（`events` 与 `event_logs` 这两张表目前**不存在**，要新建）；随后照 `apps/api/src/note/notes.ts` 与 `src/routes/notes.ts` 的形态写 service 与路由。**建议先只做模型与接口、界面留给 T3-10**，与纪要链（T3-05 先接口、T3-06 再界面）的切分方式一致。
-- **要留意的两点**：① `event_logs` 是**只追加不修改的流水**，与既有实体表的 `createdAt` / `updatedAt` / `deletedAt` 三件套语义不同，别照抄纪要那一套；② 新增迁移要检查**迁移之间是否真的独立**（迁移目录的字典序 ≠ 实际创建顺序，见 5.3）。
-- **别踩的坑**：`NotesPanel` 的编辑器用 `key={selectedId ?? 'new'}` 表达「换了一条」，T3-08 的草稿恢复建立在这个前提下 —— 如果事件板块也要「换一条就重挂 + 保住未提交内容」，照抄 `lib/note-draft.ts` 的槽名与触发点模式，**别把「换 id 就重挂」改成 effect 同步**（T3-06 踩过，见 5.6）。
+- **任务定义**：未完成与已完成分两组展示，**已完成组默认折叠**。**验收要点：勾选框、标签、截止时间、优先级齐备。**
+- **依赖**：T3-09（已具备）。
+- **落点**：新建 `apps/web/src/components/events/`（容器照 `NotesPanel` 的四态分派形态）；新增 `apps/web/src/lib/events.ts`（会话感知封装 + 拆信封 + 按错误码分流，照 `lib/notes.ts`）、`lib/api.ts` 补八条传输函数（id 一律 `encodeURIComponent`）；`WorkbenchPage` 的板块切换加第三块、路由加 `/workbench/events`（照 T3-06 给纪要加二级路径的做法）。
+- **数据来源已经就绪**：列表接口按「未完成在前、组内按截止时间升序、无截止时间的在组尾」返回，**分组是前端的事**（后端不返回分组结构），因此 `T3-10` 只需按 `status` 切两段，不必再排一次序。
+- **还没到 `T3-11`**：本项只做「看得见」——列表、分组、折叠、勾选框的**静态形态**。点击勾选背后的乐观更新、失败回滚与可撤销入口是 T3-11 的范围，别在这里顺手做掉（那会让 T3-11 的失败回滚没有干净的切入点）。
+- **别踩的坑**：如果事件编辑也做「换一条就重挂」，照 `lib/note-draft.ts` 的槽名与触发点模式复用草稿机制，**别把「换 id 就重挂」改成 effect 同步**（T3-06 踩过，见 5.6）。
 
 ### 4.2 阶段三剩余的链
 
-事件记录（**T3-09 ~ T3-12**，四块：事件模型与接口、事件列表视图、勾选切换与撤销、已完成详情面板）。纪要链已收口，可以全力开这条链。
+事件记录的界面（**T3-10 ~ T3-12**，三块：事件列表视图、勾选切换与撤销、已完成详情面板）。**模型与接口（T3-09）已就位**，可以全力开这条链。
 
 ### 4.3 后三个阶段
 
@@ -337,7 +347,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 2. **空库时第一条纪要永远建不出来**（T3-06）。编辑器原先只画在「列表非空」分支里，空库走空态，而空态里的「新建」只是把选中项设回 `null` —— 渲染分支不变，点按钮毫无反应。**修法**：可写角色在加载完成后一律渲染「左列表 + 右编辑器」，只读角色空库时才回落空态。见 9.33。
 3. **提交成功后旧实例的卸载落盘把已提交内容写回新建槽**（T3-08）。父组件先换 `selectedId`、编辑器随之重挂，而**旧实例的卸载清理是在重挂之后才执行的**；那一刻它手上的 `note` 仍是 `null`（列表还没重拉完），「有没有改动」恒为真，于是内容被写回 `'new'` 槽。现象是「**新建 → 提交 → 再点新建**」时编辑器里躺着上一条已经存过的纪要 —— 要三步才出现。**修法**：`committedRef`，提交成功时置真并清槽，落盘前先看它；**重置必须放在输入回调里而不是 effect 里**，因为紧跟其后的 `setValues(valuesFrom(saved))` 也是一次 values 变化，放 effect 里会被它立刻清掉、等于没挡。见 9.35。
 
-**这三条与「四道门禁全绿」并存**：单测、类型检查、接口冒烟全都拦不住它们。第 3 条尤其典型 —— 它被修好之前，`pnpm test`（251 项）、`typecheck`、`lint` **全都是绿的**，只有浏览器 e2e 的「新建 → 提交 → 再点新建」那一项能把它照出来。
+**这三条与「四道门禁全绿」并存**：单测、类型检查、接口冒烟全都拦不住它们。第 3 条尤其典型 —— 它被修好之前，`pnpm test`（当时 251 项）、`typecheck`、`lint` **全都是绿的**，只有浏览器 e2e 的「新建 → 提交 → 再点新建」那一项能把它照出来。
+
+> **补一条同源的反面提醒**：反过来说，**没有界面改动的任务不该硬跑 e2e**。T3-09（事件模型与接口）就属于这一类 —— 它的验收要点落在**数据**上（每次状态变更到底追加了哪一行），e2e 断言的是界面行为，跑了也验不到。那一类的正确验证方式是**绕过接口直查库**，见 9.36。
 
 ### 5.7 工作空间与工程约定
 
@@ -379,7 +391,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - 数据在宿主机**命名卷 `fanhe-work-pgdata`**，不随介质移动。
 - 排序规则在建库时定死 **ICU `zh-CN`**，事后更改需重建数据库。
 - 健康检查让 `docker compose up -d --wait` 真正等到可连接（迁移脚本依赖这一点）。
-- **当前 5 个迁移、10 张业务表**（另加 `_prisma_migrations`）：
+- **当前 6 个迁移、12 张业务表**（另加 `_prisma_migrations`）：
 
   | 迁移目录 | 建的对象 |
   | -- | -- |
@@ -388,6 +400,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
   | `20261010165220_launch_profiles` | `launch_profiles` |
   | `20261010180508_launch_history` | `launch_history` |
   | `20261011064829_add_notes` | `notes` |
+  | `20261011132819_add_events` | `events` / `event_logs`（**阶段三唯一一次建两张表的迁移**） |
+
+- **迁移目录的时间戳是 UTC**（`date -u`，与 Prisma 自身一致），因此它比本地时间小 8 小时 —— 别按本地时间去找「今天那个迁移」。
+- **手写迁移的生成方式（Prisma 7.10 起）**：`migrate diff --from-url` **已被移除**，改用
+  `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script -o <文件>`（在读得到 `prisma.config.ts` 的目录下跑），再 `prisma migrate deploy` 应用。**生成后用同一条命令复核一次**，输出应当是 `-- This is an empty migration.` —— 那是「库与 schema 已无差异」的判据，比人肉核对 DDL 可靠。
 
 - **种子数据**：11 个权限点、4 个角色、29 条授权关联；重跑无副作用。
 - **owner 账号**：登录名 `fanhe`，显示名「梵禾」，状态 active。口令为 24 位强随机，写在被忽略的 `.tmp/owner-credentials.txt`（**该文件不随盘走**）。
@@ -448,11 +465,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 3 | **Git 信任与身份** | `git config --global --add safe.directory "<工作空间根>"`；确认提交身份为 `梵禾 <dev@fanhe.local>` | `git config user.name` / `user.email`；`git log -1` 能正常显示（不报 dubious ownership） |
 | 4 | **凭据重配** | 重配 GitHub 细粒度 PAT 到 GCM（`~/.gitconfig` 是逐机的） | `GIT_TERMINAL_PROMPT=0 HTTPS_PROXY=http://127.0.0.1:7897 git ls-remote origin HEAD` 秒回 |
 | 5 | **依赖重建** | 经入口 `ws-run.cmd pnpm install` | 无 `ERR_PNPM_UNEXPECTED_STORE`；`node_modules` 链到 `<根>/.cache/pnpm-store` |
-| 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **10 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
+| 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **12 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **251 项、0 失败**（shared 63 + api 165 含 5 跳过 + web 23）；其余三条全绿 |
-| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **98 项全通过** |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **289 项、0 失败**（shared 69 + api 197 含 5 跳过 + web 23）；其余三条全绿 |
+| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **98 项全通过**（T3-08 时的结果；T3-10 起有界面了要重跑） |
 
 **换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
 
@@ -523,6 +540,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 审计 | `apps/api/src/audit/audit.ts`、`packages/shared/src/audit.ts` |
 | 启动通道（含代理核心） | `apps/api/src/launch/{agent,profiles,status,history}.ts`、`apps/api/src/routes/launch.ts` |
 | 工作纪要（含检索） | `apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`packages/shared/src/note.ts` |
+| 事件记录（T3-09） | `apps/api/src/event/events.ts`、`apps/api/src/routes/events.ts`、`packages/shared/src/event.ts` |
 | 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
 | 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
 | 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
@@ -530,11 +548,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 前端本机草稿暂存（T3-08） | `apps/web/src/lib/note-draft.ts`（槽名、带版本号的序列化、过期与容量清理、写失败重试；接口注入 storage 以便单测） |
 | 前端偏好与主题 | `apps/web/src/lib/{preferences,theme,credential}.ts`、`apps/web/src/index.css` |
 | Prisma 配置与模型 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
-| 迁移目录 | `apps/api/prisma/migrations/`（**5 个**） |
+| 迁移目录 | `apps/api/prisma/migrations/`（**6 个**；时间戳是 UTC） |
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
 | 环境变量样例 | `apps/api/.env.example` |
 | 种子 | `apps/api/src/db/seed.ts` |
-| 测试 | `apps/api/test/{note,launch-history,setup,…}.test.ts`、`packages/shared/test/{note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft}.test.mjs`、`apps/web/test/e2e-auth.mjs`（`apps/web` 的 `test` 脚本是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
+| 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft}.test.mjs`、`apps/web/test/e2e-auth.mjs`（`apps/web` 的 `test` 脚本是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
 | 诊断脚本归档 | `projects/fanhe-work/tools/`（其 `README.md` 说明各脚本用途、归档来由，以及 `.ps1` 必须带 UTF-8 BOM 这条硬性约束） |
 | 规划与交接 | `projects/fanhe-work/docs/`（本文所在处） |
 | 环境踩坑（逐机） | `.workbuddy-ai/memory/ENVIRONMENT.md` |
@@ -549,7 +567,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.35）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.36）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法。 |
 | `docs/T3-08-IMPLEMENTATION-PLAN.md` | T3-08 的施工图（含开工前的环境复位记录）。**任务已完成，此文档作为实施依据留档**。 |
 | `docs/NEXT-TASK-PREP-2026-10-11.md` | 2026-10-11 的进度核对与开工清单（当时面向 T3-08）。**数字已过期，以本文为准**。 |
 | `docs/IMPLEMENTATION-PLAN.md` | 实施层面的方案对照 |
@@ -582,7 +600,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 20:5x | T3-08 实施 | 新增 `apps/web/src/lib/note-draft.ts` 与 13 项单测，`NoteEditor` 接三写（防抖 / 页面隐藏 / 卸载）三清（提交成功 / 丢弃 / 与库一致）+ `committedRef`；`apps/web` 的 `test` 脚本改为 `test/*.test.mjs`；三包 **251 项 0 失败** |
 | 21:1x | T3-08 浏览器验证 | **首跑即 98/98 全通过**（原 85，新增 13），含「打完字立刻关掉页面也不丢」与「新建→提交→再点新建不带出旧内容」两条时序断言。途中踩到 Vite dev server 被批量删除保护挡住（同源坑，见 6.7） |
 | 21:2x | 提交与收尾 | `fcfc7aa`（代码）+ 文档回填；库回基线、owner 重建、8787 / 5173 释放、无残留进程 |
+| 21:2x | T3-09 实施 | `packages/shared/src/event.ts` 与 6 项单测；`schema.prisma` 加两个枚举与两个模型 + **第六个迁移 `20261011132819_add_events`**；`apps/api/src/event/events.ts` + `src/routes/events.ts` 八条路由 + 32 项集成测试；三包 **289 项 0 失败** |
+| 21:3x | T3-09 收尾 | `d252107`（代码）+ 文档回填。**本轮未跑 e2e**（无界面改动）；库回基线（6 迁移 / 12 表、`users` 1、种子 11 / 4 / 29），owner 未动 |
 
-**§十一 新增/修改的关键文件（T3-08）**：`apps/web/src/lib/note-draft.ts`（新）、`apps/web/src/components/notes/{NoteEditor,NotesPanel}.tsx`、`apps/web/test/note-draft.test.mjs`（新）、`apps/web/test/e2e-auth.mjs`、`apps/web/package.json`、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
+**§十一 新增/修改的关键文件（T3-09）**：`packages/shared/src/event.ts`（新）、`packages/shared/src/index.ts`、`packages/shared/test/event.test.mjs`（新）、`apps/api/prisma/schema.prisma`、`apps/api/prisma/migrations/20261011132819_add_events/`（新）、`apps/api/src/event/events.ts`（新）、`apps/api/src/routes/events.ts`（新）、`apps/api/src/app.ts`、`apps/api/test/event.test.ts`（新）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` 本轮一行未改。**
+
+**上一轮新增/修改的关键文件（T3-08）**：`apps/web/src/lib/note-draft.ts`（新）、`apps/web/src/components/notes/{NoteEditor,NotesPanel}.tsx`、`apps/web/test/note-draft.test.mjs`（新）、`apps/web/test/e2e-auth.mjs`、`apps/web/package.json`、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
 
 **上一轮新增/修改的关键文件（T3-07）**：`packages/shared/src/note.ts`、`apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/NotesPanel.tsx`、`apps/web/test/e2e-auth.mjs`（新增 `openThemeMenu` 与 `E2E_CDP_PORT`）、三个测试文件、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
