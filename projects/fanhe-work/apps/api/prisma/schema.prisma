@@ -79,6 +79,30 @@ enum LoginOutcome {
   @@map("login_outcome")
 }
 
+/// 事件状态。只有两档，不做「进行中」这类中间态 —— 理由见共享包 event.ts：
+/// 加一档就要让每个视图回答「它算完成组还是未完成组」，而这类状态在两个分组里
+/// 都说不通，最后只会多出一个「其他」组。
+///
+/// 做成数据库枚举（而不是像 software / outcome 那样用 VarChar），是因为它的取值域
+/// 由产品定义、稳定且需要库侧保证不出现第三态。流转是双向的，两次方向都会往
+/// event_logs 追一行。
+enum EventStatus {
+  todo
+  done
+
+  @@map("event_status")
+}
+
+/// 事件优先级。三档具名，normal 是默认。同样做成枚举：整数档位需要一个「多少算急」
+/// 的约定，而那个约定只存在于写代码的人脑子里。
+enum EventPriority {
+  low
+  normal
+  high
+
+  @@map("event_priority")
+}
+
 // ---------------------------------------------------------------------------
 // 实体表
 // ---------------------------------------------------------------------------
@@ -110,6 +134,14 @@ model User {
   launchProfiles LaunchProfile[]
   launchHistory  LaunchHistory[]
   notes          Note[]
+
+  /// 这个账号名下的事件。
+  events          Event[]
+  /// 这个账号完成过的事件。与 events 是两条不同的关系，都是指向 users 的外键，
+  /// 因此必须命名区分 —— 不命名时 Prisma 无法判断该走哪一条。
+  completedEvents Event[]    @relation("EventCompletedBy")
+  /// 这个账号留下的事件变更日志。
+  eventLogs       EventLog[] @relation("EventLogActor")
 
   @@index([roleId])
   @@index([status])
@@ -426,4 +458,121 @@ model Note {
   /// 标签筛选走 GIN。数组的包含判断在 B-tree 上用不上。
   @@index([tags], type: Gin)
   @@map("notes")
+}
+
+/// 事件记录。个人工作台第三板块的实体表。
+///
+/// **状态不是这一行上的一个普通列，而是 event_logs 最新一行的投影。** 每次
+/// `todo ↔ done` 的流转都往 `event_logs` 追一行，从不修改已有的那行 —— 详情面板
+/// 要回答「谁在什么时候完成的」「为什么又被撤销了」，只留一个当前状态答不了。因此
+/// 本表的 status / completedAt / completedById / completedByName 四列是**可重建的
+/// 冗余**，权威来源在那张流水表里。这一点与纪要的 `pinned` / `archivedAt` 不同：
+/// 那两个字段只表达「现在是怎样」，没有历史可言。
+///
+/// **不做「归档」。** 纪要需要它（旧记录要收起来但还得能查），而事件的时间维度由
+/// `status` 与 `completedAt` 表达，再加一层归档只会让「这条到底在哪个视图里」变成
+/// 三个状态的组合。真需要收起来时用的是软删除。
+///
+/// **同用户下不设 title 唯一约束。** 与 Note 同一条判断：软删除与唯一索引天然冲突，
+/// 而「与客户确认尺寸」这类标题本来就会重复。
+model Event {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// 标题。列宽与共享包的 EVENT_LIMITS.TITLE_MAX 一致。
+  title String @db.VarChar(200)
+
+  /// 描述，Markdown 原文。给 text 不设宽度：上限由共享包在应用层强制，改上限不该
+  /// 需要一次迁移。与 `Note.content` 同一条处理 —— 渲染是前端的事，原文是唯一事实。
+  description String @db.Text
+
+  status   EventStatus   @default(todo)
+  priority EventPriority @default(normal)
+
+  /// 标签。已归一，归一的实现复用纪要那套（共享包 `normalizeNoteTags`），不另写
+  /// 一份：标签在两个板块里是同一个概念。数据库侧没有约束，少归一那一步会让
+  /// 「会议」与「会议 」在库里共存，而界面上看不出区别。
+  tags String[] @default([])
+
+  /// 截止时间。为空表示没有截止时间。允许填过去的时刻 —— 补录既有事件时，
+  /// 截止时间早于创建时间是常态，拒绝它只会逼用户填一个假的。
+  dueAt DateTime? @map("due_at") @db.Timestamptz(3)
+
+  /// 完成时刻。撤销完成时连同下面两列一起清回 null：留一个「完成了但不知道是谁」
+  /// 的中间状态没有意义，只会让详情面板多一个分支去猜。
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+
+  /// 完成人 id。用 SetNull 而非 Cascade：删账号不能连带抹掉它做过的操作痕迹，
+  /// 与 `audit_logs.actor_id` 同一条处理。正常流程下 users 走软删除，级联只在
+  /// 种子重建时触发。
+  completedById String? @map("completed_by_id") @db.Uuid
+
+  /// 完成人显示名**快照**。账号改名或被删之后历史仍要能读，与
+  /// `audit_logs.actor_name` 是同一条理由：排查时最需要的是当时那一行，而不是
+  /// 一个指向当前状态的引用。
+  completedByName String? @map("completed_by_name") @db.VarChar(64)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedBy User?      @relation("EventCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  /// 这条事件的状态变更流水。事件走软删除，因此删掉它不会带走日志 —— 那正是日志
+  /// 该有的行为。级联只在事件被物理清理时触发。
+  logs        EventLog[]
+
+  /// 列表查询恒带 userId 与 deletedAt，按状态分组、组内按截止时间升序。这条复合
+  /// 索引正好覆盖。截止时间升序时 NULL 排在最后是 PostgreSQL 对 ASC 的默认行为
+  /// （NULLS LAST），没有截止时间的事件因此自然落在组尾，不必额外声明排序方向。
+  @@index([userId, deletedAt, status, dueAt])
+  /// 标签筛选走 GIN。数组的包含判断在 B-tree 上用不上。
+  @@index([tags], type: Gin)
+  @@map("events")
+}
+
+/// 事件状态变更日志。
+///
+/// **只追加，不做更新与删除**，因此没有 `updatedAt` 与 `deletedAt`。给流水加一个
+/// 更新时间戳反而会给出「这行被改过」的错误暗示，而这行的全部价值就在于它记的是
+/// 当时发生的事 —— 与 `audit_logs` 完全同一条判断。撤销完成也不是删掉「完成」那
+/// 一行，而是再追加一行 `reopened`：删掉它等于抹去「这件事曾经被完成过」。
+///
+/// **`action` 用 VarChar 而不是数据库枚举。** 取值域会随功能演进（将来可能加
+/// 「改期」「指派」），新增一种动作不该需要一次迁移。代价是库侧没有约束，读出来由
+/// 共享包的 `isEventLogAction` 收窄，认不出的取值原样展示而不是丢掉 —— 一条动作码
+/// 是后来才加的历史记录，在被读到时不该让整个详情面板报错。这条判断与
+/// `launch_history.outcome`、`launch_profiles.software` 同源。
+///
+/// **`actorId` 与 `actorName` 都存。** 与 `audit_logs` 同构：id 供追溯，name 是
+/// 快照，账号改名或被删后历史仍读得出来。
+model EventLog {
+  id      String @id @default(uuid(7)) @db.Uuid
+  eventId String @map("event_id") @db.Uuid
+
+  /// 动作码。取值域见共享包 `EVENT_LOG_ACTIONS`。
+  action String @db.VarChar(32)
+
+  /// 变更前后的状态。创建时 `fromStatus` 为 null（此前没有状态）。`toStatus` 为
+  /// null 只出现在一种情况下：动作码在写入之后才被引入，当时没有可记的目标状态。
+  fromStatus EventStatus? @map("from_status")
+  toStatus   EventStatus? @map("to_status")
+
+  /// 变更备注，可选。撤销完成时说明原因。列宽与 `EVENT_LIMITS.COMMENT_MAX` 一致。
+  comment String? @db.VarChar(200)
+
+  actorId   String? @map("actor_id") @db.Uuid
+  actorName String? @map("actor_name") @db.VarChar(64)
+
+  /// 记录时刻。不可变流水不设 `updatedAt`，这一列就是「什么时候发生的」。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// 事件被物理清理时连带删除。正常流程下 events 走软删除，级联只在种子重建时触发。
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  /// 操作人被物理清理时置空，日志本身保留。
+  actor User? @relation("EventLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  /// 详情面板按 eventId 取全量、按时间正序展示，这条索引正好覆盖。
+  @@index([eventId, createdAt])
+  @@map("event_logs")
 }
