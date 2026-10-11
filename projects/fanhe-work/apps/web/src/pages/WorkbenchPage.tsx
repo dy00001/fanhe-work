@@ -1,5 +1,5 @@
 import { NAV_CODES, navPath, type NavItem } from '@fanhe/shared'
-import { NavLink, useLocation } from 'react-router'
+import { NavLink, useLocation, type NavLinkRenderProps } from 'react-router'
 
 import { ModuleHeader } from '../components/ModuleHeader'
 import { LaunchPanel } from '../components/launch/LaunchPanel'
@@ -56,7 +56,7 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
             key={section.path}
             to={section.path}
             end={section.end}
-            className={({ isActive }) =>
+            className={({ isActive }: NavLinkRenderProps) =>
               cn(
                 'rounded-lg border border-solid px-3 py-1.5 text-sm transition-colors',
                 isActive
