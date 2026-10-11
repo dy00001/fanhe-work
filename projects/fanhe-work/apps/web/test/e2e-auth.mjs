@@ -5,7 +5,8 @@
  * 启动通道的新增、编辑、排序、启动与删除，以及路径失效的提示、重新指定入口与
  * 启动记录的摘要 → 工作纪要的编写、Markdown 预览、置顶、归档与删除，以及中文关键词
  * 检索与检索和视图的正交性 → 事件记录的新增、四要素齐备、逾期标记、未完成与已完成
- * 分组、已完成默认折叠、编辑回填与删除。
+ * 分组、已完成默认折叠、编辑回填与删除，以及勾选切换（乐观更新、完成信息落库、
+ * 撤销、失败回滚）。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -147,6 +148,38 @@ const EVENT_B = {
   renamed: 'zz_e2e_事件乙改名',
   description: '带一个已经过去的截止时间，用来验证逾期标记。',
 }
+
+/**
+ * 勾选切换验证用的两条事件（T3-11）。
+ *
+ * 名字同样互不包含（行定位用 `includes`）。
+ *
+ * **在界面上点勾选就会改成完成，因此这两条不再需要接口帮忙造数据** —— 上一轮用接口
+ * 置完成是因为界面上没有那个入口，这一轮入口有了，数据就由界面自己造出来。
+ * 丙走「点完成 → 撤销」这条完整往返；丁留在未完成组，用来证明「切换一条不会顺手
+ * 把别的行也改了」，最后又用它制造一次切换失败（先经接口删掉，再点界面上那行）。
+ */
+const EVENT_C = {
+  title: 'zz_e2e_事件丙',
+  description: '由界面勾选改为完成，用来验证乐观更新与完成信息落库。',
+}
+const EVENT_D = {
+  title: 'zz_e2e_事件丁',
+  description: '留在未完成组，用来验证切换一条不影响另一条，并制造一次失败回滚。',
+}
+
+/**
+ * 给状态切换那条请求装的延迟，以及「回话之前」这条断言的预算。
+ *
+ * **为什么需要这一对。** 「乐观更新」的含义是「不等服务端回话就先改界面」，而在本机
+ * 回环上那个回话只要几十毫秒：直接点一下再断言，看到的变化既可能来自乐观更新、也
+ * 可能来自回话之后那一次重拉 —— 两者在界面上一模一样，断言等于没测。把回话这一侧
+ * 人为推后，再断言「回话还没来、界面已经变了」，才能把这两条路分开。
+ *
+ * 预算刻意比延迟短 300ms：留出轮询起跳的余量，又不至于长到「其实回话早就到了」。
+ */
+const STATUS_DELAY_MS = 1200
+const OPTIMISTIC_BUDGET_MS = 900
 
 /** 造一个 `datetime-local` 需要的本地时间串：相对今天偏移若干天的某个整点。 */
 function localDateTimeValue(offsetDays, hour) {
@@ -540,8 +573,8 @@ function rowBadgeFinder(rowName, text) {
  * 取出元素来断言，而不是只看整行文本里有没有某几个字：行文本里本来就含着标题，
  * 拿它去判断等于什么都没测。
  *
- * 勾选框是 Radix 的 `role="checkbox"`（渲染成 `button`，不是 `input`），只读态落在
- * `disabled` 属性上 —— 本轮它是不可点的，见 `EventRow` 的说明。
+ * 勾选框是 Radix 的 `role="checkbox"`（渲染成 `button`，不是 `input`），可点与否落在
+ * `disabled` 属性上 —— T3-11 起它可点，而只读角色下仍然不可点。
  */
 function eventRowFacts(title) {
   return `(() => {
@@ -556,6 +589,92 @@ function eventRowFacts(title) {
     })
   })()`
 }
+
+/**
+ * 事件列表里某一行的勾选框元素，交给 `mouseClick` 去点。
+ *
+ * **用真实指针事件而不是 `.click()`。** 勾选框是 Radix 的组件，它的状态切换走的是
+ * 指针交互管线；合成点击在某些构造下会被忽略，而失败的样子是「点了没反应」，看不出
+ * 是脚本点错了还是乐观更新没生效。行内菜单当初踩过同一个坑（见 `openRowMenu`）。
+ *
+ * 顺手挡一下 `disabled`：一个禁用的勾选框被点会静默无事发生，而这里想验的恰恰是
+ * 「它现在能点」—— 真遇到禁用态应当当场报出来，而不是等到后面的 `waitFor` 超时。
+ */
+function eventCheckboxFinder(title) {
+  return `(() => {
+    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(title)}))
+    if (!row) throw new Error('找不到事件行：' + ${JSON.stringify(title)})
+    const box = row.querySelector('[role="checkbox"]')
+    if (!box) throw new Error('该行没有勾选框：' + ${JSON.stringify(title)})
+    if (box.hasAttribute('disabled')) throw new Error('勾选框是禁用态：' + ${JSON.stringify(title)})
+    return box
+  })()`
+}
+
+/**
+ * 「已完成」组标题右旁那个条数。
+ *
+ * 按精确文字找那个折叠按钮，再读它**父元素里的 `span`** —— 计数刻意放在按钮外面
+ * （见 `EventList`），所以它不是按钮文本的一部分；而按「整段文本包含某个数字」去判
+ * 会把「10 条」也当成「1 条」，这里读的就是那个计数元素本身。
+ */
+const DONE_GROUP_COUNT = `(() => {
+  const button = [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '已完成')
+  if (!button) return null
+  const span = button.parentElement.querySelector('span')
+  return span ? span.textContent.trim() : null
+})()`
+
+/**
+ * 「未完成」组标题右旁那个条数。
+ *
+ * 与 `DONE_GROUP_COUNT` 同一个形状。它是「乐观更新」那条断言用的量：**不依赖「已完成」
+ * 组是否展开** —— 组一展开，被切走的那一行就还在页面上（只是换了组），「行不见了」这种
+ * 判据立刻失效；而「未完成组少了一条」在两种折叠状态下都成立。
+ */
+const OPEN_GROUP_COUNT = `(() => {
+  const heading = [...document.querySelectorAll('main h3')].find((item) => item.textContent.trim() === '未完成')
+  if (!heading) return null
+  const span = heading.parentElement.querySelector('span')
+  return span ? span.textContent.trim() : null
+})()`
+
+/**
+ * 给状态切换那条请求装一个可调的延迟。
+ *
+ * 挂在页面自己的 `fetch` 上。应用的请求是用裸 `fetch(...)` 发的（见 `lib/api.ts` 里那句
+ * `await fetch(\`${API_BASE_URL}${path}\`, init)`），全局查一次名字，因此换掉 `window.fetch`
+ * 就换掉了它。只拦 `PUT` 且路径以 `/status` 结尾的那一条，别的一律照常 —— 拦多了会把
+ * 列表重拉也拖慢，那就不再是在验这一条链路。
+ *
+ * 装在 T3-11 这一段里而不是跟 `INSTALL_PROBE` 一起装：中间那次整页重载会把页面上的
+ * 一切覆盖物清掉，早装的那份活不到这里。
+ */
+function installStatusDelay(ms) {
+  return `(() => {
+    if (window.__e2eStatusDelayInstalled) return false
+    window.__e2eStatusDelayInstalled = true
+    const original = window.fetch.bind(window)
+    const delayMs = ${ms}
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      const method = (init && init.method) || 'GET'
+      if (method === 'PUT' && url.includes('/api/events/') && url.endsWith('/status')) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
+      return original(input, init)
+    }
+    return true
+  })()`
+}
+
+/**
+ * 提示条上的「撤销」入口在不在。用来断言它在完成之后出现、撤销之后收起。
+ *
+ * 范围限定在 `main` 内：那个按钮是 `Button`（渲染成 `button`），而面板里没有别的
+ * 按钮文字恰好是「撤销」。
+ */
+const UNDO_BUTTON_PRESENT = `[...document.querySelectorAll('main button')].some((item) => item.textContent.trim() === '撤销')`
 
 /**
  * 事件列表里有没有标题匹配的那一行。
@@ -709,9 +828,38 @@ async function apiAccessToken() {
   return payload.accessToken
 }
 
+/**
+ * 从接口取某条事件的三个状态事实。
+ *
+ * **这三个字段正是 T3-11 验收要点里那句「切换后写入完成时间与操作人，撤销可恢复」**
+ * 的落点，而它们在界面上看不到（列表不展示完成时刻与完成人，那属 T3-12 的详情面板）。
+ * 因此这里只能绕到接口去读 —— 这不是绕开验证：界面那一侧验的是「点一下之后界面
+ * 对不对」，这里验的是「那一趟请求真的把这三样写进去了」。两件事缺一不可。
+ *
+ * 从列表接口读而不是逐条 GET：列表返回的 `Event` 本来就带这三个字段（同一个 select），
+ * 少一次往返也少一层「单条接口是不是漏了某个字段」的不确定性。
+ */
+async function apiEventFacts(token, title) {
+  const headers = { accept: 'application/json', authorization: `Bearer ${token}` }
+  const response = await fetch(`${APP_URL}/api/events`, { headers })
+  if (!response.ok) throw new Error(`接口取事件列表失败：HTTP ${response.status}`)
+  const { events } = await response.json()
+  const target = events.find((item) => item.title === title)
+  if (!target) throw new Error(`接口里找不到事件：${title}`)
+  return {
+    status: target.status,
+    completedAt: target.completedAt,
+    completedBy: target.completedBy,
+  }
+}
+
 /** 把标题对应的那一条置为已完成。见 `apiAccessToken` 的说明。 */
 async function apiCompleteEvent(token, title) {
-  const headers = { accept: 'application/json', authorization: `Bearer ${token}` }
+  const headers = {
+    accept: 'application/json',
+    authorization: `Bearer ${token}`,
+    'content-type': 'application/json',
+  }
 
   const listResponse = await fetch(`${APP_URL}/api/events`, { headers })
   if (!listResponse.ok) throw new Error(`接口取事件列表失败：HTTP ${listResponse.status}`)
@@ -721,13 +869,36 @@ async function apiCompleteEvent(token, title) {
 
   const statusResponse = await fetch(
     `${APP_URL}/api/events/${encodeURIComponent(target.id)}/status`,
-    {
-      method: 'PUT',
-      headers: { ...headers, 'content-type': 'application/json' },
-      body: JSON.stringify({ status: 'done' }),
-    },
+    { method: 'PUT', headers, body: JSON.stringify({ status: 'done' }) },
   )
   if (!statusResponse.ok) throw new Error(`置为已完成失败：HTTP ${statusResponse.status}`)
+}
+
+/**
+ * 经接口删掉某一条。
+ *
+ * 用途只有一个：在界面上制造一次**切换失败**。做法是先让服务端把这条删掉，而界面
+ * 手上那份列表还是旧的、仍画着这一行，于是下一次点勾选必然 404。这是这里唯一能造出
+ * 的失败——其余失败（网络断、服务端崩）要么代价太大，要么会把整页带进加载失败态。
+ *
+ * 顺带说明为什么这个失败路径值得单独验：乐观更新的风险不在于「成功时对不对」，
+ * 而在于「失败时会不会把界面留在那个假的乐观状态上」。而失败恰恰是正常流程里
+ * 遇不到的那一支。
+ */
+async function apiDeleteEvent(token, title) {
+  const headers = { accept: 'application/json', authorization: `Bearer ${token}` }
+
+  const listResponse = await fetch(`${APP_URL}/api/events`, { headers })
+  if (!listResponse.ok) throw new Error(`接口取事件列表失败：HTTP ${listResponse.status}`)
+  const { events } = await listResponse.json()
+  const target = events.find((item) => item.title === title)
+  if (!target) throw new Error(`接口里找不到事件：${title}`)
+
+  const response = await fetch(`${APP_URL}/api/events/${encodeURIComponent(target.id)}`, {
+    method: 'DELETE',
+    headers,
+  })
+  if (!response.ok) throw new Error(`接口删除失败：HTTP ${response.status}`)
 }
 
 /** 启动通道列表里各行的文本，用于判断顺序。 */
@@ -2669,8 +2840,8 @@ async function main() {
       `aria-checked=${factsA.checked}`,
     )
     record(
-      '勾选框本轮是只读的（disabled），不给人「点了没反应」的错觉',
-      factsA.disabled === true,
+      '行内勾选框可点（T3-10 时它是只读留白，T3-11 已把行为接上）',
+      factsA.disabled === false,
       `disabled=${factsA.disabled}`,
     )
     record(
@@ -2748,18 +2919,8 @@ async function main() {
       (await evaluate(client, `!(${eventRowPresence(EVENT_A.title)})`)) === true,
       '',
     )
-    const doneGroupText = await evaluate(
-      client,
-      `(() => {
-        const button = [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '已完成')
-        return button ? button.parentElement.textContent : null
-      })()`,
-    )
-    record(
-      '已完成组显示条数（1 条）',
-      typeof doneGroupText === 'string' && doneGroupText.includes('1'),
-      String(doneGroupText),
-    )
+    const doneGroupText = await evaluate(client, DONE_GROUP_COUNT)
+    record('已完成组显示条数（1 条）', doneGroupText === '1', String(doneGroupText))
     await screenshot(client, '10c-events-grouped')
 
     await evaluate(client, clickMainButton('已完成'))
@@ -2868,7 +3029,197 @@ async function main() {
     )
     await evaluate(client, clickDialogButton('取消'))
 
-    // 11. 渲染层无错误。这是本脚本存在的理由。
+    // 11. 勾选切换与撤销（T3-11）。
+    //
+    //     三件事：点勾选立刻改（乐观更新）、那一趟请求真的写入了完成时刻与完成人、
+    //     「撤销」这个反悔入口把三样都清回去。最后补一条失败回滚 —— 乐观更新的风险
+    //     不在成功那一支，而在失败时界面会不会留在那个假的乐观状态上。
+    //
+    //     T3-10 那一段要用接口置完成，是因为界面上没有入口。这一轮入口有了，所以下面
+    //     的完成与撤销**全部由界面驱动**，接口只用来读那三个界面看不到的字段（列表上
+    //     不展示完成时刻与完成人，那属 T3-12 的详情面板），以及制造那一次失败。
+    await evaluate(client, clickMainButton('新增事件'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-title') !== null`, 5000, '新增事件对话框'),
+    )
+    await evaluate(client, fillInput('#event-title', EVENT_C.title))
+    await evaluate(client, fillInput('#event-description', EVENT_C.description))
+    await evaluate(client, clickDialogButton('保存'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_C.title), 10000, '丙条出现在列表'))
+
+    // 丁只是站着：用它证明「切换一条不会顺手把别的行也改了」。
+    await evaluate(client, clickMainButton('新增事件'))
+    await evaluate(
+      client,
+      waitFor(`document.querySelector('#event-title') !== null`, 5000, '新增事件对话框'),
+    )
+    await evaluate(client, fillInput('#event-title', EVENT_D.title))
+    await evaluate(client, clickDialogButton('保存'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_D.title), 10000, '丁条出现在列表'))
+    record('界面上造出两条未完成的事件，用来驱动勾选切换', true, '')
+
+    // **重新取一次访问令牌。** 上一段那把是十几步操作之前拿的，而这边把有效期压到了
+    // 60 秒（见文件头的前置条件）—— 一直用同一把，这一段的接口断言会在某个夜晚突然
+    // 变成 401，表现成一句和事件毫无关系的「接口取事件列表失败」。界面自己那条链路
+    // 无所谓（它会静默续期），但脚本这侧不会。
+    const statusToken = await apiAccessToken()
+
+    // 装上延迟钩子，把「服务端回话」这一侧推后 —— 否则下面那条断言分不清界面上的变化
+    // 是乐观更新做的、还是回话之后那次重拉做的。见 `installStatusDelay`。
+    await evaluate(client, installStatusDelay(STATUS_DELAY_MS))
+    record(
+      '切换前未完成组是 2 条',
+      (await evaluate(client, OPEN_GROUP_COUNT)) === '2',
+      String(await evaluate(client, OPEN_GROUP_COUNT)),
+    )
+
+    await mouseClick(client, eventCheckboxFinder(EVENT_C.title), '丙条勾选框')
+
+    // **回话之前**界面就该已经改了。请求被拖住 1.2 秒，而这里的预算是 0.9 秒 ——
+    // 界面若是等接口回话才改的，这个数字在这里不会动。
+    await evaluate(
+      client,
+      waitFor(
+        `(${OPEN_GROUP_COUNT}) === '1'`,
+        OPTIMISTIC_BUDGET_MS,
+        '回话之前未完成组已经少了一条',
+      ),
+    )
+    record('乐观更新：服务端还没回话，界面已经改了（未完成组 2 → 1）', true, '')
+
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes(${JSON.stringify(`已完成「${EVENT_C.title}」`)})`,
+        10000,
+        '回话到达后出现完成提示',
+      ),
+    )
+    record('回话到达后给出「已完成」的提示', true, '')
+    record(
+      '完成之后给出「撤销」入口，让「点了就从眼前消失」的那一步可以反悔',
+      (await evaluate(client, UNDO_BUTTON_PRESENT)) === true,
+      '',
+    )
+    record(
+      '已完成组的条数跟着变成 1',
+      (await evaluate(client, DONE_GROUP_COUNT)) === '1',
+      String(await evaluate(client, DONE_GROUP_COUNT)),
+    )
+    record(
+      '切换一条不影响另一条：丁仍在未完成组、仍是未勾上',
+      JSON.parse(await evaluate(client, eventRowFacts(EVENT_D.title))).checked === 'false',
+      '',
+    )
+    await screenshot(client, '11a-events-toggled')
+
+    // 界面看不出的那三个字段，绕到接口去读 —— 这正是验收要点「切换后写入完成时间与
+    // 操作人」。读的是**服务端**那一份，因此这一条同时证明了「界面显示对了」与
+    // 「真的落库了」，两件事缺一不可。
+    const doneFacts = await apiEventFacts(statusToken, EVENT_C.title)
+    record(
+      '切换后服务端记下了完成状态、完成时刻与完成人',
+      doneFacts.status === 'done' &&
+        typeof doneFacts.completedAt === 'string' &&
+        doneFacts.completedAt !== '' &&
+        doneFacts.completedBy === OWNER.displayName,
+      JSON.stringify(doneFacts),
+    )
+
+    // 展开已完成组：那条的勾选框该是勾上的，与它「已完成」的身份对得上。
+    await evaluate(client, clickMainButton('已完成'))
+    await evaluate(client, waitFor(eventRowPresence(EVENT_C.title), 8000, '展开后出现丙条'))
+    record(
+      '展开后这条在已完成组里，且勾选框是勾上的',
+      JSON.parse(await evaluate(client, eventRowFacts(EVENT_C.title))).checked === 'true',
+      '',
+    )
+
+    // 撤销：把刚才那一步反悔掉。
+    await evaluate(client, clickMainButton('撤销'))
+    await evaluate(
+      client,
+      waitFor(
+        `(() => {
+          const text = document.querySelector('main').innerText
+          return text.includes(${JSON.stringify(`已恢复「${EVENT_C.title}」`)}) && (${eventRowPresence(EVENT_C.title)})
+        })()`,
+        10000,
+        '撤销后丙条回到未完成组',
+      ),
+    )
+    record('撤销后该条回到未完成组', true, '')
+    record(
+      '撤销之后「撤销」入口收起（不做「撤销撤销」）',
+      (await evaluate(client, UNDO_BUTTON_PRESENT)) === false,
+      '',
+    )
+    record(
+      '撤销把这行的勾选框恢复成未勾上',
+      JSON.parse(await evaluate(client, eventRowFacts(EVENT_C.title))).checked === 'false',
+      '',
+    )
+
+    const revertedFacts = await apiEventFacts(statusToken, EVENT_C.title)
+    record(
+      '撤销把完成时刻与完成人一起清空（不留「完成了但不知道是谁」的中间态）',
+      revertedFacts.status === 'todo' &&
+        revertedFacts.completedAt === null &&
+        revertedFacts.completedBy === null,
+      JSON.stringify(revertedFacts),
+    )
+    record(
+      '撤销之后已完成组回到 0 条',
+      (await evaluate(client, DONE_GROUP_COUNT)) === '0',
+      String(await evaluate(client, DONE_GROUP_COUNT)),
+    )
+
+    // 失败回滚。先让服务端把丁删掉，而界面手上那份列表还是旧的、仍画着这一行 ——
+    // 于是下一次点勾选必然 404。乐观更新的风险正在这里：失败时界面会不会留在那个
+    // 假的「已完成」上。
+    //
+    // 「已完成」组此刻是展开的（上面点开过），因此丁被乐观地改完之后**仍在页面上**，
+    // 只是换了组 —— 这正好让下面那条断言能看见它。
+    await apiDeleteEvent(statusToken, EVENT_D.title)
+    await mouseClick(
+      client,
+      eventCheckboxFinder(EVENT_D.title),
+      '丁条勾选框（服务端已删，这一下必然失败）',
+    )
+
+    // 服务端明确拒绝了这一下（404），而界面在回话之前照样把它勾上了 —— 这是「乐观」
+    // 最硬的证据：那个勾不可能来自服务端，服务端根本不会答应。
+    await evaluate(
+      client,
+      waitFor(
+        `(${eventRowFacts(EVENT_D.title)}).includes('"checked":"true"')`,
+        OPTIMISTIC_BUDGET_MS,
+        '回话之前丁条已经被乐观地勾上了',
+      ),
+    )
+    record('失败也照改：界面先把丁勾上了（此刻服务端还没有答应）', true, '')
+
+    await evaluate(
+      client,
+      waitFor(
+        `(() => {
+          const text = document.querySelector('main').innerText
+          return !(${eventRowPresence(EVENT_D.title)}) && text.includes('已不在')
+        })()`,
+        10000,
+        '失败后丁条消失且给出「已不在」的提示',
+      ),
+    )
+    record('切换失败（服务端已删）时说清实情，并把列表重新对齐服务端', true, '')
+    record(
+      '回滚之后已完成组仍是 0 条（乐观值没有留下来）',
+      (await evaluate(client, DONE_GROUP_COUNT)) === '0',
+      String(await evaluate(client, DONE_GROUP_COUNT)),
+    )
+    await screenshot(client, '11b-events-rollback')
+
+    // 12. 渲染层无错误。这是本脚本存在的理由。
     record(
       '渲染过程未产生未捕获异常或 console.error',
       pageErrors.length === 0,

@@ -70,6 +70,31 @@ export function groupEvents(events: readonly Event[]): EventGroups {
 }
 
 /**
+ * 把列表里某一条的状态改成目标值，返回新数组；其余条目按原引用原样带过去。
+ *
+ * 这是勾选切换做**乐观更新**时改本地副本的那一步：点下去立刻按新状态重画，不等
+ * 服务端回话。写成纯函数而不是在事件处理函数里就地改，一是能被单测钉住，二是它与
+ * `groupEvents` 一样属于「怎么显示」，不该埋在一个 async 函数的中段。
+ *
+ * **只改 `status`，不碰 `completedAt` / `completedBy`。** 那两个是服务端的时间与身份
+ * 快照，界面猜不出来（本机时钟可能偏，显示名还得再问一次会话）；而列表这一版也不
+ * 展示它们 —— 展示要给 T3-12 的详情面板。这一步的全部作用就是让「点下去 → 界面重画」
+ * 之间不等网络，权威版本紧接着由服务端返回的那条覆盖进来（见 `EventsPanel` 的
+ * `handleToggle`）。
+ *
+ * **找不到 `id` 时原样返回。** 切换可能在「这条已被别处删掉」之后才回到界面，此时手上
+ * 的列表里已经没有它 —— 为了「让它有个状态」而补一条进去，只会让它短暂复活，而用户
+ * 看到的是一行凭空出现又消失。
+ */
+export function applyEventStatus(
+  events: readonly Event[],
+  id: string,
+  status: EventStatus,
+): readonly Event[] {
+  return events.map((event) => (event.id === id ? { ...event, status } : event))
+}
+
+/**
  * 是否已逾期：设了截止时间、那个时刻已经过去、且**尚未完成**。
  *
  * **已完成的不再算逾期。** 一件做完了的事，当初的截止时间只影响「是按时还是晚了些」，

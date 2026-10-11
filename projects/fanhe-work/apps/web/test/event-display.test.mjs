@@ -15,6 +15,7 @@ import { test } from 'node:test'
 import { EVENT_PRIORITIES, EVENT_STATUSES } from '@fanhe/shared'
 
 import {
+  applyEventStatus,
   EVENT_PRIORITY_CLASSES,
   EVENT_PRIORITY_LABELS,
   EVENT_STATUS_LABELS,
@@ -98,6 +99,61 @@ test('空列表分组后两组都是空数组', () => {
   const groups = groupEvents([])
   assert.deepEqual(groups.open, [])
   assert.deepEqual(groups.done, [])
+})
+
+// ---------------------------------------------------------------------------
+// 乐观更新（勾选切换时改本地那一条）
+// ---------------------------------------------------------------------------
+
+test('改一条的状态，其余条目原样带过去', () => {
+  const events = [makeEvent({ id: 'a' }), makeEvent({ id: 'b' }), makeEvent({ id: 'c' })]
+
+  const next = applyEventStatus(events, 'b', 'done')
+
+  assert.equal(next.length, 3)
+  assert.equal(next[1].status, 'done')
+  assert.equal(next[0].status, 'todo')
+  assert.equal(next[2].status, 'todo')
+  // 没动的那两条应当是同一个对象，而不是内容相同的新副本 —— 界面靠引用相等省下重画。
+  assert.equal(next[0], events[0])
+  assert.equal(next[2], events[2])
+})
+
+test('只改状态，不伪造完成时刻与完成人', () => {
+  // 这两个字段是服务端的时间与身份快照，界面猜不出来；列表这一版也不展示它们。
+  // 若这里顺手写一个「本地现在」，界面上会短暂显示一个可能偏掉的时刻，而权威值
+  // 紧随其后由重拉覆盖 —— 那个中间值除了误导没有任何作用。
+  const next = applyEventStatus([makeEvent({ id: 'a' })], 'a', 'done')
+  assert.equal(next[0].completedAt, null)
+  assert.equal(next[0].completedBy, null)
+})
+
+test('撤销（改回 todo）也能落在本地', () => {
+  const events = [makeEvent({ id: 'a', status: 'done', completedAt: '2026-06-02T00:00:00.000Z' })]
+  const next = applyEventStatus(events, 'a', 'todo')
+  assert.equal(next[0].status, 'todo')
+  // 完成信息由服务端在撤销时清空（三列一起），界面这一层不替它做决定 —— 下一个
+  // 往返就会把服务端那份权威值取回来。
+  assert.equal(next[0].completedAt, '2026-06-02T00:00:00.000Z')
+})
+
+test('找不到那条 id 时原样返回，不凭空补一条', () => {
+  // 切换可能在「这条已被别处删掉」之后才回到界面。为了「让它有个状态」而补一条进去，
+  // 表现是一行凭空出现又消失。
+  const events = [makeEvent({ id: 'a' }), makeEvent({ id: 'b' })]
+  const next = applyEventStatus(events, '不存在', 'done')
+  assert.equal(next.length, 2)
+  assert.deepEqual(
+    next.map((item) => item.status),
+    ['todo', 'todo'],
+  )
+})
+
+test('不修改传入的数组，返回的是新数组', () => {
+  const events = [makeEvent({ id: 'a' })]
+  const next = applyEventStatus(events, 'a', 'done')
+  assert.notEqual(next, events)
+  assert.equal(events[0].status, 'todo')
 })
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,6 @@ import { Ellipsis, Pencil, Trash2 } from 'lucide-react'
 import {
   EVENT_PRIORITY_CLASSES,
   EVENT_PRIORITY_LABELS,
-  EVENT_STATUS_LABELS,
   formatDueAt,
   isOverdue,
 } from '../../lib/event-display'
@@ -28,38 +27,58 @@ import {
  * `<button>` 会得到嵌套的可点击元素（无效的 HTML，读屏也会念出两个入口）。打开详情
  * 面板是 T3-12 的事，到那时入口会落在标题上。
  *
- * **勾选框在本轮是只读的。** 它反映当前状态（已完成是勾上的），但不可点 —— 勾选切换
- * 与撤销属 T3-11，那一轮要处理的是乐观更新、失败回滚与可撤销入口这三件事，把它们
- * 塞进这一轮的展示里只会让那一轮没有干净的接线点。用 `disabled` 而不是「能点但不生效」：
- * 后者会让人以为是自己点错了。`disabled:opacity-100` 抵消掉组件自带的半透明 ——
- * 一行行都是半透明的勾选框看起来像是整块列表坏了，而这里的意图只是「暂不可改」。
+ * **勾选框可点，是「完成 / 撤销完成」的入口**（T3-11）。它是这一行上唯一改变状态的
+ * 控件：勾上即完成（服务端记下完成时刻与完成人），取消勾选即撤销（服务端把三列完成
+ * 信息一起清空）。点击的即时反馈由 `EventsPanel` 的乐观更新给出 —— 这一行只负责把
+ * 「此刻是什么状态」如实画出来，不自己持有状态。
  *
- * **已完成的标题加删除线并转灰**，与勾选框的状态是同一个信号的两处表达：它们本来就
- * 只在展开「已完成」组时才看得到。
+ * **两种「点不动」分得很开。** 只读角色（`canWrite` 为假）永远点不动；有写权限的人
+ * 在另一条正在切换时也点不动（切换是串行的，见 `EventsPanel`）。前者的勾选框保持
+ * 正常透明度（`disabled:opacity-100`）—— 只读角色看到一整片半透明的勾选框，会以为
+ * 是列表坏了，而实际只是他没这个权限；后者的压暗则留着，它正好表达「正在处理」。
+ *
+ * **已完成的标题加删除线并转灰**，与勾选框的状态是同一个信号的两处表达。
  */
 export function EventRow({
   event,
   canWrite,
+  locked,
+  switching,
+  onToggle,
   onEdit,
   onDelete,
 }: {
   event: Event
   /** 只读访客不能触发任何改动，连同行菜单一起收起。 */
   canWrite: boolean
+  /** 另一条正在切换（切换是串行的），此刻这一行的勾选框也点不动。 */
+  locked: boolean
+  /** 正在切换的是**这一条**。用来给这一行一点「处理中」的样子。 */
+  switching: boolean
+  onToggle: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
   const done = event.status === 'done'
   const overdue = isOverdue(event)
+  const toggleable = canWrite && !locked && !switching
 
   return (
     <li className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
       <Checkbox
         checked={done}
-        disabled
-        aria-label={`${event.title}：${EVENT_STATUS_LABELS[event.status]}`}
-        // `mt-0.5` 对齐标题的首行基线；`disabled:opacity-100` 见组件注释。
-        className="mt-0.5 cursor-default disabled:opacity-100"
+        disabled={!toggleable}
+        onCheckedChange={() => onToggle()}
+        // 名字说的是**点它会做什么**，而不是它现在是什么 —— 「现在是什么」由
+        // `aria-checked` 表达，读屏会把两者一起念出来。
+        aria-label={`${event.title}：${done ? '撤销完成' : '标记完成'}`}
+        // `mt-0.5` 对齐标题的首行基线。
+        className={cn(
+          'mt-0.5',
+          toggleable ? 'cursor-pointer' : 'cursor-default',
+          // 见组件注释：只有「只读角色」这一种点不动需要抹掉半透明。
+          !canWrite && 'disabled:opacity-100',
+        )}
       />
 
       {/* `min-w-0` 不能省：flex 子项的默认最小宽度是内容宽度，长标题会把这一行撑破，

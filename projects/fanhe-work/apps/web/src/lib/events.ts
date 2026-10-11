@@ -1,4 +1,10 @@
-import type { CreateEventRequest, Event, EventTagCount, UpdateEventRequest } from '@fanhe/shared'
+import type {
+  CreateEventRequest,
+  Event,
+  EventStatus,
+  EventTagCount,
+  UpdateEventRequest,
+} from '@fanhe/shared'
 
 import { ApiError } from './api'
 import {
@@ -6,6 +12,7 @@ import {
   deleteEventRequest,
   eventsRequest,
   eventTagsRequest,
+  setEventStatusRequest,
   updateEventRequest,
 } from './api'
 import type { EventListQuery } from './api'
@@ -25,12 +32,14 @@ import { withAccessToken } from './session'
  * 新增、修改、删除之后一律重拉列表，理由与纪要板块相同：本机回环请求的延迟是毫秒级，
  * 重拉的代价远小于维护第二份顺序。
  *
- * **状态切换与变更历史不在本文件里。** 前者属 T3-11（乐观更新与失败回滚是那一轮的
- * 核心，提前写一个「朴素版」只会让那一轮多一次改写），后者属 T3-12 的详情面板。
+ * **变更历史不在本文件里**：它属 T3-12 的详情面板。**状态切换在**（T3-11），但它是
+ * 这里唯一一个「调用方要接着做点什么」的写操作 —— 界面要先本地改一条、再拿服务端
+ * 返回的那条对齐，见 `setEventStatus`。
  */
 
-/** 列表。不带条件时两组都返回，由界面分组 —— 分组是展示层的事，见 `event-display.ts`。 */
-export function loadEvents(query: EventListQuery = {}): Promise<readonly Event[]> {
+/** 列表。不带条件时两组都返回，由界面分组 —— 分组是展示层的事，见 `event-display.ts`。 */ export function loadEvents(
+  query: EventListQuery = {},
+): Promise<readonly Event[]> {
   return withAccessToken(async (token) => (await eventsRequest(token, query)).events)
 }
 
@@ -50,6 +59,23 @@ export function createEvent(input: CreateEventRequest): Promise<Event> {
 
 export function updateEvent(id: string, input: UpdateEventRequest): Promise<Event> {
   return withAccessToken(async (token) => (await updateEventRequest(token, id, input)).event)
+}
+
+/**
+ * 状态切换：完成（`done`）与撤销（`todo`）共用这一条。
+ *
+ * 返回服务端更新后的**整条事件**，而不是一个布尔值。界面据此把本地那条换成权威版本，
+ * 而不是自己拼一个 —— `completedAt` 与 `completedBy` 是服务端的时间与身份快照，界面
+ * 猜不出来（本地时钟可能偏，显示名也要再问一次会话）。服务端在这条路径上**天然幂等**：
+ * 提交一个与当前相同的状态，它直接返回现状、不写第二条日志，界面因此可以放心重发。
+ *
+ * **不做去抖、不做排队。** 同一时刻只允许一条切换在飞这件约束在界面层（`EventsPanel`
+ * 用 `switching` 表达），因为「用户还能不能点」是界面的事，而这里只回答「怎么切」。
+ */
+export function setEventStatus(id: string, status: EventStatus): Promise<Event> {
+  return withAccessToken(
+    async (token) => (await setEventStatusRequest(token, id, { status })).event,
+  )
 }
 
 /**

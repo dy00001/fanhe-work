@@ -22,6 +22,7 @@ import type {
   RefreshResponse,
   ReorderLaunchProfilesRequest,
   RunLaunchProfileResponse,
+  SetEventStatusRequest,
   SetNoteArchivedRequest,
   SetNotePinnedRequest,
   SetupStatusResponse,
@@ -410,16 +411,16 @@ export function setNoteArchivedRequest(
 }
 
 /**
- * 事件记录的五条接口（T3-10 用到的那几条）。
+ * 事件记录的六条接口（列表 / 标签 / 新增 / 修改 / 状态切换 / 删除）。
  *
  * 与上面两个板块同一条分工：这一层只拼地址、发请求、把失败规范化成 `ApiError`；
  * 令牌由 `lib/events.ts` 经 `withAccessToken` 附加。**id 同样一律过
  * `encodeURIComponent`**，理由与启动配置那一段完全相同。
  *
- * **状态切换（`PUT /api/events/:id/status`）与变更历史（`GET /api/events/:id/logs`）
- * 不在这一批里。** 它们分别属于 T3-11 与 T3-12，本轮界面上一行都不会用到 —— 把包装
- * 函数提前写出来，只会留下两个无人调用的导出，而它们是否该有别的签名，要等真正接线
- * 的那一轮才知道。
+ * **状态变更走自己的那条路径**（`PUT .../status`），不并进 `PATCH` —— 服务端把它
+ * 单独开一条是因为它是唯一需要留痕的改动（见 `setEventStatusRequest` 的注释）。
+ * **变更历史（`GET /api/events/:id/logs`）仍不在这一批里**：它属 T3-12 的详情面板，
+ * 提前写一个无人调用的导出，只会留下一个签名未知的半成品。
  */
 export type EventListQuery = {
   /** 只看某一状态。省略即两组都返回，由界面分组。 */
@@ -479,6 +480,28 @@ export function updateEventRequest(
 ): Promise<EventResponse> {
   return request<EventResponse>(`/api/events/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 状态切换。勾选完成与撤销共用这一条，撤销就是把它设回 `todo`。
+ *
+ * 用 `PUT` 而不是 `POST`：它替换的是「这条事件处于哪个状态」这个整体，服务端因此
+ * 天然幂等 —— 重复提交同一个状态不会写出第二条日志。**这一点是界面敢做乐观更新的
+ * 前提**：切换失败时重发一次就够了，不必先问「上一次到底成没成」。
+ *
+ * `comment` 不进这个函数。界面的勾选是「做完了」这一个动作，没有可填备注的位置；
+ * 留一个参数在这里而没人传，只会让人以为界面上某处能填。要写备注时再加。
+ */
+export function setEventStatusRequest(
+  accessToken: string,
+  id: string,
+  input: SetEventStatusRequest,
+): Promise<EventResponse> {
+  return request<EventResponse>(`/api/events/${encodeURIComponent(id)}/status`, {
+    method: 'PUT',
     body: input,
     accessToken,
   })

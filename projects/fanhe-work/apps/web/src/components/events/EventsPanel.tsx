@@ -3,6 +3,7 @@ import {
   PERMISSIONS,
   normalizeSearchQuery,
   type Event,
+  type EventStatus,
   type EventTagCount,
 } from '@fanhe/shared'
 import { CalendarCheck, Search, X } from 'lucide-react'
@@ -10,12 +11,14 @@ import { useEffect, useState } from 'react'
 
 import { useAuth } from '../../auth/useAuth'
 import { ApiError } from '../../lib/api'
+import { applyEventStatus } from '../../lib/event-display'
 import {
   createEvent,
   eventFailureExit,
   loadEventTags,
   loadEvents,
   removeEvent,
+  setEventStatus,
   updateEvent,
 } from '../../lib/events'
 import { cn } from '../../lib/utils'
@@ -44,14 +47,22 @@ import { EventList } from './EventList'
  * 本地改完还得自己重排一遍才与下一次拉取的结果一致，而这两份顺序迟早分叉。本机回环
  * 请求的延迟是毫秒级，重拉的代价远小于维护第二份顺序。
  *
+ * **勾选切换（T3-11）是上面那条规则的一个有意例外，但它没有破坏它。** 点勾选框时先
+ * 本地改那一条的状态（乐观更新），界面立刻按新的分组重画，不等服务端；请求回来之后
+ * 仍然重拉一次列表。乐观值负责的是「点下去到响应到达之间」这段空窗，而**顺序始终
+ * 来自服务端那一次重拉** —— 界面从头到尾没有定义过任何顺序。之所以要这段空窗：
+ * 完成一条会让它从「未完成」组跳进默认折叠的「已完成」组，也就是整行从眼前消失，
+ * 等一个往返再消失会让点击像是没生效。
+ *
+ * **失败的回滚不是手工改回去，而是重新对齐服务端。** 切换失败时的正确状态只有服务端
+ * 知道（它可能刚被别处删掉、可能令牌刚失效），所以失败路径做的是「提示 + 重拉」。
+ * 手工把状态改回点击前的值要额外记住「这期间用户又动了什么」，而重拉直接问真相。
+ *
  * **「已完成」的折叠状态在 `EventList` 里**，是本机、局部的组件状态，不进偏好存储 ——
  * 它表达的是「这一次浏览想怎么看」，与侧栏折叠那种「这台机器上一直怎么显示」不同。
  *
- * **勾选切换不在这里。** 行上的勾选框本轮是只读的，切换与撤销属 T3-11；详情面板属
- * T3-12。本板块这一轮要做的是把列表、分组与行内四要素摆对。
- *
- * **标签清单失败不算整页失败。** 它只是候选提示，拿不到时标签照样能手输 —— 与另外
- * 两个板块同构。
+ * **详情面板属 T3-12。** 本板块这一轮做的是「切换状态」这条链路：勾选、乐观更新、
+ * 失败回滚、以及完成之后那个能反悔的入口。
  */
 
 /**
@@ -82,7 +93,21 @@ async function fetchEvents(query: string): Promise<FetchEventsResult> {
   }
 }
 
-type Notice = { kind: 'ok' | 'error'; text: string }
+/** 提示条上的反悔入口：把刚动过的那一条设回 `to`。 */
+type NoticeUndo = { id: string; title: string; to: EventStatus }
+
+type Notice = {
+  kind: 'ok' | 'error'
+  text: string
+  /**
+   * 反悔入口。
+   *
+   * **只在「刚把一条标成完成」之后给**：那一步会把行挪进默认折叠的「已完成」组，
+   * 也就是从眼前拿走，点错了当场看不见它去了哪。反方向的「恢复」不给 —— 那一步是把
+   * 行放回眼前，做错了再点一次即可，摆一个「撤销撤销」出来只会让人多想一层。
+   */
+  undo?: NoticeUndo | undefined
+}
 
 export function EventsPanel() {
   const { can } = useAuth()
@@ -112,6 +137,18 @@ export function EventsPanel() {
   const [notice, setNotice] = useState<Notice | null>(null)
   const [deleting, setDeleting] = useState<Event | null>(null)
 
+  /**
+   * 正在切换状态的那一条。
+   *
+   * **用「一条」而不是「一组」：切换是串行的。** 允许两条同时在飞的话，先回来的那次
+   * 重拉会把另一条还没落库的乐观值覆盖成服务端旧值 —— 用户看到另一行的勾选框自己弹
+   * 回去，然后过一会又勾上。串行化把这个窗口彻底消掉，代价是几百毫秒内点不动第二行；
+   * 而本机回环请求的往返是毫秒级，这个代价实际上看不见。
+   *
+   * `null` 表示没有在飞的切换，此刻所有勾选框都可点。
+   */
+  const [switching, setSwitching] = useState<string | null>(null)
+
   /** 重载计数。重试与写操作之后都走「把它加一」，不把加载逻辑写第二遍。 */
   const [reloadToken, setReloadToken] = useState(0)
 
@@ -126,6 +163,9 @@ export function EventsPanel() {
    * 文案会先切成「没有匹配」，而屏幕上此刻还挂着全部结果。
    */
   const searching = query !== ''
+
+  /** 当前提示条上的反悔入口（没有就是 `undefined`）。见 `Notice.undo`。 */
+  const undo = notice?.undo
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -276,6 +316,60 @@ export function EventsPanel() {
     }
   }
 
+  /**
+   * 切换一条事件的状态：完成（`done`）与撤销（`todo`）走同一条。
+   *
+   * 三步，顺序不能换：
+   *
+   *   1. **乐观更新**：先本地改那一条，界面立刻按新状态重画。
+   *   2. **发请求**，并把服务端返回的整条当作权威。
+   *   3. **重拉列表**：顺序只有服务端有定义，乐观值不负责顺序。
+   *
+   * 失败时走 `reportFailure` + 重拉（回滚），见组件注释里那一段。
+   */
+  async function changeStatus(
+    target: { id: string; title: string },
+    next: EventStatus,
+  ): Promise<void> {
+    if (switching !== null) return
+
+    setSwitching(target.id)
+    setNotice(null)
+    setEvents((current) =>
+      current === null ? current : applyEventStatus(current, target.id, next),
+    )
+
+    try {
+      await setEventStatus(target.id, next)
+      setNotice({
+        kind: 'ok',
+        text: next === 'done' ? `已完成「${target.title}」` : `已恢复「${target.title}」`,
+        // 只有「刚标成完成」才给反悔入口，理由见 `Notice.undo`。
+        undo: next === 'done' ? { id: target.id, title: target.title, to: 'todo' } : undefined,
+      })
+      setReloadToken((token) => token + 1)
+    } catch (error) {
+      reportFailure(error, '切换状态失败，请稍后重试')
+      // 无条件重拉：失败时本地的乐观值必须被纠正，而「纠正成什么」只有服务端知道。
+      // `reportFailure` 在 404 那一支已经把它加过一次，React 会合并成一次重拉。
+      setReloadToken((token) => token + 1)
+    } finally {
+      setSwitching(null)
+    }
+  }
+
+  /** 勾选框：按当前状态切到对面。 */
+  function handleToggle(event: Event): void {
+    void changeStatus(
+      { id: event.id, title: event.title },
+      event.status === 'done' ? 'todo' : 'done',
+    )
+  }
+
+  function handleUndo(undo: NoticeUndo): void {
+    void changeStatus({ id: undo.id, title: undo.title }, undo.to)
+  }
+
   function renderBody(): React.ReactNode {
     if (loading) return <LoadingState variant="plain" label="正在加载事件记录" />
 
@@ -329,6 +423,8 @@ export function EventsPanel() {
       <EventList
         events={list}
         canWrite={canWrite}
+        switchingId={switching}
+        onToggle={handleToggle}
         onEdit={openEdit}
         onDelete={(event) => setDeleting(event)}
       />
@@ -350,7 +446,7 @@ export function EventsPanel() {
             )}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            未完成与已完成分组展示，已完成默认收起。勾选切换在下一步开放。
+            未完成与已完成分组展示，已完成默认收起。勾选即可标记完成，完成后可撤销。
           </p>
         </div>
 
@@ -407,13 +503,28 @@ export function EventsPanel() {
         <div
           role={notice.kind === 'ok' ? 'status' : 'alert'}
           className={cn(
-            'mt-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm',
+            'mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm',
             notice.kind === 'ok'
               ? 'border-border bg-accent text-foreground'
               : 'border-destructive/30 bg-destructive/10 text-destructive',
           )}
         >
-          <span className="min-w-0 break-words">{notice.text}</span>
+          <span className="min-w-0 flex-1 break-words">{notice.text}</span>
+          {/* 反悔入口。取一个局部量再判空，是为了让「这里非空」这件事在闭包里也成立 ——
+              直接写 `notice.undo` 的话，回调里那个 `notice` 是另一个作用域里的值。 */}
+          {undo !== undefined && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              // 有切换在飞时不给点：撤销本身就是一次切换，而切换是串行的。
+              disabled={switching !== null}
+              onClick={() => handleUndo(undo)}
+            >
+              撤销
+            </Button>
+          )}
           <button
             type="button"
             aria-label="关闭提示"
