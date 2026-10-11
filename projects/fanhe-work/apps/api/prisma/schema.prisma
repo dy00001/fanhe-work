@@ -109,6 +109,7 @@ model User {
   auditLogs      AuditLog[]
   launchProfiles LaunchProfile[]
   launchHistory  LaunchHistory[]
+  notes          Note[]
 
   @@index([roleId])
   @@index([status])
@@ -366,4 +367,63 @@ model LaunchHistory {
   /// 「这条配置最近一次启动」的查询走这个索引。
   @@index([userId, profileId, startedAt])
   @@map("launch_history")
+}
+
+/// 工作纪要。
+///
+/// **正文存 Markdown 原文，不存渲染结果。** 与共享包 note.ts 同一条理由：渲染是
+/// 前端的事（T3-06），存 HTML 意味着换一个渲染器就要重写全部历史数据，而且 HTML
+/// 里能塞脚本，读到它的人会面临一次注入。
+///
+/// **标签用 text[] 而不是关联表。** 个人工作台的标签没有独立元数据（颜色、描述），
+/// 不需要跨用户共享或重命名统计，开一张 tags 表加一张 note_tags 关联表换来的能力，
+/// 用数组加一次聚合也能达到，而代价是两处级联维护。数组查询走 GIN 索引，标签筛选
+/// 不必全表扫。这条判断与 `LaunchProfile.args` 用 `String[]` 同源。
+///
+/// **同用户下不设 title 唯一约束。** 与 `LaunchProfile.name` 同一条判断：软删除与
+/// 唯一索引天然冲突。纪要尤其需要允许重名 —— 「周会记录」这种标题一个月会重复
+/// 好几次，唯一约束会让它无法保存。
+///
+/// **归档不是删除。** `archivedAt` 有值时纪要退出默认列表，但仍然可读、可恢复，
+/// 与 `deletedAt` 的软删除是两回事。两个状态互相独立：可以先归档再删除，也可以
+/// 只归档。
+model Note {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// 标题。列宽与共享包的 NOTE_LIMITS.TITLE_MAX 一致。
+  title String @db.VarChar(200)
+
+  /// 正文，Markdown 原文。列类型给 text 而不设宽度：上限由共享包的
+  /// NOTE_LIMITS.CONTENT_MAX 在应用层强制，改上限不该需要一次迁移。
+  content String @db.Text
+
+  /// 标签。已归一，去首尾空白、去重、无空串，归一由 service 层负责。
+  /// 数据库侧没有约束（标签是用户的自由分类词），少归一那一步会让「工作」与
+  /// 「工作 」在库里共存，而界面上看不出区别。
+  tags String[] @default([])
+
+  /// 置顶。置顶的排在列表最前，与更新时间排序叠加。
+  pinned Boolean @default(false)
+
+  /// 归档时刻。为 null 表示未归档。用时刻而不是布尔，是因为「什么时候归档的」
+  /// 在回头看时有用（「这个月归档了哪些」），布尔表达不了。
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  /// 用户被物理清理时连带删除。正常流程下 users 走软删除，级联只在种子重建时
+  /// 触发，与 refresh_tokens、launch_profiles 的处理一致。
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 列表查询恒带 userId 与 deletedAt，按置顶与更新时间排序，这个复合索引正好
+  /// 覆盖。时间范围筛选走它的前两列前缀，不必再为 createdAt 单建一条。
+  @@index([userId, deletedAt, pinned, updatedAt])
+  /// 归档视图按归档时刻倒序取。
+  @@index([userId, deletedAt, archivedAt])
+  /// 标签筛选走 GIN。数组的包含判断在 B-tree 上用不上。
+  @@index([tags], type: Gin)
+  @@map("notes")
 }

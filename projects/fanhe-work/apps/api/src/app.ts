@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { registerAuthSupport } from './auth/guard.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerLaunchRoutes } from './routes/launch.js'
+import { registerNoteRoutes } from './routes/notes.js'
 import { registerSetupRoutes } from './routes/setup.js'
 
 /**
@@ -38,6 +39,7 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerAuthRoutes(app)
   registerSetupRoutes(app)
   registerLaunchRoutes(app)
+  registerNoteRoutes(app)
 
   return app
 }
