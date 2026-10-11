@@ -7,6 +7,7 @@ import type {
   DeleteLaunchProfileResponse,
   DeleteNoteResponse,
   EventListResponse,
+  EventLogListResponse,
   EventResponse,
   EventTagListResponse,
   InitializeOwnerResponse,
@@ -411,7 +412,7 @@ export function setNoteArchivedRequest(
 }
 
 /**
- * 事件记录的六条接口（列表 / 标签 / 新增 / 修改 / 状态切换 / 删除）。
+ * 事件记录的七条接口（列表 / 标签 / 变更历史 / 新增 / 修改 / 状态切换 / 删除）。
  *
  * 与上面两个板块同一条分工：这一层只拼地址、发请求、把失败规范化成 `ApiError`；
  * 令牌由 `lib/events.ts` 经 `withAccessToken` 附加。**id 同样一律过
@@ -419,8 +420,7 @@ export function setNoteArchivedRequest(
  *
  * **状态变更走自己的那条路径**（`PUT .../status`），不并进 `PATCH` —— 服务端把它
  * 单独开一条是因为它是唯一需要留痕的改动（见 `setEventStatusRequest` 的注释）。
- * **变更历史（`GET /api/events/:id/logs`）仍不在这一批里**：它属 T3-12 的详情面板，
- * 提前写一个无人调用的导出，只会留下一个签名未知的半成品。
+ * 变更历史是同一条 `:id` 下的另一个子资源，读它不改变任何东西，因此是 `GET`。
  */
 export type EventListQuery = {
   /** 只看某一状态。省略即两组都返回，由界面分组。 */
@@ -503,6 +503,24 @@ export function setEventStatusRequest(
   return request<EventResponse>(`/api/events/${encodeURIComponent(id)}/status`, {
     method: 'PUT',
     body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 状态变更历史。详情面板（T3-12）的唯一数据来源。
+ *
+ * **这是唯一一条「查别人的东西」的接口，因此它的 404 尤其重要。** `event_logs` 表上
+ * 没有 `user_id` 列，归属完全靠服务端在读之前先确认事件属于当前账号；不对的话一律
+ * 返回 404（不是 403 —— 用 403 会让任何一种响应都变成「这个 UUID 存在」的探针）。
+ * 因此界面这一侧**不要自己判归属**，也不要把 404 说成「你没有权限」：那等于承认它存在。
+ * 与另外两条 `:id` 路由共用同一个说法，见 `eventFailureExit`。
+ *
+ * 顺序（按发生时间升序）由服务端定，界面照着画。
+ */
+export function eventLogsRequest(accessToken: string, id: string): Promise<EventLogListResponse> {
+  return request<EventLogListResponse>(`/api/events/${encodeURIComponent(id)}/logs`, {
+    method: 'GET',
     accessToken,
   })
 }

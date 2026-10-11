@@ -5,8 +5,9 @@
  * 启动通道的新增、编辑、排序、启动与删除，以及路径失效的提示、重新指定入口与
  * 启动记录的摘要 → 工作纪要的编写、Markdown 预览、置顶、归档与删除，以及中文关键词
  * 检索与检索和视图的正交性 → 事件记录的新增、四要素齐备、逾期标记、未完成与已完成
- * 分组、已完成默认折叠、编辑回填与删除，以及勾选切换（乐观更新、完成信息落库、
- * 撤销、失败回滚）。
+ * 分组、已完成默认折叠、编辑回填与删除，勾选切换（乐观更新、完成信息落库、撤销、
+ * 失败回滚），以及详情面板（完整描述、创建与完成时间、耗时、完成人，以及来自
+ * `event_logs` 的变更历史）。
  *
  * 为什么需要它：类型检查、生产构建与 HTTP 契约测试都覆盖不到渲染层。React 在
  * 运行期抛错时，构建照样通过、接口照样返回 200，只有页面会白掉 —— 这类故障
@@ -161,7 +162,15 @@ const EVENT_B = {
  */
 const EVENT_C = {
   title: 'zz_e2e_事件丙',
-  description: '由界面勾选改为完成，用来验证乐观更新与完成信息落库。',
+  // 带 Markdown 语法，供 T3-12 的详情面板验「描述是按 Markdown 渲染的，不是原样贴出来」。
+  description: [
+    '由界面勾选改为完成，用来验证乐观更新与完成信息落库。',
+    '',
+    '**加粗**与列表：',
+    '',
+    '- 第一项',
+    '- 第二项',
+  ].join('\n'),
 }
 const EVENT_D = {
   title: 'zz_e2e_事件丁',
@@ -591,24 +600,60 @@ function eventRowFacts(title) {
 }
 
 /**
- * 事件列表里某一行的勾选框元素，交给 `mouseClick` 去点。
+ * 点事件行里的一个元素（标题入口或勾选框）。
  *
- * **用真实指针事件而不是 `.click()`。** 勾选框是 Radix 的组件，它的状态切换走的是
- * 指针交互管线；合成点击在某些构造下会被忽略，而失败的样子是「点了没反应」，看不出
- * 是脚本点错了还是乐观更新没生效。行内菜单当初踩过同一个坑（见 `openRowMenu`）。
+ * **行内这两处一律走 `element.click()`，而不是 `mouseClick` 那套 CDP 合成鼠标事件。**
+ * 两者的取舍在行内菜单上正好相反，值得写清楚：
  *
- * 顺手挡一下 `disabled`：一个禁用的勾选框被点会静默无事发生，而这里想验的恰恰是
- * 「它现在能点」—— 真遇到禁用态应当当场报出来，而不是等到后面的 `waitFor` 超时。
+ *   - Radix 的**下拉菜单**在 `pointerdown` 上展开、在 `pointerup` 上选中，合成 click
+ *     两个都不触发 —— 所以菜单必须走真实指针事件（见 `openRowMenu`）。
+ *   - 而 Radix 的**勾选框**渲染成 `<button role="checkbox">`、**标题**是一个普通
+ *     `<button onClick>`，两处的逻辑都挂在普通 `click` 上，`element.click()` 派发的
+ *     就是真实 click 事件，React 照样收得到。
+ *
+ * 这不是照着文档推的，是实测出来的：早先勾选框用的也是合成鼠标事件，同一份脚本三跑
+ * 两败在「乐观更新」那条断言上，报的是「等待超时」。加探针复现时看到整组
+ * `mouseMoved/Pressed/Released` 偶尔整组被丢掉 —— 点击**根本没有送达**，界面自然一直
+ * 不变，而失败信息看起来像是产品缺陷。换成 `.click()` 之后这一步是同步的，再也没有
+ * 「点击到底送没送到」这个不确定环节。
+ *
+ * `disabled` 仍然先查一次：禁用的按钮上 `.click()` 不会派发事件（浏览器行为），静默
+ * 无事发生 —— 而这里要的是一句说得清的报错。
  */
-function eventCheckboxFinder(title) {
-  return `(() => {
-    const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(title)}))
-    if (!row) throw new Error('找不到事件行：' + ${JSON.stringify(title)})
-    const box = row.querySelector('[role="checkbox"]')
-    if (!box) throw new Error('该行没有勾选框：' + ${JSON.stringify(title)})
-    if (box.hasAttribute('disabled')) throw new Error('勾选框是禁用态：' + ${JSON.stringify(title)})
-    return box
-  })()`
+async function clickInEventRow(client, title, findTarget, label) {
+  await evaluate(
+    client,
+    `(() => {
+      const row = [...document.querySelectorAll('main ul li')].find((item) => item.textContent.includes(${JSON.stringify(title)}))
+      if (!row) throw new Error('找不到事件行：' + ${JSON.stringify(title)})
+      const target = ${findTarget}
+      if (!target) throw new Error('该行里找不到' + ${JSON.stringify(label)} + '：' + ${JSON.stringify(title)})
+      if (target.hasAttribute('disabled')) throw new Error(${JSON.stringify(label)} + '是禁用态：' + ${JSON.stringify(title)})
+      target.click()
+      return true
+    })()`,
+  )
+}
+
+/**
+ * 点标题打开详情面板。
+ *
+ * `findTarget` 里那个「精确等于标题文本」的条件**本身就是一条断言**：详情面板的入口
+ * 落在标题上，而它在 T3-12 之前是一个不可点的 `<span>`。行本身仍然不是按钮 ——
+ * 勾选框、标题、行内菜单三个并列，不是嵌套。
+ */
+function clickEventTitle(client, title) {
+  return clickInEventRow(
+    client,
+    title,
+    `[...row.querySelectorAll('button')].find((item) => item.textContent.trim() === ${JSON.stringify(title)})`,
+    '标题入口',
+  )
+}
+
+/** 点勾选框：完成 / 撤销完成的入口。 */
+function clickEventCheckbox(client, title) {
+  return clickInEventRow(client, title, `row.querySelector('[role="checkbox"]')`, '勾选框')
 }
 
 /**
@@ -684,6 +729,92 @@ const UNDO_BUTTON_PRESENT = `[...document.querySelectorAll('main button')].some(
  */
 function eventRowPresence(title) {
   return `[...document.querySelectorAll('main ul li')].some((item) => item.textContent.includes(${JSON.stringify(title)}))`
+}
+
+/**
+ * 详情面板整段文本，没开时返回 `null`。
+ *
+ * 面板走 portal 挂到 body 上，不在 `main` 里 —— 与 `clickDialogButton` 同一个理由。
+ * 页面上同时只会有一个对话框，因此按 `role="dialog"` 取就是它。
+ */
+const DETAIL_TEXT = `(() => {
+  const dialog = document.querySelector('[role="dialog"]')
+  return dialog ? dialog.innerText : null
+})()`
+
+/** 详情面板在不在。 */
+const DETAIL_PRESENT = `document.querySelector('[role="dialog"]') !== null`
+
+/**
+ * 按标签读详情面板里的一项元信息，例如「完成用时」右边那个值。
+ *
+ * **走 `dt` 的兄弟节点，而不是「在整段文本里找某个词」。** 面板里「创建」这个词同时
+ * 出现在元信息（创建时间）与时间线（动作码「创建」）上，按文本找会把两个不同的东西
+ * 混成一个，于是「时间线上有创建」这条断言在时间线根本没加载出来时也能通过。
+ */
+function detailMetaValue(label) {
+  return `(() => {
+    const dialog = document.querySelector('[role="dialog"]')
+    if (!dialog) return null
+    const term = [...dialog.querySelectorAll('dt')].find((item) => item.textContent.trim() === ${JSON.stringify(label)})
+    return term && term.nextElementSibling ? term.nextElementSibling.textContent.trim() : null
+  })()`
+}
+
+/**
+ * 详情面板里「变更历史」那一段，**按顺序**返回每一行的文本。
+ *
+ * 返回整行数组而不是拼成一整串：这一段要验的恰恰是顺序与「有哪几条」—— 拼起来之后
+ * 「完成」与「撤销完成」包含了同一个词，谁在前谁在后就分不出来了，而这正是它与
+ * 「界面按当前状态反推」之间唯一的区别所在。
+ */
+const DETAIL_TIMELINE = `(() => {
+  const dialog = document.querySelector('[role="dialog"]')
+  if (!dialog) return null
+  const heading = [...dialog.querySelectorAll('h3')].find((item) => item.textContent.trim() === '变更历史')
+  if (!heading) return null
+  const list = heading.parentElement.querySelector('ol')
+  if (!list) return null
+  return JSON.stringify([...list.children].map((item) => item.innerText.trim()))
+})()`
+
+/** 「已完成」组此刻是不是展开的。用来在点某一行之前把界面状态确定下来，别靠上一步的残留。 */
+const DONE_GROUP_EXPANDED = `(() => {
+  const button = [...document.querySelectorAll('main button')].find((item) => item.textContent.trim() === '已完成')
+  return button ? button.getAttribute('aria-expanded') === 'true' : null
+})()`
+
+/** 详情面板里有没有这个加粗片段。用来证明描述是**按 Markdown 渲染的**，不是原样贴出来。 */
+function detailHasStrong(text) {
+  return `(() => {
+    const dialog = document.querySelector('[role="dialog"]')
+    if (!dialog) return false
+    return [...dialog.querySelectorAll('strong')].some((item) => item.textContent.trim() === ${JSON.stringify(text)})
+  })()`
+}
+
+/**
+ * 关掉详情面板。
+ *
+ * 走右上角那个关闭按钮而不是按 Esc：这是用户在界面上真正会做的那一下，而 Esc 走的是
+ * Radix 自己的键盘处理 —— 用后者验「关得掉」等于绕过了被测的那条路径。
+ *
+ * 同样用 `.click()`：那个按钮是 Radix 的 `DialogPrimitive.Close`，逻辑挂在普通 click 上。
+ */
+async function closeDetail(client) {
+  await evaluate(
+    client,
+    `(() => {
+      const button = document.querySelector('[role="dialog"] [data-slot="dialog-close"]')
+      if (!button) throw new Error('找不到详情面板的关闭按钮')
+      button.click()
+      return true
+    })()`,
+  )
+  await evaluate(
+    client,
+    waitFor(`document.querySelector('[role="dialog"]') === null`, 5000, '详情面板关闭'),
+  )
 }
 
 /**
@@ -1002,7 +1133,19 @@ const THEME_FRAME_PROBE = `(() => {
   requestAnimationFrame(tick)
 })()`
 
+/**
+ * 截一张图。
+ *
+ * **抓帧之前先等一小会。** Radix 的对话框与菜单带 200ms 的打开动画
+ * （`animate-in fade-in-0 zoom-in-95`），而断言用的 `waitFor` 是「元素一挂上就返回」——
+ * 紧接着抓帧拍到的就是淡入的中间帧：截图里对话框是半透明的，背后的页面文字透过来，
+ * 看起来像是背景色没生效。真实用户看到的是动画结束后的样子，所以这里等的不是渲染，
+ * 是**让截图反映稳态**。
+ *
+ * 与断言无关（断言读的是 DOM，不是像素），因此这个等待只影响截图好不好看。
+ */
 async function screenshot(client, name) {
+  await sleep(350)
   const { data } = await client.send('Page.captureScreenshot', { format: 'png' })
   const path = resolve(SHOT_DIR, `${name}.png`)
   await writeFile(path, Buffer.from(data, 'base64'))
@@ -1018,8 +1161,10 @@ async function assertUninitialized() {
   if (body.initialized) {
     throw new Error(
       '数据库已经完成初始化，首次初始化页不会出现。先重置再跑：\n' +
+        // **这段必须与文件头部那份保持一致。** 它原来漏掉了事件的两张表，而症状是
+        // 「空态那几条断言失败」—— 看起来像界面坏了，实际是上一轮的软删除行还躺在库里。
         '  docker exec fanhe-work-db psql -U fanhe -d fanhe_work -c \\\n' +
-        '    "delete from notes; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
+        '    "delete from event_logs; delete from events; delete from notes; delete from launch_history; delete from launch_profiles; delete from refresh_tokens; delete from audit_logs; delete from login_attempts; delete from users;"',
     )
   }
 }
@@ -3074,7 +3219,7 @@ async function main() {
       String(await evaluate(client, OPEN_GROUP_COUNT)),
     )
 
-    await mouseClick(client, eventCheckboxFinder(EVENT_C.title), '丙条勾选框')
+    await clickEventCheckbox(client, EVENT_C.title)
 
     // **回话之前**界面就该已经改了。请求被拖住 1.2 秒，而这里的预算是 0.9 秒 ——
     // 界面若是等接口回话才改的，这个数字在这里不会动。
@@ -3182,11 +3327,7 @@ async function main() {
     // 「已完成」组此刻是展开的（上面点开过），因此丁被乐观地改完之后**仍在页面上**，
     // 只是换了组 —— 这正好让下面那条断言能看见它。
     await apiDeleteEvent(statusToken, EVENT_D.title)
-    await mouseClick(
-      client,
-      eventCheckboxFinder(EVENT_D.title),
-      '丁条勾选框（服务端已删，这一下必然失败）',
-    )
+    await clickEventCheckbox(client, EVENT_D.title)
 
     // 服务端明确拒绝了这一下（404），而界面在回话之前照样把它勾上了 —— 这是「乐观」
     // 最硬的证据：那个勾不可能来自服务端，服务端根本不会答应。
@@ -3219,7 +3360,141 @@ async function main() {
     )
     await screenshot(client, '11b-events-rollback')
 
-    // 12. 渲染层无错误。这是本脚本存在的理由。
+    // 12. 已完成详情面板（T3-12）。
+    //
+    //     这一段里唯一**能证伪**的断言是变更历史那两条。T3-11 段里丙走过「完成 → 撤销」，
+    //     于是上面那三笔流水（创建 / 完成 / 撤销完成）在它此刻的状态（未完成）里**完全
+    //     看不出来**：界面若在按当前状态反推，它只会画出「未完成」，永远画不出
+    //     「撤销完成」这一条。历史来自 `event_logs` 还是来自反推，区别就在这里。
+    //
+    //     顺带验了「未完成的事件也能打开」这个判断。规格写的是「已完成详情」，但描述在
+    //     列表那一行上根本不显示（那行只有标题、标签、截止时间、优先级），只有完成之后
+    //     才看得到的话，一件写着上下文的待办在完成之前就无处可看。
+    await clickEventTitle(client, EVENT_C.title)
+    await evaluate(client, waitFor(DETAIL_PRESENT, 8000, '详情面板出现'))
+
+    const pendingText = await evaluate(client, DETAIL_TEXT)
+    record(
+      '点标题就打开详情面板，面板里是点的那一条',
+      typeof pendingText === 'string' && pendingText.includes(EVENT_C.title),
+      '',
+    )
+    record(
+      '未完成的事件也能打开详情，且如实说明「尚未完成」（此时没有「完成用时」这一项）',
+      typeof pendingText === 'string' &&
+        pendingText.includes('尚未完成') &&
+        !pendingText.includes('完成用时'),
+      '',
+    )
+    record(
+      '详情补齐了列表上没有的那两样：完整描述与创建时间',
+      typeof pendingText === 'string' &&
+        pendingText.includes('由界面勾选改为完成') &&
+        (await evaluate(client, detailMetaValue('创建时间'))) !== null,
+      String(await evaluate(client, detailMetaValue('创建时间'))),
+    )
+    record(
+      '描述是按 Markdown 渲染的，不是原样贴出来',
+      (await evaluate(client, detailHasStrong('加粗'))) === true,
+      '',
+    )
+
+    // 面板打开后日志还要一趟请求，这里等它到 —— 等的判据是「时间线有了行」。
+    await evaluate(
+      client,
+      waitFor(
+        `(() => { const raw = ${DETAIL_TIMELINE}; return raw !== null && JSON.parse(raw).length >= 3 })()`,
+        8000,
+        '变更历史加载完成',
+      ),
+    )
+    const pendingTimeline = JSON.parse(await evaluate(client, DETAIL_TIMELINE))
+    record(
+      '变更历史来自流水而不是反推：当前是未完成，却留着「完成」与「撤销完成」两笔',
+      Array.isArray(pendingTimeline) &&
+        pendingTimeline.length === 3 &&
+        pendingTimeline[0].includes('创建') &&
+        pendingTimeline[1].includes('完成') &&
+        !pendingTimeline[1].includes('撤销') &&
+        pendingTimeline[2].includes('撤销完成'),
+      JSON.stringify(pendingTimeline),
+    )
+    // 每一行都要带发生时刻，而不是只给一句「完成」—— 时间线没有时刻就只是四个词。
+    record(
+      '时间线上的每一条都带着发生时刻',
+      Array.isArray(pendingTimeline) &&
+        pendingTimeline.every((line) => /\d{4}年\d+月\d+日 \d{2}:\d{2}/.test(line)),
+      JSON.stringify(pendingTimeline),
+    )
+    await screenshot(client, '12a-events-detail-pending')
+    await closeDetail(client)
+
+    // 把丙标成完成，再看一次详情：这一次「完成时间 / 完成人 / 完成用时」三项该补齐了。
+    await clickEventCheckbox(client, EVENT_C.title)
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main').innerText.includes(${JSON.stringify(`已完成「${EVENT_C.title}」`)})`,
+        10000,
+        '完成提示出现',
+      ),
+    )
+    // 丙跳进了「已完成」组。那一组默认折叠，T3-11 段展开过一次 —— 但这里**不依赖上一步
+    // 留下的界面状态**：先读 `aria-expanded` 再决定要不要点，两种起点都能跑。
+    if ((await evaluate(client, DONE_GROUP_EXPANDED)) !== true) {
+      await evaluate(client, clickMainButton('已完成'))
+    }
+    await evaluate(client, waitFor(eventRowPresence(EVENT_C.title), 8000, '丙条出现在已完成组'))
+
+    await clickEventTitle(client, EVENT_C.title)
+    await evaluate(client, waitFor(DETAIL_PRESENT, 8000, '详情面板再次出现'))
+    await evaluate(
+      client,
+      waitFor(`(${detailMetaValue('完成用时')}) !== null`, 8000, '详情里出现完成用时'),
+    )
+
+    const doneText = await evaluate(client, DETAIL_TEXT)
+    record(
+      '完成之后详情补齐了完成时间、完成人与完成用时三项',
+      typeof doneText === 'string' &&
+        doneText.includes('完成时间') &&
+        doneText.includes('完成人') &&
+        doneText.includes('完成用时'),
+      '',
+    )
+    record(
+      '完成人就是当前账号的显示名',
+      (await evaluate(client, detailMetaValue('完成人'))) === OWNER.displayName,
+      String(await evaluate(client, detailMetaValue('完成人'))),
+    )
+    const duration = await evaluate(client, detailMetaValue('完成用时'))
+    record(
+      '完成用时是一个真实的时长，而不是「—」这个兜底',
+      typeof duration === 'string' && /^(不到 1 秒|\d+ (秒|分|小时|天))/.test(duration),
+      String(duration),
+    )
+
+    const doneTimeline = JSON.parse(await evaluate(client, DETAIL_TIMELINE))
+    record(
+      '再标一次完成之后，流水里多出第四条「完成」，四条按发生顺序排着',
+      Array.isArray(doneTimeline) &&
+        doneTimeline.length === 4 &&
+        doneTimeline[0].includes('创建') &&
+        doneTimeline[1].includes('完成') &&
+        !doneTimeline[1].includes('撤销') &&
+        doneTimeline[2].includes('撤销完成') &&
+        doneTimeline[3].includes('完成'),
+      JSON.stringify(doneTimeline),
+    )
+    await screenshot(client, '12b-events-detail-done')
+    await closeDetail(client)
+    record(
+      '关掉详情之后回到列表，那一行还在',
+      (await evaluate(client, eventRowPresence(EVENT_C.title))) === true,
+      '',
+    )
+
+    // 13. 渲染层无错误。这是本脚本存在的理由。
     record(
       '渲染过程未产生未捕获异常或 console.error',
       pageErrors.length === 0,

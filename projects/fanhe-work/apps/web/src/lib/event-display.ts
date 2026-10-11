@@ -1,4 +1,10 @@
-import type { Event, EventPriority, EventStatus } from '@fanhe/shared'
+import {
+  isEventLogAction,
+  type Event,
+  type EventLogAction,
+  type EventPriority,
+  type EventStatus,
+} from '@fanhe/shared'
 
 /**
  * 事件板块的展示映射与派生判断。
@@ -40,6 +46,54 @@ export const EVENT_PRIORITY_CLASSES: Record<EventPriority, string> = {
 export const EVENT_STATUS_LABELS: Record<EventStatus, string> = {
   todo: '未完成',
   done: '已完成',
+}
+
+/**
+ * 状态变更动作的中文说法。
+ *
+ * 只有这三个：写的一侧由服务端收口（见共享包里 `EVENT_LOG_ACTIONS` 的说明）。写成
+ * `Record<EventLogAction, string>` 而不是三目表达式，理由与 `EVENT_PRIORITY_LABELS`
+ * 相同 —— 将来多出第四种动作时，这里会在编译期报缺项。
+ *
+ * 注意「撤销完成」而不是「撤销」：详情面板上「撤销」会与提示条上那个「撤销」按钮
+ * 撞词，而那两者是不同层面的东西（一个是回溯历史里发生过的事，一个是当下的一次操作）。
+ */
+export const EVENT_LOG_ACTION_LABELS: Record<EventLogAction, string> = {
+  created: '创建',
+  completed: '完成',
+  reopened: '撤销完成',
+}
+
+/**
+ * 一条日志的动作文案。
+ *
+ * **认不出的动作码原样返回。** 库侧对 `action` 没有约束，而这是一条只追加的历史：
+ * 一个动作码在写入之后才被引入时，旧版本的代码读它必须能如实展示，而不是因为
+ * 「类型上不该出现」就把它丢掉或显示成空白。共享包的 `isEventLogAction` 是「认不认得」
+ * 的唯一判据，这里消费它的结论。
+ */
+export function eventLogActionText(action: string): string {
+  return isEventLogAction(action) ? EVENT_LOG_ACTION_LABELS[action] : action
+}
+
+/**
+ * 一条日志的状态流转，例如「未完成 → 已完成」。两端都可能缺：创建日志没有 `fromStatus`。
+ * 两端都缺时返回 `null`，调用方据此不显示这一行。
+ *
+ * **只在动作码认不出来时才用它**（见 `eventLogActionText`）：认识的那三个动作，
+ * 「完成」「撤销完成」本身已经说清了流向，再跟一句「未完成 → 已完成」是同一件事说两遍。
+ * 而动作码不认识时，状态流转往往是**唯一**能看懂的线索，那时候它就不是冗余了。
+ */
+export function eventLogTransitionText(
+  from: EventStatus | null,
+  to: EventStatus | null,
+): string | null {
+  if (from !== null && to !== null) {
+    return `${EVENT_STATUS_LABELS[from]} → ${EVENT_STATUS_LABELS[to]}`
+  }
+  if (from !== null) return EVENT_STATUS_LABELS[from]
+  if (to !== null) return EVENT_STATUS_LABELS[to]
+  return null
 }
 
 /**
@@ -140,6 +194,79 @@ export function formatDueAt(iso: string, now: number = Date.now()): string {
   if (Number.isNaN(at.getTime())) return iso
   const date = at.getFullYear() === new Date(now).getFullYear() ? DUE_MONTH_DAY : DUE_FULL_DATE
   return `${date.format(at)} ${DUE_TIME.format(at)}`
+}
+
+const MOMENT_FULL = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+/**
+ * 一个完整时刻，例如「2026年10月11日 22:31」。详情面板用它。
+ *
+ * **与 `formatDueAt` 的区别只有一个：年份永远在。** 那里省略今年是为了让一列截止时间
+ * 读起来短，而这里读的是一条已经发生过的历史 —— 历史可以跨年（一条两年前建的、去年
+ * 完成的、今年才被撤销的事件，三个时刻同屏），省掉年份会让「10月11日」指向哪一年变得
+ * 要靠上下文推。多出来的四个字在这里买的是「不必推」。
+ *
+ * 解析不了的值原样返回，与 `formatDueAt` 和 `formatRelativeTime` 同一条处理：界面不该
+ * 因为一个时间戳整块白掉。
+ */
+export function formatMoment(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return iso
+  return MOMENT_FULL.format(at)
+}
+
+const SECOND_MS = 1000
+const MINUTE_MS = 60 * SECOND_MS
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+
+/**
+ * 两个时刻之间的时长，例如「1 小时 23 分」。详情面板用它算「从创建到完成的耗时」。
+ *
+ * **取最大的两个单位，第二个为零时省略**（「2 小时」而不是「2 小时 0 分」）。只取最大
+ * 一个单位的话，「3 天」会掩盖「3 天 2 小时」与「3 天 23 小时」的差别 —— 而详情面板上
+ * 这个数字是给人看出量级与细度的，不像列表上的相对时间那样只需量级。取三个又会读成
+ * 「1 小时 23 分 45 秒」，后两位在这里没有决策价值。
+ *
+ * 秒只出现在「不到一分钟」这一档（`45 秒`）；一旦进了分钟档，第二个单位就是秒。
+ *
+ * **反过来的区间返回 `null`。** `to` 早于 `from` 只可能来自手工改库或时钟回拨，而这时
+ * 显示一个负数或「不到 1 秒」都是在替数据编一个说得通的说法。返回 `null`，让调用方
+ * 显示成「—」，把「这里有个数但它是坏的」如实说出来。
+ */
+export function formatDuration(fromIso: string, toIso: string): string | null {
+  const from = Date.parse(fromIso)
+  const to = Date.parse(toIso)
+  if (Number.isNaN(from) || Number.isNaN(to)) return null
+
+  const ms = to - from
+  if (ms < 0) return null
+  if (ms < SECOND_MS) return '不到 1 秒'
+
+  if (ms < MINUTE_MS) return `${Math.floor(ms / SECOND_MS)} 秒`
+
+  if (ms < HOUR_MS) {
+    const minutes = Math.floor(ms / MINUTE_MS)
+    const seconds = Math.floor((ms % MINUTE_MS) / SECOND_MS)
+    return seconds === 0 ? `${minutes} 分` : `${minutes} 分 ${seconds} 秒`
+  }
+
+  if (ms < DAY_MS) {
+    const hours = Math.floor(ms / HOUR_MS)
+    const minutes = Math.floor((ms % HOUR_MS) / MINUTE_MS)
+    return minutes === 0 ? `${hours} 小时` : `${hours} 小时 ${minutes} 分`
+  }
+
+  const days = Math.floor(ms / DAY_MS)
+  const hours = Math.floor((ms % DAY_MS) / HOUR_MS)
+  return hours === 0 ? `${days} 天` : `${days} 天 ${hours} 小时`
 }
 
 function pad(value: number): string {

@@ -23,9 +23,13 @@ import {
  * 事件列表的一行。
  *
  * 行的四样东西按实施方案第六章的顺序排：左侧勾选框、中间标题与标签、右侧截止时间与
- * 优先级。**行本身不是按钮** —— 勾选框与行内菜单都是可交互元素，把整行包成一个
- * `<button>` 会得到嵌套的可点击元素（无效的 HTML，读屏也会念出两个入口）。打开详情
- * 面板是 T3-12 的事，到那时入口会落在标题上。
+ * 优先级。**行本身不是按钮** —— 勾选框、标题、行内菜单都是可交互元素，把整行包成一个
+ * `<button>` 会得到嵌套的可点击元素（无效的 HTML，读屏也会念出两个入口）。
+ *
+ * **标题是打开详情面板的入口**（T3-12）。挑标题而不是「给行加一个图标按钮」，是因为
+ * 详情要展示的正是「这一条完整是什么样」，而标题就是这一条的名字 —— 想细看它的人
+ * 自然会往它身上点。行内菜单里不再放一个「详情」项：同一件事有两个入口时，用户会开始
+ * 猜它们是不是不一样。
  *
  * **勾选框可点，是「完成 / 撤销完成」的入口**（T3-11）。它是这一行上唯一改变状态的
  * 控件：勾上即完成（服务端记下完成时刻与完成人），取消勾选即撤销（服务端把三列完成
@@ -45,6 +49,7 @@ export function EventRow({
   locked,
   switching,
   onToggle,
+  onOpenDetail,
   onEdit,
   onDelete,
 }: {
@@ -56,6 +61,7 @@ export function EventRow({
   /** 正在切换的是**这一条**。用来给这一行一点「处理中」的样子。 */
   switching: boolean
   onToggle: () => void
+  onOpenDetail: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -84,14 +90,26 @@ export function EventRow({
       {/* `min-w-0` 不能省：flex 子项的默认最小宽度是内容宽度，长标题会把这一行撑破，
           表现为右侧的截止时间与优先级被挤出可视区。 */}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <span
+        {/* 用裸 `button` 而不是 `Button` 组件：这里要的是一个「长得不像按钮的按钮」，
+            而 `Button` 自带的高度、内边距与底色都要一条条覆盖掉，覆盖清单还会随组件
+            改版而失效。折叠按钮（`EventList`）也是这么写的。
+
+            `truncate` 在 `button` 上需要 `text-left` 配合：按钮默认居中，而标题居中
+            之后与「左对齐的列表」这一整体版式对不上。`focus-visible` 那几条是给键盘
+            用的 —— 这是行上唯一能打开详情的入口，不给焦点样式等于键盘用户进不去。 */}
+        <button
+          type="button"
           className={cn(
-            'truncate text-sm font-medium',
-            done ? 'text-muted-foreground line-through' : 'text-foreground',
+            'truncate rounded-sm text-left text-sm font-medium transition-colors',
+            'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:outline-hidden',
+            done
+              ? 'text-muted-foreground line-through hover:text-foreground'
+              : 'text-foreground hover:text-muted-foreground',
           )}
+          onClick={onOpenDetail}
         >
           {event.title}
-        </span>
+        </button>
 
         {event.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">

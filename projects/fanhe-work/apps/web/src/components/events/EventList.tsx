@@ -18,10 +18,11 @@ import { EventRow } from './EventRow'
  * 折叠状态是本机的、局部的（组件状态），**不写进偏好**：它是「当前这一次浏览想怎么看」，
  * 与侧栏折叠那种「这台机器上一直怎么显示」不是一回事。
  *
- * **勾选切换由 `onToggle` 上抛。** 这一层只知道「哪一条被点了」，改状态、乐观更新与
- * 失败回滚都在 `EventsPanel` —— 那些要碰网络，而一个负责分组的组件不该持有请求。
- * `locked` / `switchingId` 两个量原样透给行：前者说「现在能不能点」（另一条正在切换
- * 时不能），后者说「正在切的是哪一条」。
+ * **三种操作都由上层持有，这一层只上抛。** 勾选（`onToggle`）、打开详情（`onOpenDetail`）、
+ * 编辑与删除（`onEdit` / `onDelete`）都是「哪一条被动了」这一个事实，改状态、拉日志、
+ * 开浮层都在 `EventsPanel` —— 那些要碰网络或要跨组件共享状态，而一个负责分组的组件
+ * 不该持有请求。`locked` / `switchingId` 两个量原样透给行：前者说「现在能不能点」，
+ * 后者说「正在切的是哪一条」。
  *
  * 组与组之间用标题分隔而不是合成一个列表加分隔线：两组的含义不同（一组要做、一组做完了），
  * 而分隔线只表达「这里断了」，说不出断开的理由。
@@ -31,6 +32,7 @@ export function EventList({
   canWrite,
   switchingId,
   onToggle,
+  onOpenDetail,
   onEdit,
   onDelete,
 }: {
@@ -39,6 +41,7 @@ export function EventList({
   /** 正在切换的那一条；`null` 表示没有。非 `null` 时所有勾选框都点不动（切换是串行的）。 */
   switchingId: string | null
   onToggle: (event: Event) => void
+  onOpenDetail: (event: Event) => void
   onEdit: (event: Event) => void
   onDelete: (event: Event) => void
 }) {
@@ -54,6 +57,7 @@ export function EventList({
       locked={switchingId !== null}
       switching={switchingId === event.id}
       onToggle={() => onToggle(event)}
+      onOpenDetail={() => onOpenDetail(event)}
       onEdit={() => onEdit(event)}
       onDelete={() => onDelete(event)}
     />

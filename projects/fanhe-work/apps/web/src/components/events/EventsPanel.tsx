@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+import { EventDetailDialog } from './EventDetailDialog'
 import { EventFormDialog, type EventFormValues } from './EventFormDialog'
 import { EventList } from './EventList'
 
@@ -61,8 +62,8 @@ import { EventList } from './EventList'
  * **「已完成」的折叠状态在 `EventList` 里**，是本机、局部的组件状态，不进偏好存储 ——
  * 它表达的是「这一次浏览想怎么看」，与侧栏折叠那种「这台机器上一直怎么显示」不同。
  *
- * **详情面板属 T3-12。** 本板块这一轮做的是「切换状态」这条链路：勾选、乐观更新、
- * 失败回滚、以及完成之后那个能反悔的入口。
+ * **详情面板（T3-12）由本组件托管两个量**，而不是只托管「开着没有」一个布尔量：见
+ * `detailOpen` 那一处的说明 —— 关闭动画期间内容还在渲染，那一刻手上必须有数据。
  */
 
 /**
@@ -149,6 +150,24 @@ export function EventsPanel() {
    */
   const [switching, setSwitching] = useState<string | null>(null)
 
+  /**
+   * 详情面板。
+   *
+   * **两个量而不是一个：`detailId` 说「看的是哪一条」，`detailOpen` 说「开着没有」。**
+   * 关闭时只把 `detailOpen` 置回假、**不清 `detailId`** —— Radix 在关闭动画（约 200ms）
+   * 期间仍然渲染内容，那一刻若 `detailId` 已经清空，从中查出来的 `detailEvent` 就是
+   * `null`，标题、描述与时间线会一起被抽走，看上去像是内容在淡出的同时闪没了。
+   *
+   * 不用「给内容里每一处访问加可选链」来绕过，是因为那样虽然不崩，闪没这件事照样发生。
+   * 代价只是多留一个字符串，而它在下一次打开时立刻被覆盖。
+   *
+   * **存 id 而不是存整条事件**：列表是权威副本这一条同样适用于详情 —— 存 id 就保证了
+   * 面板画的永远是列表里当前那一份，不会拿着一份打开时的旧快照。详情里没有写操作，
+   * 所以现在还看不出差别；但将来列表改成轮询或加实时刷新时，存 id 的这一版自动是对的。
+   */
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+
   /** 重载计数。重试与写操作之后都走「把它加一」，不把加载逻辑写第二遍。 */
   const [reloadToken, setReloadToken] = useState(0)
 
@@ -166,6 +185,15 @@ export function EventsPanel() {
 
   /** 当前提示条上的反悔入口（没有就是 `undefined`）。见 `Notice.undo`。 */
   const undo = notice?.undo
+
+  /**
+   * 详情面板要展示的那一条，从当前列表里查。
+   *
+   * 查不到就是 `null`（例如这条已被别处删掉、而列表刚重拉过），此时面板不渲染内容 ——
+   * 比拿着一条已经不存在的数据硬画要好。
+   */
+  const detailEvent =
+    detailId === null ? null : ((events ?? []).find((item) => item.id === detailId) ?? null)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -268,6 +296,12 @@ export function EventsPanel() {
   function openEdit(event: Event): void {
     setEditing(event)
     setFormOpen(true)
+  }
+
+  /** 打开详情。`detailId` 与 `detailOpen` 一起设，理由见上面那两个状态的说明。 */
+  function openDetail(event: Event): void {
+    setDetailId(event.id)
+    setDetailOpen(true)
   }
 
   /**
@@ -425,6 +459,7 @@ export function EventsPanel() {
         canWrite={canWrite}
         switchingId={switching}
         onToggle={handleToggle}
+        onOpenDetail={openDetail}
         onEdit={openEdit}
         onDelete={(event) => setDeleting(event)}
       />
@@ -446,7 +481,7 @@ export function EventsPanel() {
             )}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            未完成与已完成分组展示，已完成默认收起。勾选即可标记完成，完成后可撤销。
+            未完成与已完成分组展示，已完成默认收起。点标题看详情，勾选即可标记完成。
           </p>
         </div>
 
@@ -537,6 +572,11 @@ export function EventsPanel() {
       )}
 
       <div className="mt-4">{renderBody()}</div>
+
+      {/* 详情面板。放在这里而不是 `EventList` 里：它要读一条独立的接口（变更历史），
+          而列表那一层刻意不持有请求。`event` 允许为 `null`（那条已不在列表里），
+          面板自己会不画内容。 */}
+      <EventDetailDialog open={detailOpen} onOpenChange={setDetailOpen} event={detailEvent} />
 
       {/* 新增/编辑共用一个对话框。`event` 为 null 即新增 —— 表单的初值直接由 props
           算出来，因此每次打开都是干净的一份。 */}

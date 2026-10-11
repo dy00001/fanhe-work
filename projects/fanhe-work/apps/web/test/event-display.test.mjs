@@ -4,22 +4,28 @@
  * 与 `relative-time.test.mjs` / `note-draft.test.mjs` 同款：用 Node 内置测试器直接测
  * 源码（前端构建会把 `src/lib` 打进浏览器 bundle，不能像共享包那样导入独立的 dist）。
  *
- * 这里覆盖的全是**不靠界面就能判定**的规则：分组、逾期、截止时间的说法、以及时间在
- * 「ISO 时刻」与「`datetime-local` 输入值」之间的往返。**界面本身不在这里** —— 分组
- * 折叠、勾选框、行内四要素由浏览器 e2e 验证（见 `e2e-auth.mjs` 第 10 段）。
+ * 这里覆盖的全是**不靠界面就能判定**的规则：分组、逾期、截止时间的说法、时间在
+ * 「ISO 时刻」与「`datetime-local` 输入值」之间的往返，以及 T3-12 详情面板用到的
+ * 动作码说法、完整时刻与耗时。**界面本身不在这里** —— 分组折叠、勾选框、行内四要素、
+ * 详情面板的开合与内容由浏览器 e2e 验证（见 `e2e-auth.mjs` 第 10 / 11 / 12 段）。
  */
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { EVENT_PRIORITIES, EVENT_STATUSES } from '@fanhe/shared'
+import { EVENT_LOG_ACTIONS, EVENT_PRIORITIES, EVENT_STATUSES } from '@fanhe/shared'
 
 import {
   applyEventStatus,
+  EVENT_LOG_ACTION_LABELS,
   EVENT_PRIORITY_CLASSES,
   EVENT_PRIORITY_LABELS,
   EVENT_STATUS_LABELS,
+  eventLogActionText,
+  eventLogTransitionText,
   formatDueAt,
+  formatDuration,
+  formatMoment,
   fromDateTimeLocalValue,
   groupEvents,
   isOverdue,
@@ -233,4 +239,112 @@ test('空输入值表示清除，返回 null', () => {
 test('个位数月份与日期补零', () => {
   const local = new Date(2026, 0, 3, 9, 5, 0)
   assert.equal(toDateTimeLocalValue(local.toISOString()), '2026-01-03T09:05')
+})
+
+// ---------------------------------------------------------------------------
+// 详情面板：动作码的说法
+// ---------------------------------------------------------------------------
+
+test('每个动作码都有中文说法，没有漏项', () => {
+  for (const action of EVENT_LOG_ACTIONS) {
+    assert.equal(typeof EVENT_LOG_ACTION_LABELS[action], 'string', `缺 ${action} 的说法`)
+    assert.notEqual(EVENT_LOG_ACTION_LABELS[action], '')
+  }
+  assert.equal(Object.keys(EVENT_LOG_ACTION_LABELS).length, EVENT_LOG_ACTIONS.length)
+})
+
+test('认得出的动作码给出中文说法', () => {
+  assert.equal(eventLogActionText('created'), '创建')
+  assert.equal(eventLogActionText('completed'), '完成')
+  assert.equal(eventLogActionText('reopened'), '撤销完成')
+})
+
+test('认不出的动作码原样展示，不吞掉也不留空白', () => {
+  // 库侧对 action 没有约束，而这是一条只追加的历史：新版本写进去的动作码，旧版本的
+  // 界面必须能如实展示出来。吞掉它等于抹掉一段历史，而那正是详情面板存在的理由。
+  assert.equal(eventLogActionText('archived'), 'archived')
+  assert.equal(eventLogActionText(''), '')
+  assert.equal(eventLogActionText('完成'), '完成')
+})
+
+test('两端都有状态时给出流转', () => {
+  assert.equal(eventLogTransitionText('todo', 'done'), '未完成 → 已完成')
+  assert.equal(eventLogTransitionText('done', 'todo'), '已完成 → 未完成')
+})
+
+test('只缺一端时给出有值的那一端（创建日志没有 fromStatus）', () => {
+  assert.equal(eventLogTransitionText(null, 'todo'), '未完成')
+  assert.equal(eventLogTransitionText('done', null), '已完成')
+})
+
+test('两端都缺时不给出流转，调用方据此不画这一行', () => {
+  assert.equal(eventLogTransitionText(null, null), null)
+})
+
+// ---------------------------------------------------------------------------
+// 详情面板：完整时刻
+// ---------------------------------------------------------------------------
+
+test('完整时刻永远带年份，历史跨年时不靠上下文推', () => {
+  const local = new Date(2026, 9, 11, 22, 31, 0)
+  assert.equal(formatMoment(local.toISOString()), '2026年10月11日 22:31')
+})
+
+test('完整时刻在跨年时同样带上年份（与同年没有区别）', () => {
+  const local = new Date(2027, 0, 3, 9, 5, 0)
+  assert.equal(formatMoment(local.toISOString()), '2027年1月3日 09:05')
+})
+
+test('完整时刻解析不了时原样返回，不抛错', () => {
+  assert.equal(formatMoment('不是时间'), '不是时间')
+})
+
+// ---------------------------------------------------------------------------
+// 详情面板：耗时
+// ---------------------------------------------------------------------------
+
+/** 从零时刻起偏 `ms` 毫秒，得到一对用于算耗时的 ISO 字符串。 */
+function span(ms) {
+  const base = Date.parse('2026-06-01T00:00:00.000Z')
+  return [new Date(base).toISOString(), new Date(base + ms).toISOString()]
+}
+
+test('耗时不到一秒时说「不到 1 秒」，不说「0 秒」', () => {
+  // 刚建完就完成（或两个时刻同源）时会走到这里；说「0 秒」看起来像没算。
+  assert.equal(formatDuration(...span(0)), '不到 1 秒')
+  assert.equal(formatDuration(...span(999)), '不到 1 秒')
+})
+
+test('耗时以秒计时', () => {
+  assert.equal(formatDuration(...span(45_000)), '45 秒')
+})
+
+test('耗时进位到分钟后，整分不拖一个「0 秒」', () => {
+  assert.equal(formatDuration(...span(3 * 60_000)), '3 分')
+  assert.equal(formatDuration(...span(3 * 60_000 + 20_000)), '3 分 20 秒')
+})
+
+test('耗时以小时计时，整点不拖一个「0 分」', () => {
+  assert.equal(formatDuration(...span(2 * 3_600_000)), '2 小时')
+  assert.equal(formatDuration(...span(2 * 3_600_000 + 30 * 60_000)), '2 小时 30 分')
+})
+
+test('耗时以天计时，整天不拖一个「0 小时」', () => {
+  assert.equal(formatDuration(...span(3 * 86_400_000)), '3 天')
+  assert.equal(formatDuration(...span(3 * 86_400_000 + 5 * 3_600_000)), '3 天 5 小时')
+})
+
+test('耗时只取两个单位，第三个及以下不显示', () => {
+  // 「1 小时 23 分 45 秒」里的后两位在详情面板上没有决策价值，而它会把这个数字变长。
+  assert.equal(formatDuration(...span(3_600_000 + 23 * 60_000 + 45_000)), '1 小时 23 分')
+})
+
+test('时刻顺序反了返回 null，不替数据凑一个说法', () => {
+  // 只可能来自手工改库或时钟回拨。显示负数或「不到 1 秒」都是在编。
+  assert.equal(formatDuration(...span(60_000).reverse()), null)
+})
+
+test('任一端解析不了就返回 null', () => {
+  assert.equal(formatDuration('不是时间', new Date().toISOString()), null)
+  assert.equal(formatDuration(new Date().toISOString(), '不是时间'), null)
 })

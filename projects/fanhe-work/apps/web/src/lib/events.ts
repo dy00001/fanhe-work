@@ -1,6 +1,7 @@
 import type {
   CreateEventRequest,
   Event,
+  EventLog,
   EventStatus,
   EventTagCount,
   UpdateEventRequest,
@@ -10,6 +11,7 @@ import { ApiError } from './api'
 import {
   createEventRequest,
   deleteEventRequest,
+  eventLogsRequest,
   eventsRequest,
   eventTagsRequest,
   setEventStatusRequest,
@@ -32,9 +34,12 @@ import { withAccessToken } from './session'
  * 新增、修改、删除之后一律重拉列表，理由与纪要板块相同：本机回环请求的延迟是毫秒级，
  * 重拉的代价远小于维护第二份顺序。
  *
- * **变更历史不在本文件里**：它属 T3-12 的详情面板。**状态切换在**（T3-11），但它是
- * 这里唯一一个「调用方要接着做点什么」的写操作 —— 界面要先本地改一条、再拿服务端
- * 返回的那条对齐，见 `setEventStatus`。
+ * **状态切换（T3-11）是这里唯一一个「调用方要接着做点什么」的写操作** —— 界面要先本地
+ * 改一条、再拿服务端返回的那条对齐，见 `setEventStatus`。
+ *
+ * **变更历史（T3-12）只读不回写。** 它没有写入口：日志由服务端在状态变更的事务里追加，
+ * 界面能做的只有读。因此 `loadEventLogs` 不缓存、不合并，每次打开详情面板都重新问一次
+ * —— 缓存它反而要考虑「我点了一次完成，手上这份历史过期了没有」。
  */
 
 /** 列表。不带条件时两组都返回，由界面分组 —— 分组是展示层的事，见 `event-display.ts`。 */ export function loadEvents(
@@ -51,6 +56,20 @@ import { withAccessToken } from './session'
  */
 export function loadEventTags(): Promise<readonly EventTagCount[]> {
   return withAccessToken(async (token) => (await eventTagsRequest(token)).tags)
+}
+
+/**
+ * 一条事件的状态变更历史，按发生时间升序。详情面板用。
+ *
+ * **顺序不在这里动。** 服务端的 `orderBy: { createdAt: 'asc' }` 就是「这件事是怎么一步步
+ * 走到现在的」，界面重排一遍就有了第二份定义 —— 与列表那条约定一致。
+ *
+ * **归属不由本函数判断。** 日志表上没有 `user_id`，服务端在读之前先确认事件属于当前
+ * 账号（见 `listEventLogs`），不对就 404。界面因此拿不到「存在但不属于你」这个中间态，
+ * 也不必去猜 —— 404 统一按「这条已经不在」处理，交给 `eventFailureExit`。
+ */
+export function loadEventLogs(id: string): Promise<readonly EventLog[]> {
+  return withAccessToken(async (token) => (await eventLogsRequest(token, id)).logs)
 }
 
 export function createEvent(input: CreateEventRequest): Promise<Event> {
