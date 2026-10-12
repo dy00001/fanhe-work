@@ -46,6 +46,10 @@ $RECYCLE.BIN/
 infra/portable/state/root.json
 infra/portable/state/leak-baseline.json
 
+# Compose 的本机环境变量：里面是签名密钥，逐机生成、不跨机一致，因此不入库。
+# 每次部署环境一份（换机时重新生成），与apps/api/.env 也是两份不同的密钥。
+.env.compose
+
 # Local assistant memory. Managed by the memory system, scoped to this user and
 # session history, therefore kept out of version control.
 .workbuddy-ai/

@@ -1,16 +1,38 @@
-# 梵禾 Work 实验版数据库。
+# 梵禾 Work 的服务端化编排（T5-01）。
 #
-# 用容器提供，与网络版保持同构。镜像选 postgres:16-alpine，体积小、启动快。
+# ## 编排的是「生产形态」
 #
-# 数据落在命名卷而不是工作空间目录里，这是刻意的：PostgreSQL 的随机 IO 很重，
-# 而工作空间在闪存 U 盘上，既慢又有写入寿命限制。代价是换机后数据库不在，
-# 需要重新 up 一次或从备份恢复。这条取舍在 README 的「数据库」一节有说明。
+# api 跑构建产物（`node dist/index.js`）而不是 `tsx watch`，web 由 nginx 托管静态
+# 产物并把 `/api` 反代到 api 容器。**不是开发形态**（挂源码 + vite dev server）——
+# 因为 T5-04（Cloudflare Tunnel 出站）要暴露的正是这一套，编排开发形态等于把工作
+# 做两遍。
 #
-# 端口绑定在 127.0.0.1 而非 0.0.0.0，与 api 仅监听回环的做法一致：开发期的
-# 服务不应该对局域网可达。
+# ## 三条不可省的约束
 #
-# 下面的账号密码是本地开发用的固定值，只在本机回环上可达。若要用于任何
-# 非本机场景，必须改成从环境变量注入。
+# 一是 **api 容器里 `HOST=0.0.0.0`**。api 代码的默认是 `127.0.0.1`
+#    （`apps/api/src/config/env.ts`），那是「只让本机访问」的意思；而容器里的
+#    127.0.0.1 指向容器自己，端口映射进来的请求永远到不了。**这一项漏掉的症状是
+#    「容器都 healthy 但访问 8787 连接被拒」，而日志里什么错都没有。**
+#
+# 二是 **api 依赖 db 健康**。`depends_on` 只保证启动顺序，不等可用；而 api 启动
+#    时要连库，跑早了就失败。`condition: service_healthy` 让它等到 `pg_isready`
+#    通过再起 —— db 那个 healthcheck 是为此存在的。
+#
+# 三是 **web 只等 api 起来，不等它健康**。它俩之间没有数据依赖，web 起来就能
+#    提供页面（此时点接口会 502，刷新就好）。等健康会让「前端能打开」这件事也
+#    依赖数据库，不划算。
+#
+# ## 端口绑 127.0.0.1 而非 0.0.0.0
+#
+# 与 api 仅监听回环、db 同理：开发期的服务不应该对局域网可达。
+# **T5-04 的 Tunnel 是纯出站连接**，不靠这里的端口暴露到公网 —— 阶段五的出口条件
+# 「无公网入站端口暴露」正是靠这一点达成，而不是靠这里的绑定。
+#
+# ## 数据库部分刻意未改动
+#
+# db 服务与命名卷是 T5-02 的范围（数据库容器化与数据迁移）。本轮**刻意不动**：
+# 卷里是实验版现有的数据，换掉会丢，而「一条命令拉起全套」这个验收点不需要
+# 动数据也成立。
 
 name: fanhe-work
 
@@ -49,6 +71,57 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  api:
+    build:
+      # Dockerfile 在 apps/api 下，而 compose 文件在仓库根 —— 这个相对路径是
+      # **相对 compose 文件所在目录**解析的，不是相对当前工作目录。所以从根跑
+      # `docker compose up` 与从别处跑 `-f` 指定路径都能得到同一个结果。
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: fanhe-work-api
+    restart: unless-stopped
+
+    environment:
+      # **下面第一项是容器化最容易漏的一处**，理由见文件头第一条。代码默认
+      # 127.0.0.1，在容器里等于「谁都连不上」。
+      HOST: 0.0.0.0
+      PORT: '8787'
+
+      # **不能用本机的 DATABASE_URL。** `apps/api/.env` 里那个串是
+      # `127.0.0.1:5432` —— 在容器里 127.0.0.1 指向容器自己，不是 db。
+      # compose 网络里服务名就是 DNS 名，所以写 `db`。
+      DATABASE_URL: postgresql://fanhe:fanhe@db:5432/fanhe_work
+
+      # **签名密钥不落盘、不进版本控制。** 与本机 `.env` 里那份是**不同**的：
+      # 复用同一份密钥会让本机签发的令牌在容器那边也有效 —— 而本机那个环境
+      # 恰恰是最不该被远程信任的（它监听回环，但令牌可能落在别处）。
+      # 没给值时 compose 会直接拒绝启动并给出这句话，而不是让 api 拿着空密钥
+      # 跑起来 —— 后者会签出能被伪造的令牌。
+      JWT_SECRET: ${FANHE_JWT_SECRET:?请设置 FANHE_JWT_SECRET（可写进 .env.compose，见文件头说明）}
+
+    ports:
+      # 绑回环。**不对局域网暴露** —— T5-04 要对外时走 Tunnel 出站，不靠这里。
+      - '127.0.0.1:8787:8787'
+
+    depends_on:
+      db:
+        # 不是 `service_started`：那只保证容器起来了，而 api 连库要的是
+        # 「initdb 已经结束、可以接受连接」。
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: fanhe-work-web
+    restart: unless-stopped
+
+    ports:
+      - '127.0.0.1:8080:80'
+
+    depends_on:
+      - api
 
 volumes:
   pgdata:
