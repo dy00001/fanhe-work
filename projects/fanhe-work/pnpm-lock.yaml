@@ -80,6 +80,10 @@ importers:
         version: 6.0.3
 
   apps/desktop:
+    dependencies:
+      '@fanhe/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
     devDependencies:
       '@types/node':
         specifier: ^26.6.5

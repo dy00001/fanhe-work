@@ -13,6 +13,9 @@
     "dev": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/launch.mjs",
     "smoke": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/launch.mjs --smoke"
   },
+  "dependencies": {
+    "@fanhe/shared": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "electron": "44.7.0",

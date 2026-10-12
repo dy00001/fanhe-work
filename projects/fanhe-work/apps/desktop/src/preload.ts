@@ -11,8 +11,15 @@
  * T4-02 加两个口，都走 `invoke` / `handle` 成对实现：
  * - `getServiceStatus()` —— 当前服务地址、来源、配置文件路径与警告。
  * - `setServiceUrl(url)` —— 写配置文件；**不在运行中换上游**，返回 `needsRestart`
- *   让界面提示「重启后生效」。T4-03 的代理调用与 `credential.ts` 的 `safeStorage`
- *   迁移会在这里继续按同样的成对方式追加通道。
+ *   让界面提示「重启后生效」。
+ *
+ * T4-03 再加一个：
+ * - `runLaunchProfile(profile)` —— 启动一条启动配置。**传的是整条配置对象**，主进程
+ *   会重新校验它的形态（见 `agent.ts`）：这条通道对渲染进程开放，路径与参数不能
+ *   只信调用方送来的值。
+ *
+ * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
+ * 的成对方式追加通道。
  *
  * **不要**直接把 `ipcRenderer` 整个暴露出去。
  *
@@ -37,6 +44,13 @@ export type ServiceStatus = {
 export type SetServiceResult =
   { ok: true; serviceUrl: string; needsRestart: true } | { ok: false; error: string }
 
+export type LaunchRunResult =
+  | {
+      ok: true
+      data: { profileId: string; pid: number; startedAt: string; deduplicated: boolean }
+    }
+  | { ok: false; reason: string; detail: string }
+
 const desktopBridge = Object.freeze({
   /** 供界面判定「当前跑在外壳里」。浏览器里这个对象不存在。 */
   isDesktopShell: true as const,
@@ -52,6 +66,16 @@ const desktopBridge = Object.freeze({
   /** 写服务地址配置。运行中不换上游，需重启外壳才生效。 */
   setServiceUrl: (serviceUrl: string): Promise<SetServiceResult> =>
     ipcRenderer.invoke('service:set', { serviceUrl }) as Promise<SetServiceResult>,
+  /**
+   * 启动一条配置。
+   *
+   * **入参是整条 `LaunchProfile`**（含 `executablePath` 与 `args`），因为主进程不连
+   * 数据库、配置得由界面从 `GET /api/launch/profiles` 取到再送进来。主进程会重新
+   * 校验形态，所以调用方不必替它担保 —— 但也**不要**把这条通道当成可以传任意路径
+   * 与参数的地方，那不是它的工作方式。
+   */
+  runLaunchProfile: (profile: unknown): Promise<LaunchRunResult> =>
+    ipcRenderer.invoke('launch:run', { profile }) as Promise<LaunchRunResult>,
 })
 
 contextBridge.exposeInMainWorld('fanheDesktop', desktopBridge)

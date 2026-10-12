@@ -39,6 +39,8 @@ import {
   saveServiceConfig,
   type LoadResult,
 } from './config.js'
+import { runShellLaunchProfile, type LaunchAgentModule } from './agent.js'
+import { apiLaunchModule } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
 
 /** 前端构建产物的绝对路径。`__dirname` 是 `apps/desktop/dist`。 */
@@ -172,6 +174,45 @@ function registerServiceIpc(): void {
   })
 }
 
+/**
+ * 注册本机代理的 IPC（T4-03）。
+ *
+ * **和 `apps/api` 那条 HTTP 路由相比，这里少了权限中间件与用户身份。** 那不是漏掉，
+ * 是形态不同：外壳的主进程与它启动的窗口同属一个用户，「哪个用户」这个问题在这条
+ * 链路上没有意义；而权限点属于远程 API 关心的范畴 —— **远程不应该能启动任何人
+ * 电脑上的进程**，那道边界由 API 侧的 `isLoopbackAddress` 判定守着（见
+ * `apps/api/src/routes/launch.ts`）。本机外壳起本机进程，是用户自己在自己机器上
+ * 的操作。
+ *
+ * **但形态复核不能省**，且它落在 `agent.ts` 的 `normalizeProfile` 里：IPC 通道对
+ * 渲染进程里的任何脚本开放，所以主进程不能只信传入对象的 `executablePath`。少了
+ * 那一步，这条 IPC 就等于一个本机任意命令执行入口。
+ */
+function registerLaunchIpc(): void {
+  ipcMain.handle('launch:run', async (_event, payload: unknown) => {
+    // agent 模块按需加载而不是启动时就加载：它是一次动态 import 跨包的 TS 源码，
+    // 失败原因可能是工作区不完整 —— 那不该让外壳连界面都开不出来。加载失败在这里
+    // 变成一个可显示的返回值，界面能报「本机代理不可用」并说明原因。
+    let agentModule: LaunchAgentModule
+    try {
+      agentModule = (await apiLaunchModule(__dirname)) as LaunchAgentModule
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      console.error(`[launch] 本机代理不可用：${detail}`)
+      return { ok: false, reason: 'spawn_failed', detail: `本机代理不可用：${detail}` }
+    }
+
+    const raw = (payload as { profile?: unknown } | null)?.profile
+    const outcome = await runShellLaunchProfile(raw, agentModule)
+    if (!outcome.ok) {
+      console.warn(`[launch] 启动未成功（${outcome.reason}）：${outcome.detail}`)
+      return outcome
+    }
+    console.log(`[launch] 已启动 pid=${outcome.data.pid} 去重=${outcome.data.deduplicated}`)
+    return outcome
+  })
+}
+
 async function bootstrap(): Promise<void> {
   if (!existsSync(DIST_ROOT)) {
     throw new Error(`未找到前端构建产物：${DIST_ROOT}。请先运行 pnpm --filter @fanhe/web build`)
@@ -190,6 +231,7 @@ async function bootstrap(): Promise<void> {
   if (currentService.warning !== null) console.warn(`[config] ${currentService.warning}`)
 
   registerServiceIpc()
+  registerLaunchIpc()
 
   staticServer = await startStaticServer({ root: DIST_ROOT, apiBaseUrl: serviceUrl })
   shellOrigin = `http://127.0.0.1:${staticServer.port}`
