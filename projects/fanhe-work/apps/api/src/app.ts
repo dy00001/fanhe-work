@@ -6,6 +6,7 @@ import { registerEventRoutes } from './routes/events.js'
 import { registerLaunchRoutes } from './routes/launch.js'
 import { registerNoteRoutes } from './routes/notes.js'
 import { registerSetupRoutes } from './routes/setup.js'
+import { registerVersionRoutes } from './version/manifest.js'
 
 /**
  * Build the API instance without starting it. Keeping construction separate
@@ -42,6 +43,8 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerLaunchRoutes(app)
   registerNoteRoutes(app)
   registerEventRoutes(app)
+  // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
+  registerVersionRoutes(app)
 
   return app
 }
