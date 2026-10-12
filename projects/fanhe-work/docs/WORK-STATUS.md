@@ -5,13 +5,13 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**） |
-> | 对应提交 | 代码基线 `760b92f`（**T4-04 启动自检，阶段四收口**；T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T4-04 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
-> | 当前阶段 | **阶段零至三已完成（38/50）；阶段四 4/4 全部完成（T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检）。** 阶段四出口条件已达成（见第七章）。下一项是阶段五 T5-01 容器编排 |
-> | 最后验证 | 四道门禁全绿（**378 项**，2026-10-12 12:2x 实跑）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本次无界面改动未重跑）；外壳冒烟 **PASS**（渲染出界面、console 零错误、**反代到达上游=是**） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**；2026-10-12 14:1x 随 **T5-01** 回填，**阶段五开工**） |
+> | 对应提交 | 代码基线 `ace70bd`（**T5-01 容器编排，阶段五第一项**；阶段四基线 `760b92f`，T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T5-01 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
+> | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 1/5：T5-01 容器编排已完成。** 下一项是 T5-02 数据库容器化与连接切换 |
+> | 最后验证 | 四道门禁全绿（**426 项**，2026-10-12 14:1x 实跑）；**容器编排实跑：三容器全 Healthy**（`up -d --wait`，见 4.1.1）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本轮无界面改动未重跑）；外壳冒烟 **PASS**（渲染出界面、console 零错误、**反代到达上游=是**，连的是容器化的 api） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
-> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.41），本文已把结论汇总，需要细节时再翻过去。
+> 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.45），本文已把结论汇总，需要细节时再翻过去。
 
 ---
 
@@ -24,6 +24,8 @@
 **界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。
 
 **桌面外壳 4/4，阶段四收口**：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。T4-04 加了启动自检：查每条配置指向的文件还在不在，并把三类失效各配一句**方向正确**的引导（代理不可用去查工作区、配置不合法去重新编辑、路径失效去确认路径）。下一项是阶段五 T5-01 容器编排。
+
+**服务化 1/5，阶段五已开工**：T5-01 落了容器编排 —— `docker compose up -d --wait` **一条命令拉起 db + api + web 三个容器**，实测全 Healthy。编排的是**生产形态**而非开发形态（api 跑构建产物、web 由 nginx 托管静态产物并反代 `/api`），因为 T5-04 要暴露的正是生产形态。容器里 `HOST` 覆盖成 `0.0.0.0`（代码默认 `127.0.0.1` 在容器里指向容器自己，这是最容易漏的一处），签名密钥从环境变量注入且与开发那份刻意不同，端口三处全绑 `127.0.0.1`。**数据库刻意没动**（命名卷里是实验版现有数据，换掉会丢）。下一项是 T5-02 数据库容器化与连接切换。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -119,7 +121,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾）；**UI 集成两批已完成**（导航 18 项 + 首页三段式 + 版本号），见 `UI-INTEGRATION-2026-10-11.md` |
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ✅ **已完成（4/4）**：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检。出口条件已达成（见第七章） |
-| 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
+| 阶段五 | 服务端化（T5-01 ~ T5-05） | 🔄 进行中：**T5-01 容器编排完成（1/5）**，T5-02 ~ T5-05 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
 
 > 阶段三的分母口径（12 项）见 `PROGRESS-REVIEW-2026-10-11.md` 第 28 行。
@@ -139,6 +141,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `ace70bd` | feat(阶段五): T5-01 容器编排（**阶段五代码基线**：两个 Dockerfile + nginx 反代 + compose 扩成三服务） |
 | `760b92f` | feat(阶段四): T4-04 启动自检（**阶段四收口，阶段四代码基线**） |
 | `d76e084` | feat(阶段四): T4-03 本机代理内置（**外壳代码基线**） |
 | `b03ddb5` | feat(阶段四): T4-01 Electron 外壳脚手架（**外壳代码基线**） |
@@ -277,14 +280,34 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ## 四、待办事项
 
-### 4.1 下一项：T5-01 容器编排（P0）
+### 4.1 下一项：T5-02 数据库容器化与连接切换（P0）
 
-> **阶段四已收口（T4-01 ~ T4-04 全 4/4）**。外壳能打开并渲染界面、服务地址可配置且切换后请求真的到达新上游、远程模式下能启动本机软件、启动自检能把失效配置在点击前报出来 —— 阶段四出口条件（第七章四项验收）全部达成。下一项是阶段五 T5-01，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 205 行，阶段验收见第七章。
+> **阶段四已收口（4/4）**，**阶段五已开工：T5-01 容器编排完成**（`docker compose up -d --wait` 一条命令拉起 db + api + web，实跑三容器全 Healthy）。下一项是 T5-02，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 206 行，阶段验收见第七章。
 
-- **阶段五第一项做什么**：一份 `docker-compose` 把 web + api + db 编排起来，一条命令拉起全套。
-- **阶段五与阶段四可并行**（计划第八章记着阶段五不占关键路径）。但**先做 T5-01 会更省事** —— T4-02 已把「服务地址」做成了配置项，而容器化之后本机 api 的地址就是 `http://127.0.0.1:8787` 这个缺省值，切换那条链路等于已经被验证过一遍了。
+- **T5-02 要做什么**：把 PostgreSQL 正式纳入容器卷并做数据迁移与校验。**T5-01 刻意没动数据库** —— 命名卷 `fanhe-work-pgdata` 里是实验版现有数据，换掉会丢，而「一条命令拉起全套」不需要动数据也成立。
+- **T5-01 已经铺好的路**：`DATABASE_URL` 在 compose 里注入、api 从环境变量读，**业务代码一行没动** —— 所以验收要点「连接串切换后无需改业务代码」这件事在 T5-01 就已经成立了。T5-02 真正要处理的是**数据迁移与一致性校验**（验收要点：记录数与抽样内容一致）。
+- **T5-02 与 T5-04 有个依赖关系要注意**：T5-04（Tunnel）复用 T5-01 的编排，要加一个 `cloudflared` 服务；而 T5-05（访问策略）依赖 T5-04。所以若想快出一条可对外的链路，**T5-02 → T5-04 → T5-05 是必须顺序**，中间插别的会让那条链更长。
 - **另有一项不在阶段五编号内但属既定范围**：`credential.ts` 的存储后端换成主进程 `safeStorage`（见 4.1.2 末尾与 `DEVELOPMENT-PLAN.md` 9.42），建议单独一笔。
-- **别在阶段五里顺手做阶段六**（多端同步 / 协作）。
+
+### 4.1.1 T5-01 的实施记录（已完成，供对照）
+
+- **编排「生产形态」而非「开发形态」**：api 跑构建产物、web 由 nginx 托管静态产物并反代 `/api`。理由是 **T5-04 要暴露的正是生产形态**，编排开发形态等于把同一件事做两遍，且多出来的那份在 T5-04 时还得拆掉。
+- **容器里 `HOST` 必须覆盖成 `0.0.0.0`**（最容易漏的一处）：代码默认 `127.0.0.1`（那条判断本身是对的），但容器里的 `127.0.0.1` 指向**容器自己**，端口映射进来的请求落在 eth0 上而进程只听 loopback。**漏掉的症状特别难查：容器全 healthy、日志里无错，只有访问时连接被拒。** 容器化会暴露一批只在特定环境里才错的默认值，而这类默认值在单测里永远是对的。
+- **`depends_on` 默认只保证启动顺序**，api 连库要写 `condition: service_healthy`。db 那个 healthcheck 是 T5-01 之前就有的，注释里写的是「让 `--wait` 能等到可连接」——**那时它服务本地开发，本轮它成了 api 容器的启动前置条件**。
+- **web 只等 api「起来」不等它「健康」**：它俩之间没有数据依赖，而等健康会让「前端能打开」也依赖数据库。**能看界面与能用接口是两种状态，互相阻塞没有收益。**
+- **web 走 nginx 反代而非前端直连 api 地址**：直连会变跨源，要么加 CORS（服务端从不需要 CORS 这条前提整个失效），要么前端接受一个可配置地址。照抄 vite proxy 的形状，`API_BASE_URL` 保持空串、前端一行不改 —— 与 T4-01 外壳那段反代同一个决定。
+- **签名密钥从环境变量注入，且刻意与 `apps/api/.env` 那份不同**：本机开发环境监听回环，容器这套将来要经 Tunnel 对外，复用同一份等于让本机签发的令牌在对外环境里也能用。`${FANHE_JWT_SECRET:?...}` 的写法让**没给值时 compose 直接拒绝启动**，好过让 api 拿着空密钥跑起来（后者会签出能被伪造的令牌，症状要到有人伪造登录才发现）。
+- **`.env.compose` 这个名字是刻意的**：compose 默认只读 `.env`，而根目录的 `.env` 会被太多工具捡起，开发那份已在 `apps/api/.env` 且含义不同。于是 `--env-file` 必须手写 → **给 `infra/portable/ws-compose.cmd` 包住它**（手写标志是会被忘掉的步骤，忘了报 `required variable ... is missing`，读起来像 bug）。**容器操作一律经这个脚本。**
+- **`.cmd` 必须是纯 ASCII，不只是无 BOM**：中文注释被 cmd 按 GBK 解码后**行结构被搞乱**，它于是去执行注释碎片当命令，报一堆 `'tatus' 不是内部或外部命令`。与「`.ps1` 要 BOM」同类，但症状更隐蔽 —— 报错完全看不出跟编码有关。中文说明移到文档里。
+- **删掉 `# syntax=` 那一行**：它会**额外触发一次 docker.io 拉取**，是没网络时第一个失败点且报错指向那行、像写错了。没用上它的特性就别写。
+- **安装必须 `--ignore-scripts`**：根 `postinstall` 调 `apps/desktop/scripts/ensure-electron.mjs`（T4-01 加的拉 Electron），容器里没那个文件 → `MODULE_NOT_FOUND` 让安装失败。取舍是**禁掉脚本 + 自己显式跑 `prisma generate`**，而不是拷进几百 MB 的 Electron。
+- **运行阶段不重建 `@fanhe/shared`**：它需要 typescript（devDep，`--prod` 排除）→ `tsc: not found`。正确是 `COPY --from=build` 已构建好的 dist。
+- **产物必须 `--from=build` 不能从上下文取**：`.dockerignore` 排了 `**/dist`，所以 `COPY apps/api/dist` 报 `not found` —— 而**它看起来像文件缺失，不像路径写法问题**。
+- **`COPY` 路径相对构建上下文根，不是相对 Dockerfile**：`COPY deploy/nginx.conf` 会报 not found，正确是 `apps/web/deploy/nginx.conf`。它出现在**校验阶段、早于任何 COPY 执行**。
+- **判据取响应的形状而不是状态码**：经 web 到 api 拿到 `{"error":"unauthorized","message":"请先登录"}` —— **那是 api 自己的文案，nginx 伪造不出来**。状态码不够：「api 返回 404」与「请求没到 api」在状态码上无法区分。与 T4-02「判据取上游回显的标记」同道理。
+- **验证结果（2026-10-12）**：`up -d --wait` 后**三容器全 Healthy**；web 根路径 200（1694 字节 index.html）；深链 `/notes` 200 且大小相同（SPA 回退生效）；经 web 到 api 是 api 自己的 401；哈希资源 `max-age=31536000, immutable`；**端口三处全绑 `127.0.0.1`**（未对局域网暴露，`docker compose ps` 可查）；api 以 `uid=1000(node)` 非 root 运行；6 个迁移目录都在容器内。**外壳冒烟 PASS 且「反代到达上游=是」** —— T4-02 时同一判据是「否」（当时 8787 无监听），现在连的是容器化的 api。**同一条判据一个假一个真，比任何单独检查都更能说明这套编排真的通了。** 四道门禁全绿，**426 项 0 失败**（未改业务代码，基线不变）。提交 `ace70bd`。
+- **已知限制：api 镜像 594MB，实际需要约 440MB。** `--prod` 只影响**链接到包**的那部分，被间接引用的 devDependency 仍留在 `.pnpm` 里（`@prisma/studio-core` 43MB、typescript 24MB、`effect` 34MB 等）。试过 `pnpm prune --prod`，**它会失败**（prune 自己触发 postinstall，同上那个问题）；修它要先加 `--ignore-scripts`，而它在 workspace 下语义本就模糊。**594MB 对单用户部署完全可接受，记为已知限制而不是加一个会失败、语义又不确定的步骤。** web 镜像 49MB。
+- **本轮没做的两件事**：数据库没动（T5-02 的范围）；**没有把验证落成可重复执行的脚本** —— 本轮是实跑 + curl 断言，验的是「容器能不能起来」这个一次性事实。真正会回归的是镜像构建与配置的正确性，**那是 T5-04 要复用这套配置时该补的**（那时会多一个 `cloudflared` 服务，且要验「仅出站、无入站端口」这个属性）。
 
 ### 4.1.2 T4-04 的实施记录（已完成，供对照）
 
@@ -303,7 +326,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **并发那条判据验过能证伪**：临时把 `Promise.all` 改回逐条 await，该用例确实失败（串行 600ms vs 阈值 400ms），恢复后全绿 —— 用**耗时**判而不是「并发计数」，因为实现完全可能并发发起却仍然串行 await，而那种写法在计数上看起来是对的。
 - **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 76**，合计 **426 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 21 项全通过。外壳冒烟 PASS（新增一行「启动自检=可用 代理=可用 配置=0条 可用=0条」）。e2e 无界面改动未重跑（仍 149）。提交 `760b92f`。
 
-### 4.1.1 T4-03 的实施记录（已完成，供对照）
+### 4.1.3 T4-03 的实施记录（已完成，供对照）
 
 - **外壳不查库，`LaunchProfile` 由渲染进程送进来**。三个方案里选了「渲染进程经现有 `GET /api/launch/profiles` 取配置 → IPC 送进主进程」：主进程自己查库会违背 `agent.ts` 顶部写死的约束（它**不认识数据库**），而把启动配置落成配置文件则要重做已交付的 T3-03，且与阶段五的数据库模型冲突。选中的方案完全复用现有链路，`agent.ts` **一行未改**，远程模式下同样通。
 - **主进程必须自己复核形态**。HTTP 那条路上配置在入库时校验过一次、路由 schema 又把一次，agent 收到的一定是像样的东西；IPC 这条路上**没有任何一道**，而这条通道对渲染进程里的任何脚本开放。少这一步，`launch:run` 就等于一个本机任意命令执行入口。复核落在 `apps/desktop/src/agent.ts` 的 `normalizeProfile`：逐字段查（绝对路径、参数全为字符串、个数与长度不超限、`icon` 形态、`sortOrder` 有限数），**返回新对象**，未知的额外字段因此被丢掉、带不进进程创建。
@@ -317,7 +340,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **`test/acceptance/t403-shell-launch.mjs` 刻意不放 `test/*.test.mjs`**（那是 node --test 的 glob）。同 T4-02，暂存根固定落系统盘 —— `ws-run.cmd` 把 `TMP` 指向工作区 `.tmp`，会让「找不到工作区根」这类用例自相矛盾。
 - **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 52**，合计 **402 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 10 项全通过。外壳冒烟 PASS（`渲染元素=1 console错误=0`；`反代到达上游=否` 是因为当时 8787 无监听，与 T4-02 同因，非回归）。
 
-### 4.1.1 T4-02 的实施记录（已完成，供对照）
+### 4.1.4 T4-02 的实施记录（已完成，供对照）
 
 - **配置文件落点**：工作区 `.config/fanhe-work/service.json`。**刻意不放 Electron 的 `userData`** —— 后者装的是 Chromium 缓存与 `credential.ts` 的凭据密钥库，搬进 U 盘既伤盘（与「数据库刻意不进 U 盘」同理）又会改变「凭据不随工作空间移动」的安全语义；而服务地址描述的恰恰是「这套工作空间接哪个服务」，该跟着介质走。`.config/` 是工作区既有的逐机配置目录（`ws-env.sh` 把 `XDG_CONFIG_HOME` 指向那里），已被根 `.gitignore` 第 6 行排除。
 - **形状只有 `serviceUrl` 一个字段**。本机与远程**不是两个槽位**，而是同一个地址的两种取值 ——「切换」就是把这一项改成另一个 URL。做成 `localUrl` / `remoteUrl` + `active` 会引入一个真实坏处：远程没配时切过去，外壳以「没有可用地址」启动，而这与「配错了」在现场看起来一模一样。单字段下配错会当场被校验挡下。
@@ -664,6 +687,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 用途 | 路径（相对工作空间根） |
 | -- | -- |
 | 工作空间唯一入口 | `infra/portable/ws-run.cmd`（另有 `.ps1` / `.sh`） |
+| **容器编排入口** | `infra/portable/ws-compose.cmd`（**纯 ASCII**，包住 `docker compose --env-file .env.compose`，**容器操作一律经它**） |
 | 工作空间机制说明 | `infra/docs/PORTABLE-WORKSPACE.md` |
 | 根定位标记 | `.ws-root` |
 | 项目根 / pnpm 工作区根 | `projects/fanhe-work/` |
@@ -683,7 +707,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 前端偏好与主题 | `apps/web/src/lib/{preferences,theme,credential}.ts`、`apps/web/src/index.css` |
 | Prisma 配置与模型 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
 | 迁移目录 | `apps/api/prisma/migrations/`（**6 个**；时间戳是 UTC） |
-| 数据库 compose | `projects/fanhe-work/docker-compose.yml` |
+| 数据库 compose | `projects/fanhe-work/docker-compose.yml`（**T5-01 起为三服务**：db / api / web；容器操作经 `infra/portable/ws-compose.cmd`） |
+| 容器构建 | `projects/fanhe-work/.dockerignore`、**`apps/api/Dockerfile`**、**`apps/web/Dockerfile`**、**`apps/web/deploy/nginx.conf`** |
+| 容器编排密钥 | `projects/fanhe-work/.env.compose`（**不入版本控制**，`.gitignore` 已排除；内容与 `apps/api/.env` 那份刻意不同） |
 | 环境变量样例 | `apps/api/.env.example` |
 | 种子 | `apps/api/src/db/seed.ts` |
 | 测试 | `apps/api/test/{event,note,launch-history,setup,…}.test.ts`、`packages/shared/test/{event,note,launch,navigation,account,auth}.test.mjs`、`apps/web/test/{relative-time,note-draft,event-display,version}.test.mjs`、**`apps/desktop/test/server.test.mjs`**、`apps/web/test/e2e-auth.mjs`（`apps/web` 与 `apps/desktop` 的 `test` 脚本都是 `test/*.test.mjs`，新增单测文件会被自动收进来） |
@@ -701,7 +727,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，**9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线）**。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43、T4-04 为 9.44，服务端化 T5-01 为 9.45）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线），**9.44 记录 T4-04 启动自检的实施判断（三类失效的划分、外部模块复用边界、检查类功能的两条通用规则），9.45 记录 T5-01 容器编排的实施判断（生产形态编排、`HOST=0.0.0.0`、六个构建期踩坑）**。 |
 | `docs/PHASE-SUMMARY-2026-10-12.md` | **阶段性工作总结（换机检查点）**：总体进度、已完成 / 进行中 / 待办、文件与版本状态、换机衔接步骤、下一步 T4-02。**换机或新会话接手时先读本文，再读主文档。** |
 | `docs/UI-INTEGRATION-2026-10-11.md` | **本次 UI 集成记录（最终态）**：18 项导航信息架构与分层路径、两批边界、改动文件清单、四个关键对接点、五项用户裁决、版本号的展示与更新方式、验证结果与实跑中修掉的六个渲染层问题。 |
 | `docs/NEXT-TASK-PREP-阶段四-2026-10-11.md` | 阶段四开工准备（T4-01 开工清单；§八 为阶段三收口后的收尾更新）。**下一阶段执行前先读这份**。 |
@@ -766,12 +792,18 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 13:0x | **T4-03 实施（本机代理内置）** | 新增 `apps/desktop/src/{agent,paths}.ts`（主进程侧形态复核 + 跨包路径解析与 `import()` 加载 api 的 agent 源码）+ `test/agent.test.mjs`（17 项）+ `test/paths.test.mjs`（7 项）+ `test/acceptance/t403-shell-launch.mjs`（10 项）；`main.ts` 加 `registerLaunchIpc()`；`preload.ts` 加 `runLaunchProfile`；`package.json` 加 `@fanhe/shared` 依赖。**`apps/api/src/launch/agent.ts` 一行未改**。四道门禁全绿 **402 项 0 失败**（desktop 28 → 52） |
 | 10-12 13:0x | **T4-03 验收与冒烟** | 验收脚本 10 项全通过（远程模式下真进程跑起来并写出标记文件、假上游零请求）；冒烟 PASS（`渲染元素=1 console错误=0`）。**期间修掉一个真 bug**：`import()` 收路径而非 URL 在 Windows 上抛 `ERR_UNSUPPORTED_ESM_URL_SCHEME`，单测用假模块时看不出来 |
 | 10-12 13:5x | **T4-04 实施（启动自检）· 阶段四收口** | 新增 `apps/desktop/src/diagnostics.ts`（三类失效 + 并发路径检查）、`test/diagnostics.test.mjs`（24 项）、`test/acceptance/t404-diagnostics.mjs`（21 项）；`agent.ts` 的 `LaunchAgentModule` 契约加 `inspectExecutablePath`；`main.ts` 加 `launch:diagnostics` 与 `loadLaunchAgent()` 共用加载、冒烟增一条自检判据；`preload.ts` 加 `checkLaunchProfiles`。四道门禁全绿 **426 项 0 失败**（desktop 52 → 76）。**阶段四 4/4 完成，出口条件达成** |
+| 10-12 14:1x | **T5-01 实施（容器编排）· 阶段五开工** | 新增 `projects/fanhe-work/.dockerignore`、`apps/api/Dockerfile`（两阶段，运行阶段 `node:22-bookworm-slim` + `tini` + `USER node` + HEALTHCHECK）、`apps/web/Dockerfile`（构建 `node` → 运行 `nginx:1.27-alpine`）、`apps/web/deploy/nginx.conf`（`/api` 反代 + SPA 回退 + 哈希资源长缓存）、`infra/portable/ws-compose.cmd`（纯 ASCII）；`docker-compose.yml` 从单服务扩为 **db + api + web**（db 段逐字未动）；`.gitignore` 加 `.env.compose`。**业务代码一行未改**。**阶段五 1/5 完成** |
+| 10-12 14:1x | **T5-01 实跑验证** | `up -d --wait` 后**三容器全 Healthy**；web 根路径与深链 `/notes` 均 200 且大小相同；经 web 到 api 拿到 **api 自己的** `{"error":"unauthorized"}` 401；哈希资源 `max-age=31536000, immutable`；端口三处全绑 `127.0.0.1`；api 以 `uid=1000` 非 root 运行。四道门禁全绿 **426 项 0 失败**（未改业务代码，基线不变）。**期间踩掉六个构建期问题**：`# syntax=` 触发额外 docker.io 拉取、`.dockerignore` 排 `dist` 致运行阶段 COPY 不到、postinstall 拉 Electron、运行阶段 `tsc: not found`、漏 COPY `tsconfig.base.json`、`COPY` 路径相对上下文根 |
+| 10-12 14:1x | **T5-01 外壳冒烟对照** | 冒烟 PASS，**「反代到达上游=是」** —— T4-02 时同一判据是「否」（当时 8787 无监听），现在连的是容器化的 api。**同一条判据一个假一个真，比任何单独检查都更能说明这套编排真的通了** |
+
 
 **§十一 新增/修改的关键文件（T4-01）**：`apps/desktop/package.json`（**新**，`@fanhe/desktop`，`productName: 梵禾 Work`，`main: dist/main.js`，`devDependencies.electron: 44.7.0`，脚本 build / typecheck / test / ensure-electron / start / dev / smoke）、`apps/desktop/tsconfig.json`（**新**，`module`/`moduleResolution: NodeNext`，**刻意不写 `"type": "module"` 以产出 CJS**）、`apps/desktop/src/server.ts`（**新**，内置静态服务：MIME 表、逐跳头与剥离头、`startStaticServer` / `serveStatic`（SPA 回退 + 405 + 越界 403）/ `sendFile`（哈希资源长缓存、index 不缓存）/ `proxyToService`（剥 `host`/`content-length`/`accept-encoding`））、`apps/desktop/src/main.ts`（**新**，主进程：`DIST_ROOT`、`SERVICE_URL`（`FANHE_SERVICE_URL`）、`IS_SMOKE`、`no-proxy-server`、`buildWindow`、`setWindowOpenHandler`/`will-navigate` 白名单、`runSmoke`）、`apps/desktop/src/preload.ts`（**新**，`contextBridge` 暴露 `fanheDesktop`）、`apps/desktop/scripts/ensure-electron.mjs`（**新**，幂等二进制自检）、`apps/desktop/scripts/launch.mjs`（**新**，摘 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否 `--no-sandbox`）、`apps/desktop/test/server.test.mjs`（**新**，10 项）、`apps/desktop/.gitkeep`（删）；`pnpm-workspace.yaml`（`onlyBuiltDependencies: [electron]`）、根 `package.json`（加 `postinstall`）、`eslint.config.js`（`apps/desktop` 进 Node 全局块）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` / `apps/api` / `packages/shared` 本轮一行未改。**
 
 **§十一 新增/修改的关键文件（UI 集成）**：`packages/shared/src/navigation.ts`（18 项 / 分组 / `slug` / `buildNavSections` / `navCodeFromPath` 重写）、`packages/shared/src/permissions.ts`（运维信息平台改名）、`packages/shared/test/navigation.test.mjs`（重写，32 项）；`apps/web/src/components/Sidebar.tsx`（重写）、`TopBar.tsx`（五项菜单 + 版本号行）、`AppShell.tsx`（外层 `relative`）、`components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`（新）、`pages/HomePage.tsx`（新）、`pages/WorkbenchPage.tsx`（按地址分派）、`routes.tsx`（`routePath` + `MODULE_SUB_ROUTES`）、`lib/nav-icons.ts`（重写）、`lib/version.ts`（新）、`vite-env.d.ts`、`index.css`（hero 令牌族）、`vite.config.ts`（`define` 注入构建常量）、根 `package.json`（`0.0.0` → `0.1.0`）；`apps/web/test/e2e-auth.mjs`（新外壳同步 + `mouseMove` / `elementCenter` / `selectThemeOption` / `openHomeSection`）、`apps/web/test/version.test.mjs`（新，8 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS,UI-INTEGRATION-2026-10-11}.md`。**业务逻辑（四个面板与 `lib/` 数据层）一行未改。**
 
 **§十一 新增/修改的关键文件（T3-12）**：`apps/web/src/lib/api.ts`（增 `eventLogsRequest`）、`apps/web/src/lib/events.ts`（增 `loadEventLogs`）、`apps/web/src/lib/event-display.ts`（增动作码映射 / `formatMoment` / `formatDuration`）、`apps/web/src/components/events/EventDetailDialog.tsx`（**新**）、`apps/web/src/components/events/EventRow.tsx`（标题改可点按钮）、`apps/web/src/components/events/EventList.tsx`（透传 `onOpenDetail`）、`apps/web/src/components/events/EventsPanel.tsx`（`detailId` / `detailOpen` 与对话框挂载）、`apps/web/test/event-display.test.mjs`（增 17 项）、`apps/web/test/e2e-auth.mjs`（新增 T3-12 段 11 项 + 截图等待 Dialog 完成 + Checkbox / 标题按钮改 `element.click()`）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**，**行结构（除标题变成按钮）一行未改**。
+
+**§十一 新增/修改的关键文件（T5-01）**：`projects/fanhe-work/.dockerignore`（**新**，排除 `node_modules` / `**/dist` / `.env` / `data` 与并行 UI 产物目录）、`projects/fanhe-work/apps/api/Dockerfile`（**新**，两阶段：`build` 装全量依赖并 `prisma generate` + `tsc`，`runtime` 只带 `--prod` 依赖与 `dist`；`ENV HOST=0.0.0.0`、`tini` 作 PID 1、`USER node`、HEALTHCHECK 打 `/api/`）、`projects/fanhe-work/apps/web/Dockerfile`（**新**，构建 `node:22-bookworm-slim` 出 `dist`，运行 `nginx:1.27-alpine`）、`projects/fanhe-work/apps/web/deploy/nginx.conf`（**新**，`upstream api_upstream { server api:8787 }`、`/api/` 反代并清逐跳头、`/assets/` 长缓存 `1y immutable`、SPA 回退）、`projects/fanhe-work/docker-compose.yml`（新增 `api` 与 `web` 两个服务，**db 段逐字未动**）、`.gitignore`（加 `.env.compose`）、`infra/portable/ws-compose.cmd`（**新**，纯 ASCII）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/api/src` / `apps/web/src` / `packages/shared/src` 本轮一行未改** —— `DATABASE_URL` 与 `JWT_SECRET` 都从环境变量读，改连接串不需要动业务代码，这正是 T5-02 验收要点的前置条件。
 
 **上一轮新增/修改的关键文件（T3-11）**：`apps/web/src/lib/api.ts`（增 `setEventStatusRequest`）、`apps/web/src/lib/events.ts`（增 `setEventStatus`）、`apps/web/src/lib/event-display.ts`（增 `applyEventStatus`）、`apps/web/src/components/events/EventRow.tsx`（勾选框接线 + `locked` / `switching`）、`apps/web/src/components/events/EventList.tsx`（透传 + 组标题改用常量）、`apps/web/src/components/events/EventsPanel.tsx`（`changeStatus` / `switching` / 撤销入口 / `Notice.undo`）、`apps/web/test/event-display.test.mjs`（增 5 项）、`apps/web/test/e2e-auth.mjs`（新增 T3-11 段 17 项 + `eventCheckboxFinder` + `installStatusDelay` + `apiEventFacts` / `apiDeleteEvent` + 组计数与撤销入口的取数表达式）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**，**行结构一行未改**。
 
