@@ -10,11 +10,18 @@
  * `pnpm --filter @fanhe/web build` 生成，不入版本控制，因此每次开工前应先重建
  * 一次，否则加载到的是上一轮的界面。
  *
- * ## 服务地址
+ * ## 服务地址（T4-02）
  *
- * `FANHE_SERVICE_URL` 决定 `/api` 反代到哪里。T4-01 只读环境变量，**T4-02 会把它
- * 变成可持久化的配置项**（本机地址 / 远程地址两档切换），届时这个常量会被替换，
- * 但「渲染进程始终访问自己的来源、由主进程决定上游」这条结构不变。
+ * `serviceUrl` 决定 `/api` 反代到哪里。它从**工作区的配置文件**读
+ * （`.config/fanhe-work/service.json`，见 `config.ts`），换机时带着工作空间走。
+ *
+ * 环境变量 `FANHE_SERVICE_URL` 保留为**一次性覆盖** —— 设了赢过文件，供开发与
+ * 验证指向临时端点用；不设就读配置；配置也没有才退回缺省。
+ *
+ * 改配置**需要重启外壳**才生效，这是刻意的：反代的上游在起服务时确定，塞进一个
+ * 运行中的 HTTP 服务里会带来「切了一半」的中间态，而那种状态在现场看起来与
+ * 「切失败了」难以区分。T4-04 的启动自检会把「当前连的是哪个地址、来源是什么」
+ * 明确报出来。
  *
  * ## 冒烟模式
  *
@@ -22,18 +29,30 @@
  * 打到标准输出并按成败设置退出码。它让「外壳能渲染界面」这条验收可以被脚本断言，
  * 而不是只能靠人眼。**它不改变正常启动的任何行为。**
  */
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import {
+  describeSource,
+  findWorkspaceRoot,
+  loadServiceConfig,
+  saveServiceConfig,
+  type LoadResult,
+} from './config.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
 
 /** 前端构建产物的绝对路径。`__dirname` 是 `apps/desktop/dist`。 */
 const DIST_ROOT = resolve(__dirname, '../../web/dist')
 
-/** `/api` 的反代目标。T4-02 会把它升级为可切换的配置。 */
-const SERVICE_URL = process.env.FANHE_SERVICE_URL ?? 'http://127.0.0.1:8787'
-
 const IS_SMOKE = process.argv.includes('--smoke')
+
+/**
+ * 本次启动读到的配置结果。进程内唯一一份，IPC 通道直接返回它。
+ *
+ * 记成模块级而不是塞进闭包，是为了让「切换服务地址」这件事有个明确的中转点：
+ * 写入配置后由调用方重启，不在运行中改这个对象，避免反代上游与界面显示不一致。
+ */
+let currentService: LoadResult | null = null
 
 /**
  * 渲染进程永远只加载本机回环上的内置服务，因此**不该经过任何代理**。
@@ -112,12 +131,67 @@ function buildWindow(visible: boolean): BrowserWindow {
   return window
 }
 
+/**
+ * 注册服务地址相关的 IPC。
+ *
+ * **不把 `ipcRenderer` 整个暴露出去**，渲染进程只能调到这里显式开的两个口子。
+ *
+ * - `service:status` —— 读当前连的是哪个地址、从哪来的、配置文件在哪。T4-04 的
+ *   启动自检与界面上的「当前连接」展示都靠它。
+ * - `service:set` —— 写配置。**只写文件，不在运行中换上游**，返回值告诉调用方
+ *   需要重启。这是上面那个「不产生中间态」的取舍在接口上的体现。
+ */
+function registerServiceIpc(): void {
+  ipcMain.handle('service:status', () => {
+    if (currentService === null) {
+      return { serviceUrl: '', source: 'default', path: '', warning: '服务地址尚未读取' }
+    }
+    return {
+      serviceUrl: currentService.config.serviceUrl,
+      source: currentService.source,
+      sourceLabel: describeSource(currentService.source),
+      path: currentService.path,
+      warning: currentService.warning,
+    }
+  })
+
+  ipcMain.handle('service:set', async (_event, payload: unknown) => {
+    if (currentService === null || currentService.path === '') {
+      return { ok: false, error: '未找到配置文件路径，无法写入。请确认工作区完整。' }
+    }
+    const requested = (payload as { serviceUrl?: unknown } | null)?.serviceUrl
+    try {
+      const saved = await saveServiceConfig(currentService.path, {
+        serviceUrl: requested as string,
+      })
+      return { ok: true, serviceUrl: saved.serviceUrl, needsRestart: true }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: detail }
+    }
+  })
+}
+
 async function bootstrap(): Promise<void> {
   if (!existsSync(DIST_ROOT)) {
     throw new Error(`未找到前端构建产物：${DIST_ROOT}。请先运行 pnpm --filter @fanhe/web build`)
   }
 
-  staticServer = await startStaticServer({ root: DIST_ROOT, apiBaseUrl: SERVICE_URL })
+  currentService = await loadServiceConfig({ fromDir: __dirname })
+  const serviceUrl = currentService.config.serviceUrl
+
+  // 这三行是「配置跟着工作空间走」这件事的直接后果：换台电脑时它读的是那边工作区
+  // 里的文件，而不是本机残留的默认值。找不到根时警告已经写进 currentService。
+  const workspaceRoot = findWorkspaceRoot(__dirname)
+  console.log(
+    `[config] 服务地址 ${serviceUrl}（来源：${describeSource(currentService.source)}）` +
+      (workspaceRoot === null ? '' : `，工作区 ${workspaceRoot}`),
+  )
+  if (currentService.warning !== null) console.warn(`[config] ${currentService.warning}`)
+
+  registerServiceIpc()
+
+  staticServer = await startStaticServer({ root: DIST_ROOT, apiBaseUrl: serviceUrl })
   shellOrigin = `http://127.0.0.1:${staticServer.port}`
 
   if (IS_SMOKE) {
@@ -141,6 +215,11 @@ async function bootstrap(): Promise<void> {
  *
  * 判据是「`#root` 里有元素」——它同时证明了产物可加载、脚本可执行、React 完成了
  * 首次渲染。只看 HTTP 200 是不够的：那只能说明文件在，说明不了界面画出来了。
+ *
+ * 顺带验一条 T4-02 的核心判据：**反代是否真的打到了配置里那个地址**。做法是
+ * 在主进程侧直接请求内置服务的 `/api/`，若上游是活的会拿到上游的响应（哪怕是
+ * 401/404 也算「打到了」），上游不可达则是 502。这条比「改了配置没白改」更难
+ * 糊弄 —— 它走的是外壳自己的反代路径，而不是直接去 ping 上游。
  */
 async function runSmoke(): Promise<void> {
   const consoleErrors: string[] = []
@@ -166,15 +245,39 @@ async function runSmoke(): Promise<void> {
     true,
   )) as { rendered: number; title: string; path: string; bridge: boolean }
 
-  const ok = probe.rendered > 0 && consoleErrors.length === 0
+  const rendered = probe.rendered > 0
+  const upstreamReachable = await probeUpstream()
+
+  const ok = rendered && consoleErrors.length === 0
   console.log(
     `[smoke] 渲染元素=${probe.rendered} 标题=${probe.title} 路径=${probe.path} ` +
       `预加载桥=${probe.bridge ? '有' : '无'} console错误=${consoleErrors.length}`,
+  )
+  console.log(
+    `[smoke] 服务地址=${currentService?.config.serviceUrl ?? '?'} ` +
+      `来源=${currentService ? describeSource(currentService.source) : '?'} ` +
+      `反代到达上游=${upstreamReachable ? '是' : '否'}`,
   )
   for (const message of consoleErrors) console.error(`[smoke] console.error: ${message}`)
   console.log(`[smoke] ${ok ? 'PASS' : 'FAIL'}`)
 
   app.exit(ok ? 0 : 1)
+}
+
+/**
+ * 经内置服务请求 `/api/`，据状态码判断反代是否真的到达了上游。
+ *
+ * **上游返回 401/404 也算到达** —— 那证明请求走完了反代并拿到了上游的响应。
+ * 只有 502 才是没到达，而 502 由 `server.ts` 在 fetch 抛错时给出。
+ */
+async function probeUpstream(): Promise<boolean> {
+  try {
+    const response = await fetch(`${shellOrigin}/api/`, { redirect: 'manual' })
+    await response.arrayBuffer()
+    return response.status !== 502
+  } catch {
+    return false
+  }
 }
 
 app.on('window-all-closed', () => {
