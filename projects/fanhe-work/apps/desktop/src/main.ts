@@ -23,6 +23,17 @@
  * 「切失败了」难以区分。T4-04 的启动自检会把「当前连的是哪个地址、来源是什么」
  * 明确报出来。
  *
+ * ## 本机代理（T4-03 / T4-04）
+ *
+ * 两条 IPC，共用一份跨包加载的 api agent 源码（见 `paths.ts` 与 `agent.ts`）：
+ *
+ * - `launch:run` —— 启动一条配置。主进程会先做形态复核。
+ * - `launch:diagnostics` —— 启动自检：查每条配置指向的文件还在不在，并把每类失效
+ *   配一句能照着做的引导。
+ *
+ * **两条通道都不查库**：配置由渲染进程经现有 `GET /api/launch/profiles` 取来再送进来，
+ * 因此远程模式下同样通 —— 而外壳不必知道配置存在哪。
+ *
  * ## 冒烟模式
  *
  * `--smoke` 用于自动化验证：窗口隐藏、加载完成后在渲染进程里探一次 DOM，把结果
@@ -39,7 +50,8 @@ import {
   saveServiceConfig,
   type LoadResult,
 } from './config.js'
-import { runShellLaunchProfile, type LaunchAgentModule } from './agent.js'
+import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from './agent.js'
+import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
 
@@ -175,6 +187,26 @@ function registerServiceIpc(): void {
 }
 
 /**
+ * 载入本机代理核心。
+ *
+ * **按需加载而不是启动时就加载**：它是一次动态 `import()` 跨包的 TS 源码，失败原因
+ * 可能是工作区不完整 —— 那不该让外壳连界面都开不出来。两个调用方（`launch:run` 与
+ * `launch:diagnostics`）都需要它，**共用这一处**是为了让「代理不可用」这个状态在两条
+ * 通道上的说法完全一致；分成两处写，迟早会有一处忘了带上原因。
+ */
+async function loadLaunchAgent(): Promise<
+  { ok: true; module: LaunchAgentModule } | { ok: false; detail: string }
+> {
+  try {
+    return { ok: true, module: (await apiLaunchModule(__dirname)) as LaunchAgentModule }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[launch] 本机代理不可用：${detail}`)
+    return { ok: false, detail }
+  }
+}
+
+/**
  * 注册本机代理的 IPC（T4-03）。
  *
  * **和 `apps/api` 那条 HTTP 路由相比，这里少了权限中间件与用户身份。** 那不是漏掉，
@@ -190,26 +222,61 @@ function registerServiceIpc(): void {
  */
 function registerLaunchIpc(): void {
   ipcMain.handle('launch:run', async (_event, payload: unknown) => {
-    // agent 模块按需加载而不是启动时就加载：它是一次动态 import 跨包的 TS 源码，
-    // 失败原因可能是工作区不完整 —— 那不该让外壳连界面都开不出来。加载失败在这里
-    // 变成一个可显示的返回值，界面能报「本机代理不可用」并说明原因。
-    let agentModule: LaunchAgentModule
-    try {
-      agentModule = (await apiLaunchModule(__dirname)) as LaunchAgentModule
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      console.error(`[launch] 本机代理不可用：${detail}`)
-      return { ok: false, reason: 'spawn_failed', detail: `本机代理不可用：${detail}` }
+    const loaded = await loadLaunchAgent()
+    if (!loaded.ok) {
+      return { ok: false, reason: 'spawn_failed', detail: `本机代理不可用：${loaded.detail}` }
     }
 
     const raw = (payload as { profile?: unknown } | null)?.profile
-    const outcome = await runShellLaunchProfile(raw, agentModule)
+    const outcome = await runShellLaunchProfile(raw, loaded.module)
     if (!outcome.ok) {
       console.warn(`[launch] 启动未成功（${outcome.reason}）：${outcome.detail}`)
       return outcome
     }
     console.log(`[launch] 已启动 pid=${outcome.data.pid} 去重=${outcome.data.deduplicated}`)
     return outcome
+  })
+
+  /**
+   * 启动自检（T4-04）。
+   *
+   * **入参是配置数组而不是配置 id**，与 `launch:run` 同一条理由：主进程不连数据库，
+   * 配置得由界面从 `GET /api/launch/profiles` 取到再送进来。
+   *
+   * **校验依赖在这里注入而不是在 `diagnostics.ts` 里 import**，是为了让那个模块能在
+   * 单测里被直接加载（desktop 产出 CJS，模块间 import 必须写 `.js` 后缀，而单测走
+   * 类型剥离加载 `src/*.ts`，那里没有 `.js` 文件）。注意传的是同一份实现 ——
+   * 自检与启动对「什么算合法配置」的判断因此不会分叉。
+   */
+  ipcMain.handle('launch:diagnostics', async (_event, payload: unknown) => {
+    const profiles = (payload as { profiles?: unknown } | null)?.profiles
+
+    // **空配置先判，不加载代理。** 一条配置都没有时自检该说「没有要检查的」，而先
+    // 加载代理会在工作区恰好有问题时报成「代理不可用」—— 那与事实不符（代理没事，
+    // 只是没东西可查），且会把用户引去查工作区而不是先看看自己是不是还没配。
+    if (!Array.isArray(profiles) || profiles.length === 0) {
+      return checkLaunchDiagnostics({
+        profiles,
+        // 空列表走不到下面那两处，留两个永不被调用的实现只是为了让类型完整。
+        normalize: () => null,
+        inspect: () => Promise.resolve('missing'),
+      })
+    }
+
+    const loaded = await loadLaunchAgent()
+    if (!loaded.ok) return agentUnavailableReport(loaded.detail)
+
+    const report = await checkLaunchDiagnostics({
+      profiles,
+      normalize: normalizeProfile,
+      inspect: loaded.module.inspectExecutablePath,
+    })
+    const count = report.diagnostics.length
+    console.log(
+      `[launch] 自检完成 可用=${report.okCount}/${report.total}` +
+        (count === 0 ? '' : ` 问题=${count}`),
+    )
+    return report
   })
 }
 
@@ -289,8 +356,9 @@ async function runSmoke(): Promise<void> {
 
   const rendered = probe.rendered > 0
   const upstreamReachable = await probeUpstream()
+  const diagnostics = await probeDiagnostics(window)
 
-  const ok = rendered && consoleErrors.length === 0
+  const ok = rendered && consoleErrors.length === 0 && diagnostics.reachable
   console.log(
     `[smoke] 渲染元素=${probe.rendered} 标题=${probe.title} 路径=${probe.path} ` +
       `预加载桥=${probe.bridge ? '有' : '无'} console错误=${consoleErrors.length}`,
@@ -300,10 +368,70 @@ async function runSmoke(): Promise<void> {
       `来源=${currentService ? describeSource(currentService.source) : '?'} ` +
       `反代到达上游=${upstreamReachable ? '是' : '否'}`,
   )
+  // 自检判据只看「通道通、返回结构完整」，不判自检结果好不好 —— 此刻库里有没有失效
+  // 配置取决于用户数据，把它算进 PASS/FAIL 会让冒烟结果随数据变化。
+  console.log(
+    `[smoke] 启动自检=${diagnostics.reachable ? '可用' : '不可用'} ` +
+      `代理=${diagnostics.agentAvailable ? '可用' : '不可用'} ` +
+      `配置=${diagnostics.total}条 可用=${diagnostics.okCount}条`,
+  )
   for (const message of consoleErrors) console.error(`[smoke] console.error: ${message}`)
   console.log(`[smoke] ${ok ? 'PASS' : 'FAIL'}`)
 
   app.exit(ok ? 0 : 1)
+}
+
+/**
+ * 从**渲染进程里**调一次启动自检。
+ *
+ * **走 `executeJavaScript` 而不是直接在主进程调**，是因为这条链路的每一段都可能是
+ * 断的：预加载没暴露方法、通道名写错、`contextBridge` 的结构克隆失败。主进程自己调
+ * 自己注册的处理函数，前三段全绕过去了，冒烟会绿而界面用不了。
+ *
+ * **判据是「返回结构完整」而不是「有没有查出问题」**：前者证明通道可用，后者取决于
+ * 用户库里有没有失效配置 —— 后者会让冒烟的成败随数据变化，而冒烟不该有那种依赖。
+ */
+async function probeDiagnostics(window: BrowserWindow): Promise<{
+  reachable: boolean
+  agentAvailable: boolean
+  total: number
+  okCount: number
+}> {
+  const empty = { reachable: false, agentAvailable: false, total: -1, okCount: -1 }
+  try {
+    const report = (await window.webContents.executeJavaScript(
+      `(async () => {
+         const bridge = window.fanheDesktop
+         if (typeof bridge?.checkLaunchProfiles !== 'function') return null
+         const result = await bridge.checkLaunchProfiles([])
+         return {
+           agentAvailable: result.agentAvailable,
+           total: result.total,
+           okCount: result.okCount,
+           diagnostics: Array.isArray(result.diagnostics),
+         }
+       })()`,
+      true,
+    )) as null | {
+      agentAvailable: boolean
+      total: number
+      okCount: number
+      diagnostics: boolean
+    }
+
+    if (report === null || !report.diagnostics) return empty
+    return {
+      reachable: true,
+      agentAvailable: report.agentAvailable,
+      total: report.total,
+      okCount: report.okCount,
+    }
+  } catch (error) {
+    console.error(
+      `[smoke] 自检通道不可用：${error instanceof Error ? error.message : String(error)}`,
+    )
+    return empty
+  }
 }
 
 /**

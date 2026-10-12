@@ -18,6 +18,10 @@
  *   会重新校验它的形态（见 `agent.ts`）：这条通道对渲染进程开放，路径与参数不能
  *   只信调用方送来的值。
  *
+ * T4-04 再加一个：
+ * - `checkLaunchProfiles(profiles)` —— 启动自检。**传的是配置数组**，理由同上。
+ *   返回一份报告，里面每条问题都带一句能照着做的引导。
+ *
  * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
  * 的成对方式追加通道。
  *
@@ -51,6 +55,31 @@ export type LaunchRunResult =
     }
   | { ok: false; reason: string; detail: string }
 
+/** 自检里一条问题。`reason` 三类各有不同的引导方向，界面据此决定渲染什么。 */
+export type LaunchDiagnosticResult = {
+  /** 该配置在传入数组里的下标。形态不合法时它是唯一可靠的指认依据。 */
+  index: number
+  profileId: string
+  name: string
+  executablePath: string
+  reason: 'agent_unavailable' | 'invalid_profile' | 'path_unavailable'
+  detail: string
+}
+
+/**
+ * 自检报告。
+ *
+ * **它总是能被显示，不存在「检查失败」这个状态** —— 连代理加载不了也会变成一条
+ * `agent_unavailable`。界面因此不必区分「没检查成」与「检查出问题」，而用户也
+ * 分不清那两者的区别。
+ */
+export type LaunchDiagnosticsResult = {
+  agentAvailable: boolean
+  total: number
+  okCount: number
+  diagnostics: LaunchDiagnosticResult[]
+}
+
 const desktopBridge = Object.freeze({
   /** 供界面判定「当前跑在外壳里」。浏览器里这个对象不存在。 */
   isDesktopShell: true as const,
@@ -76,6 +105,16 @@ const desktopBridge = Object.freeze({
    */
   runLaunchProfile: (profile: unknown): Promise<LaunchRunResult> =>
     ipcRenderer.invoke('launch:run', { profile }) as Promise<LaunchRunResult>,
+  /**
+   * 启动自检。
+   *
+   * **入参是配置数组**，理由与 `runLaunchProfile` 相同：主进程不连数据库。
+   *
+   * 返回值**总是**一份可显示的报告 —— 代理不可用也会变成一条 `agent_unavailable`
+   * 诊断而不是一个错误。界面因此不必处理「检查失败」这个第四种状态。
+   */
+  checkLaunchProfiles: (profiles: unknown): Promise<LaunchDiagnosticsResult> =>
+    ipcRenderer.invoke('launch:diagnostics', { profiles }) as Promise<LaunchDiagnosticsResult>,
 })
 
 contextBridge.exposeInMainWorld('fanheDesktop', desktopBridge)

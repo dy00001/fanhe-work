@@ -38,6 +38,7 @@
 import {
   isAbsoluteExecutablePath,
   LAUNCH_PROFILE_LIMITS,
+  type LaunchPathState,
   type LaunchProfile,
   type RunLaunchProfileResponse,
 } from '@fanhe/shared'
@@ -50,12 +51,17 @@ import {
  * 依赖、工作区根也没有配路径别名 —— 真写上去会得到一条解析不了的 import
  * （且它只在类型位置出现，运行时一切正常，属于最难查的一类错误）。
  *
- * 代价是这份契约要手写，且与原函数有漂移的风险。**接口收窄到只取用得到的两个成员**，
+ * 代价是这份契约要手写，且与原函数有漂移的风险。**接口收窄到只取用得到的成员**，
  * 而 `runLaunchProfile` 的返回类型 `{ok:true, data: RunLaunchProfileResponse} |
  * {ok:false, reason: 'executable_missing' | 'spawn_failed'}` 是窄的：多出的成员不
  * 影响赋值，少掉的成员才会。所以这里只需要保证 `data` 与 `reason` 两个字段对得上，
  * 而那两处都直接引用了共享包的类型 —— 真正的漂移面只有 `LaunchRunOutcome` 那个
  * 判别式，而它在 `apps/api` 侧有 192 项集成测试钉着。
+ *
+ * T4-04 又加了 `inspectExecutablePath`：启动自检要查路径可用性，而**路径检查必须与
+ * 启动时那次是同一个实现**。若外壳在这里另写一份 `fs.stat`，两份实现会对「目录算不算
+ * 存在」「UNC 路径超时怎么办」给出不同答案，于是自检说「可用」而点击启动失败 ——
+ * 而自检的全部价值就在于可信。
  */
 export type LaunchAgentModule = {
   runLaunchProfile: (
@@ -65,6 +71,13 @@ export type LaunchAgentModule = {
     | { ok: true; data: RunLaunchProfileResponse }
     | { ok: false; reason: 'executable_missing' | 'spawn_failed' }
   >
+  /**
+   * 检查一条路径当前能不能用。
+   *
+   * 刻意要求它是**这个模块上的方法**而不是一个自由函数：它必须与 `runLaunchProfile`
+   * 来自同一份源码。外壳没有理由自己去 `stat`，而真去写了就会引入上面那种分歧。
+   */
+  inspectExecutablePath: (executablePath: string) => Promise<LaunchPathState>
 }
 
 /**
