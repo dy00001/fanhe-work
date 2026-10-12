@@ -5,10 +5,10 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**；2026-10-12 14:1x 随 **T5-01** 回填，**阶段五开工**） |
-> | 对应提交 | 代码基线 `ace70bd`（**T5-01 容器编排，阶段五第一项**；阶段四基线 `760b92f`，T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T5-01 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
-> | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 1/5：T5-01 容器编排已完成。** 下一项是 T5-02 数据库容器化与连接切换 |
-> | 最后验证 | 四道门禁全绿（**426 项**，2026-10-12 14:1x 实跑）；**容器编排实跑：三容器全 Healthy**（`up -d --wait`，见 4.1.1）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本轮无界面改动未重跑）；外壳冒烟 **PASS**（渲染出界面、console 零错误、**反代到达上游=是**，连的是容器化的 api） |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**；2026-10-12 14:1x 随 **T5-01** 回填，**阶段五开工**；2026-10-12 14:4x 随 **T5-02** 回填） |
+> | 对应提交 | 代码基线 `16f73e8`（**T5-02 数据库连接串与迁移执行者，阶段五第二项**；T5-01 为 `ace70bd`，阶段四基线 `760b92f`，T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T5-02 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
+> | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 2/5：T5-01 容器编排、T5-02 数据库连接串与迁移执行者已完成。** 下一项是 T5-03 数据迁移与校验 |
+> | 最后验证 | 四道门禁全绿（**426 项**，2026-10-12 14:4x 实跑）；**空卷验收 22 项 0 失败**（全新卷 → 一条命令 → 6 个迁移自动应用，见 4.1.1）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本轮无界面改动未重跑）；外壳冒烟 **PASS**（渲染出界面、console 零错误、**反代到达上游=是**，连的是容器化的 api） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
 > 深度的设计推演与逐任务判断在 `DEVELOPMENT-PLAN.md` 第九章（9.1 ~ 9.45），本文已把结论汇总，需要细节时再翻过去。
@@ -25,7 +25,7 @@
 
 **桌面外壳 4/4，阶段四收口**：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。T4-04 加了启动自检：查每条配置指向的文件还在不在，并把三类失效各配一句**方向正确**的引导（代理不可用去查工作区、配置不合法去重新编辑、路径失效去确认路径）。下一项是阶段五 T5-01 容器编排。
 
-**服务化 1/5，阶段五已开工**：T5-01 落了容器编排 —— `docker compose up -d --wait` **一条命令拉起 db + api + web 三个容器**，实测全 Healthy。编排的是**生产形态**而非开发形态（api 跑构建产物、web 由 nginx 托管静态产物并反代 `/api`），因为 T5-04 要暴露的正是生产形态。容器里 `HOST` 覆盖成 `0.0.0.0`（代码默认 `127.0.0.1` 在容器里指向容器自己，这是最容易漏的一处），签名密钥从环境变量注入且与开发那份刻意不同，端口三处全绑 `127.0.0.1`。**数据库刻意没动**（命名卷里是实验版现有数据，换掉会丢）。下一项是 T5-02 数据库容器化与连接切换。
+**服务化 2/5**：T5-01 落了容器编排（`docker compose up -d --wait` 拉起 db + api + web）。**T5-02 补上了它漏掉的那件事 —— 迁移的执行者。** T5-01 之所以能一次跑绿，是因为它复用了开发期那个卷（里面的迁移是本机 `db:deploy` 出来的）；实测全新卷 initdb 后 **`public` 模式下 0 张表，而编排层全绿** —— 因为 **api 连得上库，而连接成功与库里有表是两件事**。现在编排是 `db → migrate → api → web` 四个服务，`migrate` 跑完退出；连接串与口令也收成单一来源（改一处不会只改一半）。**验收脚本在全新空卷上跑通 22 项，包括「重复执行迁移表数不变」**（幂等）。空部署后**刻意不自动建 owner**，让前端显示初始化向导 —— 凭空造一个默认口令的账号比让用户自己设更危险。下一项是 T5-03 数据迁移与校验。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -121,7 +121,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾）；**UI 集成两批已完成**（导航 18 项 + 首页三段式 + 版本号），见 `UI-INTEGRATION-2026-10-11.md` |
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ✅ **已完成（4/4）**：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检。出口条件已达成（见第七章） |
-| 阶段五 | 服务端化（T5-01 ~ T5-05） | 🔄 进行中：**T5-01 容器编排完成（1/5）**，T5-02 ~ T5-05 未开始 |
+| 阶段五 | 服务端化（T5-01 ~ T5-05） | 🔄 进行中：**T5-01 容器编排、T5-02 数据库连接串与迁移执行者已完成（2/5）**，T5-03 ~ T5-05 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
 
 > 阶段三的分母口径（12 项）见 `PROGRESS-REVIEW-2026-10-11.md` 第 28 行。
@@ -141,7 +141,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
-| `ace70bd` | feat(阶段五): T5-01 容器编排（**阶段五代码基线**：两个 Dockerfile + nginx 反代 + compose 扩成三服务） |
+| `16f73e8` | feat(阶段五): T5-02 数据库连接串单一来源与迁移执行者（**阶段五代码基线**：新增一次性 `migrate` 服务、连接串收成单一来源、22 项空卷验收脚本） |
+| `ace70bd` | feat(阶段五): T5-01 容器编排（两个 Dockerfile + nginx 反代 + compose 扩成三服务） |
 | `760b92f` | feat(阶段四): T4-04 启动自检（**阶段四收口，阶段四代码基线**） |
 | `d76e084` | feat(阶段四): T4-03 本机代理内置（**外壳代码基线**） |
 | `b03ddb5` | feat(阶段四): T4-01 Electron 外壳脚手架（**外壳代码基线**） |
@@ -280,16 +281,35 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ## 四、待办事项
 
-### 4.1 下一项：T5-02 数据库容器化与连接切换（P0）
+### 4.1 下一项：T5-03 数据迁移与校验（P0）
 
-> **阶段四已收口（4/4）**，**阶段五已开工：T5-01 容器编排完成**（`docker compose up -d --wait` 一条命令拉起 db + api + web，实跑三容器全 Healthy）。下一项是 T5-02，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 206 行，阶段验收见第七章。
+> **阶段五已完成 T5-01 与 T5-02**（T5-01 容器编排、T5-02 数据库连接串与迁移执行者）。下一项是 T5-03，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 206 行，阶段验收见第七章。
 
-- **T5-02 要做什么**：把 PostgreSQL 正式纳入容器卷并做数据迁移与校验。**T5-01 刻意没动数据库** —— 命名卷 `fanhe-work-pgdata` 里是实验版现有数据，换掉会丢，而「一条命令拉起全套」不需要动数据也成立。
-- **T5-01 已经铺好的路**：`DATABASE_URL` 在 compose 里注入、api 从环境变量读，**业务代码一行没动** —— 所以验收要点「连接串切换后无需改业务代码」这件事在 T5-01 就已经成立了。T5-02 真正要处理的是**数据迁移与一致性校验**（验收要点：记录数与抽样内容一致）。
-- **T5-02 与 T5-04 有个依赖关系要注意**：T5-04（Tunnel）复用 T5-01 的编排，要加一个 `cloudflared` 服务；而 T5-05（访问策略）依赖 T5-04。所以若想快出一条可对外的链路，**T5-02 → T5-04 → T5-05 是必须顺序**，中间插别的会让那条链更长。
-- **另有一项不在阶段五编号内但属既定范围**：`credential.ts` 的存储后端换成主进程 `safeStorage`（见 4.1.2 末尾与 `DEVELOPMENT-PLAN.md` 9.42），建议单独一笔。
+- **T5-03 要做什么**：把实验版的**业务数据**（纪要、事件、启动配置）导入容器卷并校验一致性。**T5-02 只保证「空库能被建起来」，不涉及「已有数据被搬进去」** —— 前者是部署问题、后者是数据问题，判据与手段都不同。
+- **验收要点是「记录数与抽样内容一致」，所以不能只做 `pg_dump | pg_restore` 了事** —— 那只能保证搬过去的字节相同，验不了「搬对了业务含义」。需要先定抽样口径（哪几张表、哪些字段），再与源库逐项比对。
+- **有一个前置需要先想清楚**：现有 `fanhe-work-pgdata` 卷里就是实验版数据（6 迁移 / `users=1` / 业务表 0 行 —— 基线状态）。而 T5-02 的验收跑在**另一个**隔离卷 `t502-pgdata` 上，跑完即删。所以 T5-03 面对的问题是「**要把业务数据放进容器卷**」，而当前卷里其实没有多少业务数据可搬 —— **要先确认「实验版数据」指的是什么、在哪里**，否则可能会去搬一个空库。这条留给 T5-03 开工时与用户确认。
+- **T5-04（Tunnel）依赖 T5-01 而非 T5-03**，它复用本轮的编排加一个 `cloudflared` 服务，且要验「仅出站、无入站端口」这个属性。T5-05（访问策略）依赖 T5-04。所以 **T5-02 → T5-04 → T5-05 是必须顺序**，T5-03 可以插在 T5-02 与 T5-04 之间，也可以推后。
 
-### 4.1.1 T5-01 的实施记录（已完成，供对照）
+### 4.1.1 T5-02 的实施记录（已完成，供对照）
+
+- **T5-01 漏了迁移的执行者，而它的症状极有欺骗性。** T5-01 的 `up -d --wait` 能在全新机器上一次跑绿，因为它**复用了开发期那个 `fanhe-work-pgdata` 卷** —— 里面 6 个迁移是开发期在本机 `db:deploy` 出来的。实测另起一个全新卷：initdb 结束后 `public` 模式下 **0 张表**，而此时**编排层全绿**（db healthy、api 能连上库、web 页面可开）。根因是 api 启动时不跑迁移，运行镜像里也没有 Prisma CLI（`prisma` 是 devDependency，被 `--prod` 排除）。**连接成功与库里有表是两件事** —— 这是本轮最重要的一条认知。
+- **迁移执行者做成独立的一次性服务，不塞进 api 启动路径。** 三个理由：职责分离（api 的职责是提供服务，让它在启动路径里塞一个「改数据库结构」的动作，会把两件可能失败的事绑在一起）；失败可见（一次性容器跑完退出，`docker compose ps` 里直接看 exited(0) 还是 exited(1)，塞进启动路径则只表现为「服务没起来」）；幂等（`migrate deploy` 本身幂等，独立服务让「重复部署」有明确入口）。
+- **migrate 的镜像阶段挂在 `build` 上而不是运行阶段**：运行镜像装 Prisma CLI 等于为一个「只在部署时跑一次」的命令给所有长期运行的容器加几十 MB。代价是 migrate 镜像继承了全量 devDependency（体积大），但那个体积不进入任何运行中的服务。
+- **命令选 `migrate deploy` 而不是 `dev`**：`dev` 会创建影子库验证迁移可重放，那需要实例有建库权限 —— 部署环境通常不给（给了也不该给）。选错会让部署在权限不足的库上直接失败，而错误是 `permission denied for database`，指向权限而不是指向「你该用 deploy」。
+- **`depends_on` 的两种条件不是一回事**：migrate 等 db 用 `service_healthy`（等 PostgreSQL 接受连接），api 等 migrate 用 `service_completed_successfully`（等**跑完并成功**）。真正危险的是**不写这一条** —— api 与 migrate 并发启动，api 可能在建表完成前就接到第一个请求，T5-01 掩盖掉的失败又回来了。
+- **`migrate` 的 `restart: no` 是语义的一部分，不是默认值。** 默认 `unless-stopped` 会让跑完即退出的容器被反复重启，每次重启连一次库。部署完观察几小时，db 日志里全是重复连接而 api 一切正常 —— 这类故障没有报错可查。
+- **连接串与口令各写一遍是个陷阱，本轮收成一处。** T5-01 里 `POSTGRES_PASSWORD` 与 `DATABASE_URL` 内嵌的口令分处两个 YAML 位置，改一处忘另一处 → db healthy 而 api 连不上，错误 `password authentication failed` 指向「口令不对」，**不会提到「你可能只改了一处」**。现在用 compose 的 `x-database-url: &database-url` 顶层锚点，api 与 migrate 引用同一个 `*database-url`，口令从 `${FANHE_DB_PASSWORD:-fanhe}` 取且默认值与 db 那三个 `POSTGRES_*` 同组。
+- **`x-` 前缀不是 compose 内置能力**，而是「compose 忽略不认识的顶层键」+「YAML 锚点在该键上生效」两件事的组合。换个 YAML 工具读这个文件时它就是普通字段。
+- **healthcheck 用 `$${POSTGRES_USER}` 让容器读回自己的变量**，而不是把名字再写一遍（那正是第二个可能分叉的地方）。`$$` 是 compose 转义，少了它会在插值阶段就被替换，healthcheck 变成字面量而**永远 unhealthy**，`up --wait` 就一直等下去 —— 症状是「命令卡住不动」，不报错。
+- **🔴 一个 T5-01 就存在、但本轮才暴露的真 bug。** migrate 阶段被追加到 Dockerfile **末尾**，而「不写 `target` 的构建会停在最后一个 FROM」，于是 **api 也构建成了 migrate 镜像**。症状极有欺骗性：api 容器**反复重启**、日志全是 `No pending migrations to apply`，而 healthcheck 报 **healthy**（它在重启循环里被短暂满足）。前面还有一层：重启循环让端口映射与健康结果都不稳定，于是「api 连不上」看起来像端口或网络问题，我为此先后怀疑了 `!override` 标签、容器复用、代理，**全部不是**。判据是 `docker inspect -f '{{json .Config.Cmd}}' <容器>` —— 它显示 api 执行的就是那串 prisma 参数。**「服务反复重启且日志里有本不该属于它的操作」时，先看它实际执行的命令，别先看网络与端口。** 修法：compose 里给 api 与 web 都显式写 `target: runtime`。web 今天是巧合对的（runtime 恰好在末尾），**但 api 已经因为同一个巧合出过事**，所以两个都写。T5-01 时 `runtime` 在末尾也是巧合，不是设计 —— 这句话写进了 Dockerfile 末尾。
+- **一次「断言写错与配置错长得一样」的坑**：脚本断言 `docker port` 每行以 `127.0.0.1` 开头，而输出形状是 `5432/tcp -> 127.0.0.1:15432`，**端口在箭头右边**。断言恒失败，看起来像「端口真的对外暴露了」。按四类归因重判（真 bug / 断言过宽 / 环境残留 / 期望与实现不符）属第四类，改断言。**这类失败不可能靠看输出区分，只能靠问「这条断言要证明的是哪件事」。**
+- **空部署后刻意不自动建 owner**，让前端显示初始化向导（验收断言 `initialized === false`）。理由是**凭空造一个默认口令的账号比让用户自己设更危险** —— 那种账号会出现在文档里、被抄进部署脚本、忘记改就长期有效。这也是 T5-02 的边界：**建表是部署的事，建 owner 是用户的事。**
+- **验收脚本自己生成隔离 override 并用完删掉**（验证必须在全新空卷上跑，现有卷里是实验版数据不能动；隔离靠独立项目名/卷名/容器名/端口）。override **刻意不入库** —— 它是验证脚手架，留在仓库会让人以为那几处端口改动是必要的。`!override` 合并指令不能省：不写它列表会**追加**而非替换，两套会同时绑同一宿主端口而报冲突。
+- **写脚本时自己踩了两个顺序坑**：收尾函数删掉 override，而开头那次「清残留」走同一函数 → `up` 报 `compose file is invalid: cannot find the file specified`（**那句话看起来像配置坏了，真实原因是顺序**）；修好后把「写文件」与「拆环境」调了顺序，`teardown` 里的 `compose down` 读不到还没写的文件。**正确顺序：先写 override → 再拆环境 → 最后 up**；且「脚手架的生成与拆除」必须拆成两个函数（`teardown` 拆环境、`cleanup` 连脚手架一起拆），因为调用时机不同。
+- **验证结果（2026-10-12）**：验收脚本 **22 项 0 失败**，且 **prettier 格式化后又跑一次仍是 22 项 0 失败**（格式化改过的文件要复跑，否则不知道有没有改坏逻辑）。覆盖：全新空卷 → 一条命令 → migrate exited(0) → 6 个迁移全部应用 → public 表数 > 10 → **重复执行 migrate 表数不变（幂等）** → 迁移目录数与已应用数一致 → api/web healthy → 深链 `/notes` 回退 → 经 web 反代到 api 拿到 `{"initialized":false}` → db 端口绑 127.0.0.1 → 两处 `DATABASE_URL` 相等且内嵌口令与 `POSTGRES_PASSWORD` 一致。**现有那套用新配置重建后一切正常**（6 迁移 / `users=1` / `initialized: true` / 反代通）。四道门禁全绿 **426 项 0 失败**（未改任何业务代码，`git diff --stat` 对 `apps/*/src` 与 `packages` 为空 —— 这本身就是验收要点「连接串切换后无需改业务代码」的直接证据）。提交 `16f73e8`。
+- **T5-02 没做的一件事**：T5-03（实验版业务数据导入容器卷并校验记录数与抽样内容）不在本轮范围。**本轮只保证「空库能被建起来」。**
+
+### 4.1.2 T5-01 的实施记录（已完成，供对照）
 
 - **编排「生产形态」而非「开发形态」**：api 跑构建产物、web 由 nginx 托管静态产物并反代 `/api`。理由是 **T5-04 要暴露的正是生产形态**，编排开发形态等于把同一件事做两遍，且多出来的那份在 T5-04 时还得拆掉。
 - **容器里 `HOST` 必须覆盖成 `0.0.0.0`**（最容易漏的一处）：代码默认 `127.0.0.1`（那条判断本身是对的），但容器里的 `127.0.0.1` 指向**容器自己**，端口映射进来的请求落在 eth0 上而进程只听 loopback。**漏掉的症状特别难查：容器全 healthy、日志里无错，只有访问时连接被拒。** 容器化会暴露一批只在特定环境里才错的默认值，而这类默认值在单测里永远是对的。
@@ -309,7 +329,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **已知限制：api 镜像 594MB，实际需要约 440MB。** `--prod` 只影响**链接到包**的那部分，被间接引用的 devDependency 仍留在 `.pnpm` 里（`@prisma/studio-core` 43MB、typescript 24MB、`effect` 34MB 等）。试过 `pnpm prune --prod`，**它会失败**（prune 自己触发 postinstall，同上那个问题）；修它要先加 `--ignore-scripts`，而它在 workspace 下语义本就模糊。**594MB 对单用户部署完全可接受，记为已知限制而不是加一个会失败、语义又不确定的步骤。** web 镜像 49MB。
 - **本轮没做的两件事**：数据库没动（T5-02 的范围）；**没有把验证落成可重复执行的脚本** —— 本轮是实跑 + curl 断言，验的是「容器能不能起来」这个一次性事实。真正会回归的是镜像构建与配置的正确性，**那是 T5-04 要复用这套配置时该补的**（那时会多一个 `cloudflared` 服务，且要验「仅出站、无入站端口」这个属性）。
 
-### 4.1.2 T4-04 的实施记录（已完成，供对照）
+### 4.1.3 T4-04 的实施记录（已完成，供对照）
 
 - **三类失效必须分开，因为引导方向不同**：`agent_unavailable`（代理不可用 → 去查工作区）、`invalid_profile`（送来的东西不像配置 → 重新编辑；**路径根本没被看过，所以引导绝不能让用户去改路径**）、`path_unavailable`（路径不在 → 去确认路径，必要时重新指定）。合成一类看着省事，代价是其中两类的文案必有一份是错的，而用户分辨不出来。
 - **路径检查必须复用 api 的 `inspectExecutablePath`**，也就是启动时那一个。自检说「可用」而点击失败是这类功能最坏的失效 —— 用户会开始不信任自检，进而不再看它。`LaunchAgentModule` 契约因此加了 `inspectExecutablePath`，并**刻意要求它是「这个模块上的方法」**而不是自由函数（否则外壳会自己写一份 stat，两份实现会对「目录算不算存在」「UNC 超时怎么办」给出不同答案）。
@@ -326,12 +346,12 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **并发那条判据验过能证伪**：临时把 `Promise.all` 改回逐条 await，该用例确实失败（串行 600ms vs 阈值 400ms），恢复后全绿 —— 用**耗时**判而不是「并发计数」，因为实现完全可能并发发起却仍然串行 await，而那种写法在计数上看起来是对的。
 - **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 76**，合计 **426 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 21 项全通过。外壳冒烟 PASS（新增一行「启动自检=可用 代理=可用 配置=0条 可用=0条」）。e2e 无界面改动未重跑（仍 149）。提交 `760b92f`。
 
-### 4.1.3 T4-03 的实施记录（已完成，供对照）
+### 4.1.4 T4-03 的实施记录（已完成，供对照）
 
 - **外壳不查库，`LaunchProfile` 由渲染进程送进来**。三个方案里选了「渲染进程经现有 `GET /api/launch/profiles` 取配置 → IPC 送进主进程」：主进程自己查库会违背 `agent.ts` 顶部写死的约束（它**不认识数据库**），而把启动配置落成配置文件则要重做已交付的 T3-03，且与阶段五的数据库模型冲突。选中的方案完全复用现有链路，`agent.ts` **一行未改**，远程模式下同样通。
 - **主进程必须自己复核形态**。HTTP 那条路上配置在入库时校验过一次、路由 schema 又把一次，agent 收到的一定是像样的东西；IPC 这条路上**没有任何一道**，而这条通道对渲染进程里的任何脚本开放。少这一步，`launch:run` 就等于一个本机任意命令执行入口。复核落在 `apps/desktop/src/agent.ts` 的 `normalizeProfile`：逐字段查（绝对路径、参数全为字符串、个数与长度不超限、`icon` 形态、`sortOrder` 有限数），**返回新对象**，未知的额外字段因此被丢掉、带不进进程创建。
 - **新增失败原因 `invalid_profile`**，与 agent 原有的 `executable_missing` 分开：前者是「你送来的东西不像一条配置」（不该让用户去改路径），后者是「配置没问题但文件不在」（该让用户重新指定）。界面给的动作不同，合成一类会让其中一个的引导必然出错。
-- **`apiLaunchModule(fromDir)` 的 `fromDir` 是必填**，沿用 T4-02 `config.ts` 的同一条约定（见 4.1.1 里那条 `__dirname` 的坑）。顺带收获是这段逻辑**可测了** —— 模块内不留 `__dirname`，单测就能在 ESM 里传自己造的目录进去。
+- **`apiLaunchModule(fromDir)` 的 `fromDir` 是必填**，沿用 T4-02 `config.ts` 的同一条约定（见 4.1.5 里那条 `__dirname` 的坑）。顺带收获是这段逻辑**可测了** —— 模块内不留 `__dirname`，单测就能在 ESM 里传自己造的目录进去。
 - **`import()` 的参数必须是 URL 而不是路径**。ESM 加载器只认 `file:` / `data:` / `node:`，直接喂 Windows 绝对路径会被当成协议名为 `f` 的 URL 拒掉（`ERR_UNSUPPORTED_ESM_URL_SCHEME`）。用 `pathToFileURL` 转，顺带把工作区名里的空格（`fanhe Work`）正确编码掉。**这一条是只有真机才暴露的**：前一层单测用的是假 agent 模块，从不真的 import，于是它在 desktop 全绿的情况下一直是坏的 —— 详见 9.43。
 - **刻意不缓存模块实例**。Node 的模块缓存按 URL 索引，同 URL 第二次 `import()` 拿同一实例，这正是去重表要跨调用生效所依赖的；而缓存到模块级会让 `recentRuns` 在两个壳实例间不共享，症状是「任务管理器里躺着五个微信」。
 - **`LaunchAgentModule` 写成结构类型**而不是 `typeof import('apps/api/src/launch/agent')`：后者在构建期要求 tsc 能解析那个路径，而 desktop 既没把 `@fanhe/api` 声明成依赖、工作区根也没配路径别名 —— 真写上去会得到一条解析不了的 import，**且它只在类型位置出现、运行时一切正常**，属于最难查的一类错误。代价是契约要手写，接口因此收窄到只用得到的两个成员。
@@ -340,7 +360,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **`test/acceptance/t403-shell-launch.mjs` 刻意不放 `test/*.test.mjs`**（那是 node --test 的 glob）。同 T4-02，暂存根固定落系统盘 —— `ws-run.cmd` 把 `TMP` 指向工作区 `.tmp`，会让「找不到工作区根」这类用例自相矛盾。
 - **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 52**，合计 **402 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 10 项全通过。外壳冒烟 PASS（`渲染元素=1 console错误=0`；`反代到达上游=否` 是因为当时 8787 无监听，与 T4-02 同因，非回归）。
 
-### 4.1.4 T4-02 的实施记录（已完成，供对照）
+### 4.1.5 T4-02 的实施记录（已完成，供对照）
 
 - **配置文件落点**：工作区 `.config/fanhe-work/service.json`。**刻意不放 Electron 的 `userData`** —— 后者装的是 Chromium 缓存与 `credential.ts` 的凭据密钥库，搬进 U 盘既伤盘（与「数据库刻意不进 U 盘」同理）又会改变「凭据不随工作空间移动」的安全语义；而服务地址描述的恰恰是「这套工作空间接哪个服务」，该跟着介质走。`.config/` 是工作区既有的逐机配置目录（`ws-env.sh` 把 `XDG_CONFIG_HOME` 指向那里），已被根 `.gitignore` 第 6 行排除。
 - **形状只有 `serviceUrl` 一个字段**。本机与远程**不是两个槽位**，而是同一个地址的两种取值 ——「切换」就是把这一项改成另一个 URL。做成 `localUrl` / `remoteUrl` + `active` 会引入一个真实坏处：远程没配时切过去，外壳以「没有可用地址」启动，而这与「配错了」在现场看起来一模一样。单字段下配错会当场被校验挡下。
@@ -707,8 +727,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 前端偏好与主题 | `apps/web/src/lib/{preferences,theme,credential}.ts`、`apps/web/src/index.css` |
 | Prisma 配置与模型 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
 | 迁移目录 | `apps/api/prisma/migrations/`（**6 个**；时间戳是 UTC） |
-| 数据库 compose | `projects/fanhe-work/docker-compose.yml`（**T5-01 起为三服务**：db / api / web；容器操作经 `infra/portable/ws-compose.cmd`） |
-| 容器构建 | `projects/fanhe-work/.dockerignore`、**`apps/api/Dockerfile`**、**`apps/web/Dockerfile`**、**`apps/web/deploy/nginx.conf`** |
+| 数据库 compose | `projects/fanhe-work/docker-compose.yml`（**T5-01 起为三服务、T5-02 起为四服务**：db / migrate（跑完退出）/ api / web；容器操作经 `infra/portable/ws-compose.cmd`） |
+| 容器构建 | `projects/fanhe-work/.dockerignore`、`apps/api/Dockerfile`（**三阶段：build / runtime / migrate —— migrate 必须在末尾，而 compose 里 api 与 web 都要显式写 `target`**）、`apps/web/Dockerfile`、`apps/web/deploy/nginx.conf` |
+| 空卷验收脚本 | `projects/fanhe-work/tools/checks/t502-empty-volume.mjs`（T5-02：自建隔离环境 → 空卷 → 一条命令 → 22 项断言 → 清理；**可重复跑，不碰现有数据**） |
 | 容器编排密钥 | `projects/fanhe-work/.env.compose`（**不入版本控制**，`.gitignore` 已排除；内容与 `apps/api/.env` 那份刻意不同） |
 | 环境变量样例 | `apps/api/.env.example` |
 | 种子 | `apps/api/src/db/seed.ts` |
@@ -727,7 +748,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43、T4-04 为 9.44，服务端化 T5-01 为 9.45）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线），**9.44 记录 T4-04 启动自检的实施判断（三类失效的划分、外部模块复用边界、检查类功能的两条通用规则），9.45 记录 T5-01 容器编排的实施判断（生产形态编排、`HOST=0.0.0.0`、六个构建期踩坑）**。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43、T4-04 为 9.44，服务端化 T5-01 为 9.45、T5-02 为 9.46）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线），9.44 记录 T4-04 启动自检的实施判断（三类失效的划分、外部模块复用边界、检查类功能的两条通用规则），9.45 记录 T5-01 容器编排的实施判断（生产形态编排、`HOST=0.0.0.0`、六个构建期踩坑），**9.46 记录 T5-02 的实施判断（迁移执行者、`depends_on` 的两种条件、`x-` 锚点与单一来源、「不写 target 停在最后一个 FROM」那个真 bug）**。 |
 | `docs/PHASE-SUMMARY-2026-10-12.md` | **阶段性工作总结（换机检查点）**：总体进度、已完成 / 进行中 / 待办、文件与版本状态、换机衔接步骤、下一步 T4-02。**换机或新会话接手时先读本文，再读主文档。** |
 | `docs/UI-INTEGRATION-2026-10-11.md` | **本次 UI 集成记录（最终态）**：18 项导航信息架构与分层路径、两批边界、改动文件清单、四个关键对接点、五项用户裁决、版本号的展示与更新方式、验证结果与实跑中修掉的六个渲染层问题。 |
 | `docs/NEXT-TASK-PREP-阶段四-2026-10-11.md` | 阶段四开工准备（T4-01 开工清单；§八 为阶段三收口后的收尾更新）。**下一阶段执行前先读这份**。 |
@@ -795,6 +816,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 14:1x | **T5-01 实施（容器编排）· 阶段五开工** | 新增 `projects/fanhe-work/.dockerignore`、`apps/api/Dockerfile`（两阶段，运行阶段 `node:22-bookworm-slim` + `tini` + `USER node` + HEALTHCHECK）、`apps/web/Dockerfile`（构建 `node` → 运行 `nginx:1.27-alpine`）、`apps/web/deploy/nginx.conf`（`/api` 反代 + SPA 回退 + 哈希资源长缓存）、`infra/portable/ws-compose.cmd`（纯 ASCII）；`docker-compose.yml` 从单服务扩为 **db + api + web**（db 段逐字未动）；`.gitignore` 加 `.env.compose`。**业务代码一行未改**。**阶段五 1/5 完成** |
 | 10-12 14:1x | **T5-01 实跑验证** | `up -d --wait` 后**三容器全 Healthy**；web 根路径与深链 `/notes` 均 200 且大小相同；经 web 到 api 拿到 **api 自己的** `{"error":"unauthorized"}` 401；哈希资源 `max-age=31536000, immutable`；端口三处全绑 `127.0.0.1`；api 以 `uid=1000` 非 root 运行。四道门禁全绿 **426 项 0 失败**（未改业务代码，基线不变）。**期间踩掉六个构建期问题**：`# syntax=` 触发额外 docker.io 拉取、`.dockerignore` 排 `dist` 致运行阶段 COPY 不到、postinstall 拉 Electron、运行阶段 `tsc: not found`、漏 COPY `tsconfig.base.json`、`COPY` 路径相对上下文根 |
 | 10-12 14:1x | **T5-01 外壳冒烟对照** | 冒烟 PASS，**「反代到达上游=是」** —— T4-02 时同一判据是「否」（当时 8787 无监听），现在连的是容器化的 api。**同一条判据一个假一个真，比任何单独检查都更能说明这套编排真的通了** |
+| 10-12 14:3x | **T5-02 实施（连接串与迁移执行者）· 阶段五第二项** | `apps/api/Dockerfile` 加 `migrate` 阶段（挂在 `build` 上，只影响跑完即退出的容器）；`docker-compose.yml` 新增一次性 `migrate` 服务（`depends_on: db service_healthy`，api 等它 `service_completed_successfully`，`restart: 'no'`）、连接串与口令收成 `x-database-url` 单一来源、api 与 web 都显式写 `target: runtime`；新增 `tools/checks/t502-empty-volume.mjs`（22 项，**自带隔离 override 且用完即删**）。**业务代码一行未改**。**阶段五 2/5 完成** |
+| 10-12 14:3x | **T5-02 踩掉的一个真 bug** | migrate 阶段追加到 Dockerfile **末尾** → 「不写 `target` 停在最后一个 FROM」让 **api 也构建成 migrate 镜像** → api 容器反复重启、日志全是 `No pending migrations to apply`、而 healthcheck 报 healthy（重启循环里被短暂满足）。**前面还套着一层误导**：端口映射与健康结果都不稳，看起来像网络或端口问题，我先怀疑了 `!override`、容器复用、代理，全不是。判据是 `docker inspect -f '{{json .Config.Cmd}}'`。修法：compose 里显式 `target: runtime` |
+| 10-12 14:4x | **T5-02 空卷验收** | **22 项 0 失败**，且 prettier 格式化后复跑仍 22 项 0 失败。全新空卷 → 一条命令 → migrate exited(0) → 6 迁移全应用 → **重复执行表数不变** → api/web healthy → 深链回退 → 经 web 反代拿到 `{"initialized":false}` → 端口绑 127.0.0.1 → 两处连接串相等。**现有那套重建后一切正常**（6 迁移 / users=1 / initialized:true）。四道门禁全绿 **426 项 0 失败**（业务代码零改动）。提交 `16f73e8` |
 
 
 **§十一 新增/修改的关键文件（T4-01）**：`apps/desktop/package.json`（**新**，`@fanhe/desktop`，`productName: 梵禾 Work`，`main: dist/main.js`，`devDependencies.electron: 44.7.0`，脚本 build / typecheck / test / ensure-electron / start / dev / smoke）、`apps/desktop/tsconfig.json`（**新**，`module`/`moduleResolution: NodeNext`，**刻意不写 `"type": "module"` 以产出 CJS**）、`apps/desktop/src/server.ts`（**新**，内置静态服务：MIME 表、逐跳头与剥离头、`startStaticServer` / `serveStatic`（SPA 回退 + 405 + 越界 403）/ `sendFile`（哈希资源长缓存、index 不缓存）/ `proxyToService`（剥 `host`/`content-length`/`accept-encoding`））、`apps/desktop/src/main.ts`（**新**，主进程：`DIST_ROOT`、`SERVICE_URL`（`FANHE_SERVICE_URL`）、`IS_SMOKE`、`no-proxy-server`、`buildWindow`、`setWindowOpenHandler`/`will-navigate` 白名单、`runSmoke`）、`apps/desktop/src/preload.ts`（**新**，`contextBridge` 暴露 `fanheDesktop`）、`apps/desktop/scripts/ensure-electron.mjs`（**新**，幂等二进制自检）、`apps/desktop/scripts/launch.mjs`（**新**，摘 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否 `--no-sandbox`）、`apps/desktop/test/server.test.mjs`（**新**，10 项）、`apps/desktop/.gitkeep`（删）；`pnpm-workspace.yaml`（`onlyBuiltDependencies: [electron]`）、根 `package.json`（加 `postinstall`）、`eslint.config.js`（`apps/desktop` 进 Node 全局块）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` / `apps/api` / `packages/shared` 本轮一行未改。**
@@ -802,6 +826,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 **§十一 新增/修改的关键文件（UI 集成）**：`packages/shared/src/navigation.ts`（18 项 / 分组 / `slug` / `buildNavSections` / `navCodeFromPath` 重写）、`packages/shared/src/permissions.ts`（运维信息平台改名）、`packages/shared/test/navigation.test.mjs`（重写，32 项）；`apps/web/src/components/Sidebar.tsx`（重写）、`TopBar.tsx`（五项菜单 + 版本号行）、`AppShell.tsx`（外层 `relative`）、`components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`（新）、`pages/HomePage.tsx`（新）、`pages/WorkbenchPage.tsx`（按地址分派）、`routes.tsx`（`routePath` + `MODULE_SUB_ROUTES`）、`lib/nav-icons.ts`（重写）、`lib/version.ts`（新）、`vite-env.d.ts`、`index.css`（hero 令牌族）、`vite.config.ts`（`define` 注入构建常量）、根 `package.json`（`0.0.0` → `0.1.0`）；`apps/web/test/e2e-auth.mjs`（新外壳同步 + `mouseMove` / `elementCenter` / `selectThemeOption` / `openHomeSection`）、`apps/web/test/version.test.mjs`（新，8 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS,UI-INTEGRATION-2026-10-11}.md`。**业务逻辑（四个面板与 `lib/` 数据层）一行未改。**
 
 **§十一 新增/修改的关键文件（T3-12）**：`apps/web/src/lib/api.ts`（增 `eventLogsRequest`）、`apps/web/src/lib/events.ts`（增 `loadEventLogs`）、`apps/web/src/lib/event-display.ts`（增动作码映射 / `formatMoment` / `formatDuration`）、`apps/web/src/components/events/EventDetailDialog.tsx`（**新**）、`apps/web/src/components/events/EventRow.tsx`（标题改可点按钮）、`apps/web/src/components/events/EventList.tsx`（透传 `onOpenDetail`）、`apps/web/src/components/events/EventsPanel.tsx`（`detailId` / `detailOpen` 与对话框挂载）、`apps/web/test/event-display.test.mjs`（增 17 项）、`apps/web/test/e2e-auth.mjs`（新增 T3-12 段 11 项 + 截图等待 Dialog 完成 + Checkbox / 标题按钮改 `element.click()`）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**后端与共享包本轮一行未改**，**行结构（除标题变成按钮）一行未改**。
+
+**§十一 新增/修改的关键文件（T5-02）**：`projects/fanhe-work/apps/api/Dockerfile`（加 `FROM build AS migrate` 阶段，`CMD` 为 `prisma migrate deploy`；**文件末尾带一条关于「不写 target 会停在最后」的警告**）、`projects/fanhe-work/docker-compose.yml`（新增 `migrate` 一次性服务、`x-database-url` 顶层锚点、api 与 web 的 `target: runtime`、`restart: 'no'`、healthcheck 改用 `$${POSTGRES_USER}`）、`projects/fanhe-work/tools/checks/t502-empty-volume.mjs`（**新**，22 项）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/api/src` / `apps/web/src` / `packages/shared/src` 本轮一行未改** —— 这正是验收要点「连接串切换后无需改业务代码」的直接证据（`git diff --stat` 对这些路径为空）。
 
 **§十一 新增/修改的关键文件（T5-01）**：`projects/fanhe-work/.dockerignore`（**新**，排除 `node_modules` / `**/dist` / `.env` / `data` 与并行 UI 产物目录）、`projects/fanhe-work/apps/api/Dockerfile`（**新**，两阶段：`build` 装全量依赖并 `prisma generate` + `tsc`，`runtime` 只带 `--prod` 依赖与 `dist`；`ENV HOST=0.0.0.0`、`tini` 作 PID 1、`USER node`、HEALTHCHECK 打 `/api/`）、`projects/fanhe-work/apps/web/Dockerfile`（**新**，构建 `node:22-bookworm-slim` 出 `dist`，运行 `nginx:1.27-alpine`）、`projects/fanhe-work/apps/web/deploy/nginx.conf`（**新**，`upstream api_upstream { server api:8787 }`、`/api/` 反代并清逐跳头、`/assets/` 长缓存 `1y immutable`、SPA 回退）、`projects/fanhe-work/docker-compose.yml`（新增 `api` 与 `web` 两个服务，**db 段逐字未动**）、`.gitignore`（加 `.env.compose`）、`infra/portable/ws-compose.cmd`（**新**，纯 ASCII）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/api/src` / `apps/web/src` / `packages/shared/src` 本轮一行未改** —— `DATABASE_URL` 与 `JWT_SECRET` 都从环境变量读，改连接串不需要动业务代码，这正是 T5-02 验收要点的前置条件。
 
