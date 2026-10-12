@@ -101,8 +101,26 @@ export const env = {
      * 密钥短于摘要长度时，攻击者可以暴力搜索密钥空间而不是伪造签名。
      *
      * 生成方式：`node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`。
+     *
+     * ## 用 getter 而不是直接求值，这是 T5-03 才暴露出来的一条
+     *
+     * 本文件在**模块加载时**求值整个 env 对象，而这里是 `requireSecret(...)` ——
+     * 于是任何 import 了这个模块的脚本都被迫提供 `JWT_SECRET`，哪怕它根本不签发
+     * 令牌。`src/db/seed.ts` 就是这样撞上的：它只需要 `DATABASE_URL`，却因为
+     * `db/prisma.ts` 引了 env 而在容器里报「缺少环境变量 JWT_SECRET」。
+     *
+     * **那个容器的整件事就是建表 + 写种子**，它没有理由持有签名密钥 —— 给了它
+     * 等于扩大密钥的暴露面，而且以后每加一个运维脚本就要重复注入一次。
+     *
+     * 改成 getter 之后，只有真的去读 `env.jwt.secret` 才会求值。
+     *
+     * **代价是「启动即失败」不再自动发生**，所以 `index.ts` 在 listen 之前显式读
+     * 一次（见那里的 `assertRequiredEnv`）—— 把「加载时校验」换成「启动时校验」，
+     * 时机差几毫秒，而配置缺失仍是在服务对外之前暴露。
      */
-    secret: requireSecret('JWT_SECRET', 32),
+    get secret(): string {
+      return requireSecret('JWT_SECRET', 32)
+    },
     /** 访问令牌有效期，默认 15 分钟。短到即使泄露也很快失效。 */
     accessTtlSeconds: readInt('ACCESS_TOKEN_TTL_SECONDS', 900, 60, 24 * 3600),
     /** 刷新令牌有效期，默认 30 天。决定「多久不用就要重新登录」。 */

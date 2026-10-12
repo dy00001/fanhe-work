@@ -176,6 +176,30 @@ ENV NODE_ENV=production \
 # 迁移，那需要影子库所在的实例有建库权限，而部署环境通常不给。deploy 只应用
 # 已有的迁移文件，正是部署该做的事。
 #
+# ## 建表之后必须跑种子（T5-03 加的）
+#
+# **只建表是不够的 —— 建完表的库是不可用的。** 实测：全新卷跑完 `migrate deploy`
+# 之后，`permissions` / `roles` / `role_permissions` 三张表**全是 0 行**，而
+# 这是 `20261010150103_init` 那个迁移建出来的空表。于是走初始化向导建 owner 时
+# 接口返回 500，消息是「库里没有 owner 角色，先执行 pnpm db:seed」——
+# **系统自己的报错把该做什么说得很清楚，但那时用户已经在一个坏掉的系统里了。**
+#
+# 权限体系是**代码定义**的（`packages/shared` 的 `PERMISSION_CATALOG` /
+# `ROLES` / `ROLE_PERMISSIONS`），不是用户数据，所以它属于部署而不属于迁移。
+# 这条命令幂等：权限点与角色按 code upsert，角色权限关联做差集同步（新增缺失的、
+# 删除多余的），因此每次部署都跑一遍是安全的，且改了权限定义后重跑即生效。
+#
+# **种子不创建任何账号**（`src/db/seed.ts` 里明确写了这件事），所以自动执行它
+# 不会在任何部署环境里留下一个带默认口令的管理员 —— 那才是最常见的一类事故
+# 来源。账号仍然只由界面上的初始化向导创建。
+#
+# 用 `&&` 而不是分成两个 CMD：任一步失败就该让这个容器以非零码退出，而
+# `service_completed_successfully` 会因此挡住 api 起来 —— 「建表成功但种子失败」
+# 绝不能被当成部署成功。
+#
+# @fanhe/shared 的 dist 由 build 阶段产出并已在本阶段的 /repo 里，种子脚本从它取
+# 权限点与角色定义，所以不需要额外构建。
+#
 # ## ⚠️ 这个阶段在文件末尾，而那本身是个陷阱
 #
 # **不写 `target` 的构建会停在最后一个 FROM**，也就是这个 `migrate`。于是任何
@@ -184,6 +208,6 @@ ENV NODE_ENV=production \
 # （它在 `restart` 循环里被短暂满足）。
 #
 # 这个坑在 T5-01 时不存在，因为那时 `runtime` 恰好是最后一个阶段 —— **那是巧合，
-# 不是设计**。所以 compose 里的 api 服务**必须**写 `target: runtime`。本行注释
-# 就是为了下一个人别把它当默认值。
-CMD ["pnpm", "--filter", "@fanhe/api", "exec", "prisma", "migrate", "deploy"]
+# 不是设计**。所以 compose 里的 api 与 web 服务**必须**写 `target: runtime`。
+# 本行注释就是为了下一个人别把它当默认值。
+CMD ["sh", "-c", "pnpm --filter @fanhe/api exec prisma migrate deploy && pnpm --filter @fanhe/api db:seed"]
