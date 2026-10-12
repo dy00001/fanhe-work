@@ -5,9 +5,9 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填） |
-> | 对应提交 | 代码基线 `d76e084`（**T4-03 本机代理内置**；T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，UI 集成为 `2576388`，阶段三为 `a5370b0`）；本文档定稿于 T4-03 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
-> | 当前阶段 | **阶段零至三已完成（38/50）；阶段四 3/4：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置均已完成。** 下一项是 T4-04 启动自检 |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**） |
+> | 对应提交 | 代码基线 `760b92f`（**T4-04 启动自检，阶段四收口**；T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T4-04 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
+> | 当前阶段 | **阶段零至三已完成（38/50）；阶段四 4/4 全部完成（T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检）。** 阶段四出口条件已达成（见第七章）。下一项是阶段五 T5-01 容器编排 |
 > | 最后验证 | 四道门禁全绿（**378 项**，2026-10-12 12:2x 实跑）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本次无界面改动未重跑）；外壳冒烟 **PASS**（渲染出界面、console 零错误、**反代到达上游=是**） |
 >
 > 阅读顺序建议：**第零节（速览）→ 第二节（进度）→ 第七节（换机步骤）**，其余按需查。
@@ -23,7 +23,7 @@
 
 **界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。
 
-**桌面外壳 3/4**（阶段四）：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖，开发与验证仍可用。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。下一项是 T4-04 启动自检。
+**桌面外壳 4/4，阶段四收口**：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。T4-04 加了启动自检：查每条配置指向的文件还在不在，并把三类失效各配一句**方向正确**的引导（代理不可用去查工作区、配置不合法去重新编辑、路径失效去确认路径）。下一项是阶段五 T5-01 容器编排。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -118,7 +118,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段一 | 账号与权限（T1-01 ~ T1-12） | ✅ 完成（验收 7 项勾 6，余 1 项见 4.5） |
 | 阶段二 | 主框架与 UI 骨架（T2-01 ~ T2-07） | ✅ 完成（验收 6 项全勾）；**UI 集成两批已完成**（导航 18 项 + 首页三段式 + 版本号），见 `UI-INTEGRATION-2026-10-11.md` |
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
-| 阶段四 | Electron 外壳（T4-01 ~ T4-04） | 🔄 进行中：**T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置完成（3/4）**，T4-04 未开始 |
+| 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ✅ **已完成（4/4）**：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检。出口条件已达成（见第七章） |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | ⬜ 未开始 |
 | 阶段六 | 更新通道 | ⬜ 未开始 |
 
@@ -139,6 +139,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `760b92f` | feat(阶段四): T4-04 启动自检（**阶段四收口，阶段四代码基线**） |
 | `d76e084` | feat(阶段四): T4-03 本机代理内置（**外壳代码基线**） |
 | `b03ddb5` | feat(阶段四): T4-01 Electron 外壳脚手架（**外壳代码基线**） |
 | `c8f7a4d` | docs: WORK-STATUS 头部标注 N-01 定稿提交号 |
@@ -168,7 +169,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **402 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70** + **`apps/desktop` 52**。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（配置 18 + 服务端 10 + 代理形态复核 17 + 跨包路径 7）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
+| `pnpm test` | **426 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70** + **`apps/desktop` 76**。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（+ 代理形态复核 17 + 跨包路径 7）→ T4-04 **76**（+ 自检 24）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
 | 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T4-01 无界面改动，未重跑。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
@@ -258,7 +259,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **详情面板里没有编辑入口、没有勾选框**：编辑走行内菜单、状态走行内勾选框，把它们再搬进面板只会给同一个动作两条路径。要在详情里改状态是以后可能的独立改动。
 - **相关规则位置**：取值域与传输类型在 `packages/shared/src/event.ts`，读写与事务在 `apps/api/src/event/events.ts`，接口在 `apps/api/src/routes/events.ts`，展示规则与乐观改状态的纯函数在 `apps/web/src/lib/event-display.ts`，界面在 `apps/web/src/components/events/`。判断见 9.36、9.37、9.38 与 9.39。
 
-### 3.5 阶段四 · 桌面外壳（T4-01 ~ T4-03 完成，T4-04 未开始）
+### 3.5 阶段四 · 桌面外壳（4/4 已完成，阶段四收口）
 
 **这一阶段改的是运行宿主，不是业务代码。** T4-01 只做一件事：让外壳打开并渲染出已有界面。
 
@@ -276,15 +277,31 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ## 四、待办事项
 
-### 4.1 下一项：T4-04 启动自检（P0，可直接开工）
+### 4.1 下一项：T5-01 容器编排（P0）
 
-> **T4-01 ~ T4-03 均已完成**（外壳能打开并渲染界面、服务地址可配置且切换后请求真的到达新上游、远程模式下能启动本机软件）。下一项是 T4-04，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 201 行，阶段四验收见第七章。
+> **阶段四已收口（T4-01 ~ T4-04 全 4/4）**。外壳能打开并渲染界面、服务地址可配置且切换后请求真的到达新上游、远程模式下能启动本机软件、启动自检能把失效配置在点击前报出来 —— 阶段四出口条件（第七章四项验收）全部达成。下一项是阶段五 T5-01，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 205 行，阶段验收见第七章。
 
-- **T4-04 要做什么**：启动时自检一遍——本机代理能不能用、启动配置里那些路径还在不在——并在失效时给出可照着修的引导（而不是让用户点了启动才看到一个没头没尾的失败）。
-- **可以直接复用的东西**：`apps/api/src/launch/agent.ts` 的 `inspectExecutablePath`（带 `PATH_INSPECT_TIMEOUT_MS` 超时，专门对付 `\\server\share\...` 这种死掉的共享）与 `apps/api/src/routes/status.ts` 的 `listProfileStatuses`。**优先复用，不要在 desktop 侧重写一份路径检查。**
-- **与 T4-03 的分工**：T4-03 的复核（`normalizeProfile`）管「送来的东西像不像一条配置」，自检管「这条配置指的东西还在不在」。两者失败原因不同，界面给的动作也不同（前者不该让用户去改路径，后者要）。
-- **剩余范围**：另有一项**不在编号内但属既定范围**：`credential.ts` 的存储后端换成主进程 `safeStorage`，建议单独一笔。
-- **别顺手做阶段五的容器化。**
+- **阶段五第一项做什么**：一份 `docker-compose` 把 web + api + db 编排起来，一条命令拉起全套。
+- **阶段五与阶段四可并行**（计划第八章记着阶段五不占关键路径）。但**先做 T5-01 会更省事** —— T4-02 已把「服务地址」做成了配置项，而容器化之后本机 api 的地址就是 `http://127.0.0.1:8787` 这个缺省值，切换那条链路等于已经被验证过一遍了。
+- **另有一项不在阶段五编号内但属既定范围**：`credential.ts` 的存储后端换成主进程 `safeStorage`（见 4.1.2 末尾与 `DEVELOPMENT-PLAN.md` 9.42），建议单独一笔。
+- **别在阶段五里顺手做阶段六**（多端同步 / 协作）。
+
+### 4.1.2 T4-04 的实施记录（已完成，供对照）
+
+- **三类失效必须分开，因为引导方向不同**：`agent_unavailable`（代理不可用 → 去查工作区）、`invalid_profile`（送来的东西不像配置 → 重新编辑；**路径根本没被看过，所以引导绝不能让用户去改路径**）、`path_unavailable`（路径不在 → 去确认路径，必要时重新指定）。合成一类看着省事，代价是其中两类的文案必有一份是错的，而用户分辨不出来。
+- **路径检查必须复用 api 的 `inspectExecutablePath`**，也就是启动时那一个。自检说「可用」而点击失败是这类功能最坏的失效 —— 用户会开始不信任自检，进而不再看它。`LaunchAgentModule` 契约因此加了 `inspectExecutablePath`，并**刻意要求它是「这个模块上的方法」**而不是自由函数（否则外壳会自己写一份 stat，两份实现会对「目录算不算存在」「UNC 超时怎么办」给出不同答案）。
+- **不能复用 api 的 `listProfileStatuses`**：它要 `userId` 且走两次分组查询查启动记录，复用它外壳就得变成一个连库的服务，而「外壳不连数据库」是 T4-01 定下的形态。可复用的只有 `inspectExecutablePath`。
+- **形态复核与路径检查都做成注入的依赖**，而不是在自检模块里 import。起因是 desktop **刻意产出 CJS**（保住沙箱化预加载，见 `tsconfig.json`），模块间 import 必须写 `.js` 后缀；而单测走类型剥离直接加载 `src/*.ts`，那里没有 `.js` 文件 → 撞 `ERR_MODULE_NOT_FOUND`（指向 `src/agent.js`）。这是本包第一次出现模块间 import 撞上双路径。**注入之后两者仍传的是同一份实现**（`main.ts` 传 `normalizeProfile` 与 agent 的方法），「自检与启动的判断不分叉」这条没丢。
+- **并发检查全部路径，不是逐条 await**。`PATH_INSPECT_TIMEOUT_MS` 是 5 秒，而失效配置的典型成因正是指向网络共享（那台机器关机时 stat 不会立刻失败）→ 逐条 await 的话，10 条指向同一台关机机器的配置就是 50 秒，而自检恰恰是「用户已经等着了」的场合。与 api 侧 `listProfileStatuses` 同一口径。
+- **单条检查失败不中断整轮**，按 `missing` 处理，方向与 api 侧兜底一致：**宁可让用户去确认路径，好过让他点了才收到失败。** 同理，判定可用时**只认 `ok`**，其余值一律按不可用 —— 误报可用比误报不可用糟得多。
+- **整体不抛**：代理加载不了时返回一份**可显示的报告**（含一条 `agent_unavailable`）而不是错误，界面因此不必区分「没检查成」与「检查出问题」—— 用户也分不清那两者的区别。
+- **诊断按配置顺序排序**：界面列表本身按 `sortOrder` / 名称排，两套顺序叠在一起会让人以为漏了哪一条。
+- **「空配置」与「全部形态不合法」都提前返回**，不做任何路径检查 —— 没有一条值得查的路径就别付那个代价。
+- **IPC 层空配置先判、不加载代理**：先加载会在工作区恰好有问题时报成「代理不可用」，那与事实不符（代理没事，只是没东西可查）。
+- **冒烟的自检判据从渲染进程里调**（`executeJavaScript`），不是主进程自调 —— 预加载没暴露方法、通道名写错、`contextBridge` 克隆失败这三段只有这样才验得到。**判据只看「返回结构完整」**，不判「查出几条问题」，否则冒烟成败会随用户库里有没有失效配置而变。
+- **验收脚本用真实文件与真实 agent 核心**（`test/acceptance/t404-diagnostics.mjs`，21 项），不靠替身 —— 全用注入的话，「路径检查与启动用的是同一份实现」这条就没人验了。里面还断言了「自检与启动对形态的判断一致」（两侧都用真实 `normalizeProfile`）。
+- **并发那条判据验过能证伪**：临时把 `Promise.all` 改回逐条 await，该用例确实失败（串行 600ms vs 阈值 400ms），恢复后全绿 —— 用**耗时**判而不是「并发计数」，因为实现完全可能并发发起却仍然串行 await，而那种写法在计数上看起来是对的。
+- **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 76**，合计 **426 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 21 项全通过。外壳冒烟 PASS（新增一行「启动自检=可用 代理=可用 配置=0条 可用=0条」）。e2e 无界面改动未重跑（仍 149）。提交 `760b92f`。
 
 ### 4.1.1 T4-03 的实施记录（已完成，供对照）
 
@@ -659,7 +676,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 共享包 | `packages/shared/src/`（类型与判定）、`packages/shared/test/` |
 | 前端外壳与导航 | `apps/web/src/components/{AppShell,Sidebar,TopBar,StateView}.tsx`、`apps/web/src/routes.tsx` |
 | 前端首页三段式与版本号（**UI 集成新增**） | `apps/web/src/components/home/{CaseGallery,LaunchSection,RecordSection}.tsx`、`apps/web/src/pages/HomePage.tsx`、`apps/web/src/lib/{nav-icons,version}.ts`；版本常量由 `apps/web/vite.config.ts` 的 `define` 注入 |
-| 桌面外壳（**阶段四 T4-01 ~ T4-03**） | `apps/desktop/src/{main,preload,server}.ts`（主进程 / 预加载 / 内置静态服务）、**`src/{agent,paths}.ts`（T4-03：主进程侧形态复核 + 跨包路径解析与 `import()` 加载 api 的 agent 源码）**、**`src/config.ts`（T4-02：服务地址配置读写）**、`apps/desktop/scripts/{ensure-electron,launch}.mjs`（二进制下载 / 启动器）、`apps/desktop/test/{server,agent,paths,config}.test.mjs` + **`test/acceptance/{t402-service-switch,t403-shell-launch}.mjs`**、`apps/desktop/{package.json,tsconfig.json}`；根 `package.json` 的 `postinstall` 调 `ensure-electron` |
+| 桌面外壳（**阶段四 T4-01 ~ T4-04，全部完成**） | `apps/desktop/src/{main,preload,server}.ts`（主进程 / 预加载 / 内置静态服务）、**`src/{agent,paths}.ts`（T4-03：主进程侧形态复核 + 跨包路径解析与 `import()` 加载 api 的 agent 源码）**、**`src/diagnostics.ts`（T4-04：三类失效的启动自检，并发路径检查）**、**`src/config.ts`（T4-02：服务地址配置读写）**、`apps/desktop/scripts/{ensure-electron,launch}.mjs`（二进制下载 / 启动器）、`apps/desktop/test/{server,agent,paths,config,diagnostics}.test.mjs` + **`test/acceptance/{t402-service-switch,t403-shell-launch,t404-diagnostics}.mjs`**、`apps/desktop/{package.json,tsconfig.json}`；根 `package.json` 的 `postinstall` 调 `ensure-electron` |
 | 前端启动通道 UI | `apps/web/src/components/launch/`、`apps/web/src/lib/{api,launch,launch-icons,relative-time}.ts` |
 | 前端工作纪要 UI | `apps/web/src/components/notes/`（`NotesPanel` / `NoteList` / `NoteEditor` / `MarkdownPreview` / `TagInput`）、`apps/web/src/lib/notes.ts` |
 | 前端本机草稿暂存（T3-08） | `apps/web/src/lib/note-draft.ts`（槽名、带版本号的序列化、过期与容量清理、写失败重试；接口注入 storage 以便单测） |
@@ -748,6 +765,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 12:3x | **T4-02 实施（服务地址切换）** | 新增 `apps/desktop/src/config.ts`（服务地址读写，配置落工作区 `.config/fanhe-work/service.json`）+ `test/config.test.mjs`（18 项）+ `test/acceptance/t402-service-switch.mjs`（11 项）；`main.ts` 删掉 `SERVICE_URL` 常量改为 `registerServiceIpc()`；`preload.ts` 加 `getServiceStatus` / `setServiceUrl`。四道门禁全绿 **378 项 0 失败**（desktop 10 → 28）。提交 `f2bfc16` + `9963276` |
 | 10-12 13:0x | **T4-03 实施（本机代理内置）** | 新增 `apps/desktop/src/{agent,paths}.ts`（主进程侧形态复核 + 跨包路径解析与 `import()` 加载 api 的 agent 源码）+ `test/agent.test.mjs`（17 项）+ `test/paths.test.mjs`（7 项）+ `test/acceptance/t403-shell-launch.mjs`（10 项）；`main.ts` 加 `registerLaunchIpc()`；`preload.ts` 加 `runLaunchProfile`；`package.json` 加 `@fanhe/shared` 依赖。**`apps/api/src/launch/agent.ts` 一行未改**。四道门禁全绿 **402 项 0 失败**（desktop 28 → 52） |
 | 10-12 13:0x | **T4-03 验收与冒烟** | 验收脚本 10 项全通过（远程模式下真进程跑起来并写出标记文件、假上游零请求）；冒烟 PASS（`渲染元素=1 console错误=0`）。**期间修掉一个真 bug**：`import()` 收路径而非 URL 在 Windows 上抛 `ERR_UNSUPPORTED_ESM_URL_SCHEME`，单测用假模块时看不出来 |
+| 10-12 13:5x | **T4-04 实施（启动自检）· 阶段四收口** | 新增 `apps/desktop/src/diagnostics.ts`（三类失效 + 并发路径检查）、`test/diagnostics.test.mjs`（24 项）、`test/acceptance/t404-diagnostics.mjs`（21 项）；`agent.ts` 的 `LaunchAgentModule` 契约加 `inspectExecutablePath`；`main.ts` 加 `launch:diagnostics` 与 `loadLaunchAgent()` 共用加载、冒烟增一条自检判据；`preload.ts` 加 `checkLaunchProfiles`。四道门禁全绿 **426 项 0 失败**（desktop 52 → 76）。**阶段四 4/4 完成，出口条件达成** |
 
 **§十一 新增/修改的关键文件（T4-01）**：`apps/desktop/package.json`（**新**，`@fanhe/desktop`，`productName: 梵禾 Work`，`main: dist/main.js`，`devDependencies.electron: 44.7.0`，脚本 build / typecheck / test / ensure-electron / start / dev / smoke）、`apps/desktop/tsconfig.json`（**新**，`module`/`moduleResolution: NodeNext`，**刻意不写 `"type": "module"` 以产出 CJS**）、`apps/desktop/src/server.ts`（**新**，内置静态服务：MIME 表、逐跳头与剥离头、`startStaticServer` / `serveStatic`（SPA 回退 + 405 + 越界 403）/ `sendFile`（哈希资源长缓存、index 不缓存）/ `proxyToService`（剥 `host`/`content-length`/`accept-encoding`））、`apps/desktop/src/main.ts`（**新**，主进程：`DIST_ROOT`、`SERVICE_URL`（`FANHE_SERVICE_URL`）、`IS_SMOKE`、`no-proxy-server`、`buildWindow`、`setWindowOpenHandler`/`will-navigate` 白名单、`runSmoke`）、`apps/desktop/src/preload.ts`（**新**，`contextBridge` 暴露 `fanheDesktop`）、`apps/desktop/scripts/ensure-electron.mjs`（**新**，幂等二进制自检）、`apps/desktop/scripts/launch.mjs`（**新**，摘 `ELECTRON_RUN_AS_NODE`、按 `FANHE_NO_SANDBOX` 决定是否 `--no-sandbox`）、`apps/desktop/test/server.test.mjs`（**新**，10 项）、`apps/desktop/.gitkeep`（删）；`pnpm-workspace.yaml`（`onlyBuiltDependencies: [electron]`）、根 `package.json`（加 `postinstall`）、`eslint.config.js`（`apps/desktop` 进 Node 全局块）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web` / `apps/api` / `packages/shared` 本轮一行未改。**
 
