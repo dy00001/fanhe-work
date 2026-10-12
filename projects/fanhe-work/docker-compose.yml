@@ -1,4 +1,4 @@
-# 梵禾 Work 的服务端化编排（T5-01）。
+# 梵禾 Work 的服务端化编排（T5-01 建立，T5-02 补上迁移与连接串单一来源）。
 #
 # ## 编排的是「生产形态」
 #
@@ -7,7 +7,30 @@
 # 因为 T5-04（Cloudflare Tunnel 出站）要暴露的正是这一套，编排开发形态等于把工作
 # 做两遍。
 #
-# ## 三条不可省的约束
+# ## 四个服务，其中一个跑完就退出
+#
+#   db  →  migrate  →  api  →  web
+#
+# `migrate` 是一次性的（跑完退出，`restart: no`），它存在是因为 **T5-01 漏了迁移的
+# 执行者**：换一台机器、卷是空的，`up -d --wait` 会一路绿到三个容器 healthy ——
+# 因为 api 连得上库，而**连接成功与库里有表是两件事**（实测全新卷里 0 张表）。
+# 症状要等第一个请求打进来才出现，形态是 `P2021: The table does not exist`，
+# 看起来像代码问题而不是部署问题。详见 `apps/api/Dockerfile` 的 migrate 阶段。
+#
+# ## 迁移的三条不可省约束
+#
+# 一是 **migrate 必须等 db 健康**（`condition: service_healthy`）—— 只等启动顺序的话，
+#    它会在 initdb 还没跑完时就去连库。
+#
+# 二是 **api 必须等 migrate 成功退出**（`condition: service_completed_successfully`）。
+#    这是与 `service_healthy` 不同的另一种条件：等的是「跑完并成功」，不是「还活着」。
+#    少了它，api 与 migrate 并发启动，api 可能在建表完成前就接到第一个请求。
+#
+# 三是 **`migrate` 的重启策略必须是 `no`**。默认的 `unless-stopped` 会让一个跑完就
+#    退出的容器被反复重启，而每次重启都会连一次库 —— 部署完再观察几小时，db 的
+#    日志里全是重复连接，而 api 那边一切正常。
+#
+# ## 三条不可省的约束（原有的）
 #
 # 一是 **api 容器里 `HOST=0.0.0.0`**。api 代码的默认是 `127.0.0.1`
 #    （`apps/api/src/config/env.ts`），那是「只让本机访问」的意思；而容器里的
@@ -22,19 +45,36 @@
 #    提供页面（此时点接口会 502，刷新就好）。等健康会让「前端能打开」这件事也
 #    依赖数据库，不划算。
 #
+# ## 连接串与口令各写一遍是个陷阱
+#
+# 下面 `POSTGRES_PASSWORD` 与 `DATABASE_URL` 里嵌的那份口令**必须是同一个值**，
+# 而它们分处两个 YAML 位置：改一处忘了另一处，症状是 db  healthy 但 api 连不上，
+# 而那条错误（`password authentication failed`）指向的是「口令不对」，不会提到
+# 「你可能只改了一处」。
+#
+# T5-01 让它们各自硬编码，本文件顶部的 `x-` 扩展字段把它们收成一处 —— 改口令只改
+# 一个地方，两边同时生效。
+#
 # ## 端口绑 127.0.0.1 而非 0.0.0.0
 #
 # 与 api 仅监听回环、db 同理：开发期的服务不应该对局域网可达。
 # **T5-04 的 Tunnel 是纯出站连接**，不靠这里的端口暴露到公网 —— 阶段五的出口条件
 # 「无公网入站端口暴露」正是靠这一点达成，而不是靠这里的绑定。
 #
-# ## 数据库部分刻意未改动
+# ## db 服务与命名卷
 #
-# db 服务与命名卷是 T5-02 的范围（数据库容器化与数据迁移）。本轮**刻意不动**：
-# 卷里是实验版现有的数据，换掉会丢，而「一条命令拉起全套」这个验收点不需要
-# 动数据也成立。
+# 卷是 **T5-02 才真正动过的部分**：T5-01 复用了开发期那个 `fanhe-work-pgdata`，
+# 所以它的 6 个迁移其实是开发期在本机 `db:deploy` 出来的 —— 那条路径没有验证过
+# 「空卷 → 可用」这条链。卷名保持不变正是为了**不丢现有数据**。
 
 name: fanhe-work
+
+# 连接串与口令的单一来源。下面两个字段被 db 与 api/migrate 共用，因此
+# 「改口令」这件危险操作只发生在一处。
+#
+# **`x-` 前缀是 compose 的扩展字段约定**：以它开头的顶层键会被 compose 忽略而保留
+# 在文件里，作用是当锚点与文档。它不是内置能力，只是 YAML 的锚点语法。
+x-database-url: &database-url 'postgresql://${FANHE_DB_USER:-fanhe}:${FANHE_DB_PASSWORD:-fanhe}@db:5432/${FANHE_DB_NAME:-fanhe_work}?schema=public'
 
 services:
   db:
@@ -43,9 +83,10 @@ services:
     restart: unless-stopped
 
     environment:
-      POSTGRES_USER: fanhe
-      POSTGRES_PASSWORD: fanhe
-      POSTGRES_DB: fanhe_work
+      # 三个值都带默认值，与上面那个连接串的默认值是**同一组**。给了值时两边一起变。
+      POSTGRES_USER: ${FANHE_DB_USER:-fanhe}
+      POSTGRES_PASSWORD: ${FANHE_DB_PASSWORD:-fanhe}
+      POSTGRES_DB: ${FANHE_DB_NAME:-fanhe_work}
 
       # 排序规则在建库时定死，事后更改需要重建数据库，所以这一项现在就要选对。
       #
@@ -65,12 +106,41 @@ services:
 
     # 健康检查让 `docker compose up -d --wait` 能真正等到可连接，而不是等到
     # 容器进程起来。迁移脚本依赖这一点，否则会在 initdb 还没结束时就去连库。
+    #
+    # 这里用 `$${POSTGRES_USER}`（`$$` 是 compose 的转义，运行时才是 `${}`）而不是
+    # 把名字再写一遍 —— 上一条把这个变量喂给容器，用容器自己读回来才不会分叉。
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U fanhe -d fanhe_work']
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 5s
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # 一次性服务：把迁移应用到库上，跑完退出。见文件头「迁移的三条不可省约束」。
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      # 同一个 Dockerfile 的另一个阶段。**不指定就等于不用那个阶段** ——
+      # 构建会停在最后一个 FROM，而那正是 runtime（只带生产依赖、跑 node dist/index.js）。
+      target: migrate
+    # 不给 container_name：一次性容器留着名字会在第二次 `up` 时撞名，而它本来
+    # 就不该被人 `docker exec` 进去。
+    #
+    # **`restart: no` 是这条服务的一部分语义，不是默认值。** 默认的 unless-stopped
+    # 会让这个跑完就退出的容器被反复重启，每次都连一次库。
+    restart: 'no'
+
+    environment:
+      # 指向 compose 网络里的服务名 `db`，不是 127.0.0.1（容器里它指向容器自己）。
+      DATABASE_URL: *database-url
+      # Prisma 7 的配置在 prisma.config.ts 里显式读这个变量；缺了它会用那个文件里
+      # 指向 127.0.0.1 的兜底值，于是 migrate 会去连**它自己**而失败。
+      PGSSLMODE: disable
+
+    depends_on:
+      db:
+        condition: service_healthy
 
   api:
     build:
@@ -79,6 +149,11 @@ services:
       # `docker compose up` 与从别处跑 `-f` 指定路径都能得到同一个结果。
       context: .
       dockerfile: apps/api/Dockerfile
+      # **`target` 不是可选的。** 不写它，构建会停在 Dockerfile 的最后一个
+      # FROM，而那现在是 `migrate` 阶段（见该文件末尾的警告）。症状是 api 容器
+      # 反复重启、日志全是 `No pending migrations to apply`，而 healthcheck 报
+      # healthy —— 因为它在重启循环里被短暂满足过。
+      target: runtime
     container_name: fanhe-work-api
     restart: unless-stopped
 
@@ -88,10 +163,9 @@ services:
       HOST: 0.0.0.0
       PORT: '8787'
 
-      # **不能用本机的 DATABASE_URL。** `apps/api/.env` 里那个串是
-      # `127.0.0.1:5432` —— 在容器里 127.0.0.1 指向容器自己，不是 db。
-      # compose 网络里服务名就是 DNS 名，所以写 `db`。
-      DATABASE_URL: postgresql://fanhe:fanhe@db:5432/fanhe_work
+      # 与 migrate 用**同一个锚点**，因此不存在「两边口令不一致」这种状态。
+      DATABASE_URL: *database-url
+      PGSSLMODE: disable
 
       # **签名密钥不落盘、不进版本控制。** 与本机 `.env` 里那份是**不同**的：
       # 复用同一份密钥会让本机签发的令牌在容器那边也有效 —— 而本机那个环境
@@ -109,11 +183,19 @@ services:
         # 不是 `service_started`：那只保证容器起来了，而 api 连库要的是
         # 「initdb 已经结束、可以接受连接」。
         condition: service_healthy
+      migrate:
+        # 等的是**跑完并成功**，不是「还活着」。少了这一条，api 可能在建表完成前
+        # 就接到第一个请求 —— 那正是 T5-01 缺迁移执行者时被掩盖掉的那个失败。
+        condition: service_completed_successfully
 
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      # 与 api 同理，写出来而不是依赖「哪个阶段碰巧在最后」。web 的 Dockerfile
+      # 只有两个阶段且 runtime 在末尾，所以今天不写也对 —— 但那是巧合，
+      # 而 api 那边已经因为同一个巧合出过事（见该 Dockerfile 末尾的警告）。
+      target: runtime
     container_name: fanhe-work-web
     restart: unless-stopped
 

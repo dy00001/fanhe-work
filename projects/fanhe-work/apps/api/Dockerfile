@@ -144,3 +144,46 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=30s \
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/api/dist/index.js"]
+
+# ---- 迁移阶段（T5-02）----------------------------------------------------
+#
+# **为什么单独一个阶段，而不是让运行镜像带上 Prisma CLI。**
+#
+# 迁移必须有人执行，而 T5-01 把它漏掉了：换一台机器、卷是空的，`docker compose
+# up -d --wait` 会一路绿到三个容器 healthy —— 因为 api 连得上库（**连接成功与
+# 库里有表是两件事**），而库里 0 张表。症状要等到第一个请求打进来才出现，且是
+# `P2021: The table public.xxx does not exist`，看起来像代码问题而不是部署问题。
+#
+# 两条路的取舍：运行镜像装 Prisma CLI（`prisma` 是 devDependency，为一个只在
+# 部署时跑一次的命令给运行期加几十 MB）vs 单独一个基于 build 阶段的短命容器。
+# 选后者 —— 迁移容器跑完就退出，它的体积不进任何长期运行的容器。
+#
+# **这个阶段刻意不做 `--prod` 安装**：它需要 Prisma CLI 与 tsx，而两者都是
+# devDependency。它也不需要 `--ignore-scripts` 之外的妥协 —— 根 postinstall 的
+# 那个 `ensure-electron` 在 build 阶段就被跳过了（见上），这里同样跳过。
+FROM build AS migrate
+
+WORKDIR /repo
+
+ENV NODE_ENV=production \
+    PRISMA_SKIP_POSTINSTALL_GENERATE=true
+
+# `migrate deploy` 只读 schema 与迁移目录并建表，不需要类型化客户端，因此
+# **不重跑 generate**（上面 build 阶段已经生成过，那份产物在这个阶段用不上，
+# 而多跑一次要多等十几秒）。
+#
+# 命令选 `migrate deploy` 而不是 `migrate dev`：dev 会试图创建一个影子库来验证
+# 迁移，那需要影子库所在的实例有建库权限，而部署环境通常不给。deploy 只应用
+# 已有的迁移文件，正是部署该做的事。
+#
+# ## ⚠️ 这个阶段在文件末尾，而那本身是个陷阱
+#
+# **不写 `target` 的构建会停在最后一个 FROM**，也就是这个 `migrate`。于是任何
+# 不显式指定 target 的服务都会拿到跑迁移的镜像 —— 症状是「api 容器反复重启，
+# 日志里全是 `No pending migrations to apply`」，而 healthcheck 报 healthy
+# （它在 `restart` 循环里被短暂满足）。
+#
+# 这个坑在 T5-01 时不存在，因为那时 `runtime` 恰好是最后一个阶段 —— **那是巧合，
+# 不是设计**。所以 compose 里的 api 服务**必须**写 `target: runtime`。本行注释
+# 就是为了下一个人别把它当默认值。
+CMD ["pnpm", "--filter", "@fanhe/api", "exec", "prisma", "migrate", "deploy"]
