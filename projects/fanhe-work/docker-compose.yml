@@ -1,4 +1,5 @@
-# 梵禾 Work 的服务端化编排（T5-01 建立，T5-02 补上迁移与连接串单一来源）。
+# 梵禾 Work 的服务端化编排（T5-01 建立，T5-02 补上迁移与连接串单一来源，
+# T5-04 接上 Cloudflare Tunnel）。
 #
 # ## 编排的是「生产形态」
 #
@@ -7,9 +8,14 @@
 # 因为 T5-04（Cloudflare Tunnel 出站）要暴露的正是这一套，编排开发形态等于把工作
 # 做两遍。
 #
-# ## 四个服务，其中一个跑完就退出
+# ## 五个服务，其中一个跑完就退出、一个只出站
 #
-#   db  →  migrate  →  api  →  web
+#   db  →  migrate  →  api  →  web  →  cloudflared
+#
+# `cloudflared`（T5-04 加）**不绑任何宿主端口** —— 它与 Cloudflare 边缘建立出站
+# 连接，外部流量经边缘进来后由它转给 `web`。源站因此没有入站端口可暴露，阶段五
+# 的出口条件「无公网入站端口暴露」是靠这一点达成的，**不是**靠前面那些端口绑
+# 127.0.0.1（那是本机防局域网，不是不防公网）。
 #
 # `migrate` 是一次性的（跑完退出，`restart: no`），它存在是因为 **T5-01 漏了迁移的
 # 执行者**：换一台机器、卷是空的，`up -d --wait` 会一路绿到三个容器 healthy ——
@@ -58,8 +64,11 @@
 # ## 端口绑 127.0.0.1 而非 0.0.0.0
 #
 # 与 api 仅监听回环、db 同理：开发期的服务不应该对局域网可达。
-# **T5-04 的 Tunnel 是纯出站连接**，不靠这里的端口暴露到公网 —— 阶段五的出口条件
-# 「无公网入站端口暴露」正是靠这一点达成，而不是靠这里的绑定。
+#
+# **但这一条不是「无公网入站端口暴露」的实现** —— 绑 127.0.0.1 防的是**局域网**，
+# 而公网入站是由 `cloudflared` 不绑端口这件事保证的。两者是不同层面的防护：
+# 如果哪天有人给 web 或 api 加了 `0.0.0.0` 的端口映射，公网暴露立刻成立，而
+# Tunnel 照样正常 —— **Tunnel 能通不代表没暴露**，这两件事必须分别验。
 #
 # ## db 服务与命名卷
 #
@@ -204,6 +213,34 @@ services:
 
     depends_on:
       - api
+
+  # ## T5-04：Cloudflare Tunnel，纯出站连接
+  #
+  # **这个服务不绑任何宿主端口 —— 那正是验收要点「源站无入站端口暴露」的全部。**
+  # 它的联网方式是被 Cloudflare 边缘主动接上（或自己出站建立长连接），源站不需要
+  # 任何入站端口。**如果哪天给它加了 `ports:`，这个性质立刻失效**，而外部照样能
+  # 访问 —— 所以那条验收断言要机械地判，不能靠看。
+  #
+  # 用官方镜像而非自定义 Dockerfile，因此**不涉及 `target`**（那条约束是给多阶段
+  # 构建用的，见 apps/api/Dockerfile 末尾的警告）。它也不需要我们的代码。
+  #
+  # 配置在 Cloudflare 侧（remotely-managed），所以容器里**只有一个 Token**，没有
+  # 配置文件 —— 换机器时容器重建即可，不必改这里。Token 从 .env.compose 读。
+  #
+  # `--no-autoupdate` 是有意的：容器是一次性构建出来的，镜像里的版本固定，
+  # 让它自己更新会让「这台机器上跑的是哪个版本」变得不可知。
+  cloudflared:
+    image: cloudflare/cloudflared:2025.8.1
+    container_name: fanhe-work-cloudflared
+    restart: unless-stopped
+    # **注意这里刻意没有 `ports:`。** 见上面的说明。
+    command: tunnel --no-autoupdate run --token ${FANHE_TUNNEL_TOKEN:?FANHE_TUNNEL_TOKEN 未设置，见 .env.compose}
+
+    depends_on:
+      # 只等 web 起来（与 web 一样不等 api 健康）。**理由是 cloudflared 自己不发
+      # 起请求** —— 它只是把进来的连接转给 web，转发失败由 cloudflared 自己重试。
+      # 等一个它不依赖的服务健康，只会在 api 出问题时把 Tunnel 也拖停。
+      - web
 
 volumes:
   pgdata:
