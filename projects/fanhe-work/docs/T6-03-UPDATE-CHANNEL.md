@@ -401,6 +401,115 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./梵禾 Work.exe" --smoke --no-san
 - 与 T6-02 的提示合流（§3.3 的文案分派）；
 - 首个版本之前必须有一个「已发布的前一版」才能验差分 —— 所以要先发一次 v0（即 T6-03a 的产物）作为垫脚石。
 
+#### T6-03b 执行结果（2026-10-13）
+
+**接上 `electron-updater@6.8.9` 后，§八 第 2 条（发布者校验）已实测通过 —— 这是「签名校验真正生效」的第一份证据。**
+
+##### 一条被 T6-03c 漏掉的真拦路虎：信任根
+
+T6-03c 判「签上了」用的是 `Status !== 'NotSigned'`（见上方 §七 T6-03c）。**这条判据太松，而且恰好漏掉了 electron-updater 唯一的准入闸。**
+
+源码判据（`electron-updater/out/windowsExecutableCodeSignatureVerifier.js`）：
+
+```js
+const data = parseOut(stdout);
+if (data.Status === 0) {          // ← 只有 Status===0 才会进入发布者比对
+  // ... 比对 publisherNames ...
+}
+logger.warn(`Sign verification failed, installer signed with incorrect certificate: ...`)
+```
+
+`SignatureStatus` 数值（本机实测）：`0=Valid`、`1=UnknownError`、`2=NotSigned`、`3=HashMismatch`、`4=NotTrusted`。
+
+**自签证书若只装 `CurrentUser\My` + `TrustedPublisher`，`Status` 是 `UnknownError`（值 1）——「签上了，但 Windows 不信任这条链」。** 后果不是「提示未知发布者」那么轻：`Status !== 0` → 整个比对块被跳过 → **每一次更新都被拒绝**。
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| `Status` | `UnknownError`（值 1） | `Valid`（值 0） |
+| `StatusMessage` | `A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider` | （空） |
+| 在 `CurrentUser\Root` 里 | `False` | `True` |
+
+修法（已写进 `create-signing-cert.ps1` 第 3 步）：**把自签根证书也加进 `CurrentUser\Root`。**
+
+```powershell
+certutil -user -addstore -f Root <cert.cer>
+```
+
+- `TrustedPublisher` 只抑制「未知发布者」弹窗，**不会让链变可信**；**`Root`（受信任根）才让 `Status` 变成 `Valid`**。两件不同的活，都要做。
+- **`Import-Certificate` 装不进 `Root`**：非交互会话下报 `此操作中不允许使用 UI。`（它要弹根证书确认框）。`certutil -addstore -f Root` 静默成功（exit 0）。
+- 两个验收脚本已同步收紧，防悄悄回退：`verify-signature.ps1` 判据改为 `Status == Valid` 并输出 `STATUS_VALUE`，`RESULT=REVIEW` 时**退出非零**（原先恒退 0，`verify:all` 的 `&&` 链等于不是闸）；`verify-pack.mjs` 断言 `statusValue === '0'`，并新增一条反例「未受信链会穿过『不是 NotSigned』这条松判据」。
+
+##### 含空格的 CN —— 风险解除（§八.1 第 2 项）
+
+T6-03c 留下的具象风险「CN 含空格（`Fanhe Work`）时解析是否正常」，**用测量代替了推断**。
+
+electron-updater **不是**用正则解析 Subject，而是用 `builder-util-runtime` 的 `parseDn`：
+
+| 输入 | `parseDn` 结果 | 走到哪个分支 |
+|---|---|---|
+| `CN=Fanhe Work` | `{CN: 'Fanhe Work'}`（空格保留） | 全 DN 逐键比对 |
+| `Fanhe Work` | `size === 0`（不是 DN） | 退回 `name === subject.get('CN')` 精确相等 → 命中 |
+
+实测日志（C′）确认：`Signature validated using only CN Fanhe Work. Please add your full Distinguished Name (DN) to publisherNames configuration`。**空格不是问题。**
+
+##### 离线验收台（把「能不能差分下载并安装」变成可重复的断言）
+
+真网那条路只适合最后确认，日常验收用本地静态目录冒充更新源：
+
+- 客户端 = 新代码的 `dist:dir` 产物（版本 `0.1.0`），`resources/app-update.yml` 重写为 `provider: generic` / `url: http://127.0.0.1:8799/` / `publisherName: [Fanhe Work]`；
+- 更新源 = 本地静态目录，放 `0.2.0` 的 `.exe` + `.blockmap` + `latest.yml`（`serve.mjs` 支持 Range，否则差分会静默退回整包）；
+- 探针 = `--update-probe`（**必须在打包态跑**），判据由命令行给：`--expect-downloaded` / `--expect-error`。
+
+**`--update-probe` 是独立于 `--smoke` 的一种模式**：`--smoke` 刻意**不**查更新（验收要离线可重复），`--update-probe` 正好相反，只做更新检查这一件事。跑法要摘掉两个环境变量，否则打包态会退化成裸 Node：
+
+```bash
+env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "<安装目录>/梵禾 Work.exe" --update-probe --expect-error --no-sandbox
+```
+
+探针**显式关掉** `autoInstallOnAppQuit` 并把生效值打进输出：第一版没关，成功下载后 `app.exit()` 顺手把新版本装了 —— **一个只读的验收动作修改了这台机器上的软件**，而且下一轮的结果会被上一轮的安装影响。可重复的验收台不能有这种副作用。
+
+##### 反例②的结果：同一个包，只改「Windows 信不信这条链」
+
+| | C（移除自签根） | C′（加回自签根） |
+|---|---|---|
+| 安装包 | **逐字节不变** | 同左 |
+| 下载与校验 | 真的跑了（`Verifying signature ...`） | 真的跑了 |
+| `Status` | `1`（`UnknownError`） | `0`（`Valid`） |
+| 关键日志 | `Sign verification failed, installer signed with incorrect certificate` / `New version 0.2.0 is not signed by the application owner` | `Signature validated using only CN Fanhe Work` |
+| 终态 | `阶段=error`、`是否可安装=否` | `阶段=downloaded`、`是否可安装=是` |
+| 探针退出码 | `0`（在 `--expect-error` 下） | `0`（在 `--expect-downloaded` 下） |
+
+**两次只差信任根，结果翻转 → §八 第 2 条的判据成立。** 台子自身 `RESULT=OK`，且 `ROOT_RESTORED=True`（脚本 `finally` 兜底 —— 把机器留在不可信状态会毁掉它之后所有的更新）。
+
+另一个副产品：**签名校验发生在 `downloadUpdate` 内部**（`NsisUpdater.js:52`），所以被拒的包**不会**触发 `update-downloaded`。探针因此能在**不真的安装**的前提下观察到拒绝。
+
+##### 🔴 验收台自己的两次「假绿」
+
+**① 删不掉缓存，而调用方把判据丢了。** 第一版 `Clear-UpdateCache` 算出 `-not (Test-Path $cacheDir)`，调用处写的是 `$null = Clear-UpdateCache` —— **返回值被丢弃**，删除失败也无迹象。而它**确实**失败了：本环境 `Remove-Item -Recurse` 被安全删除守卫接管、改送回收站，**守卫是 fail-closed** —— 回收站操作失败时**拒绝删除**而不是降级：
+
+```
+[safe-delete][SAFE_DELETE_FAIL_CLOSED] {"reason":"trash-failed",
+ "detail":"Error during a `trash` operation: Unknown { description: \"Some operations were aborted\" }"}
+```
+
+`-ErrorAction SilentlyContinue` 藏掉抛出，`$null =` 藏掉结果 → 112 MB 缓存原地不动 → electron-updater **复用旧包，下载与签名校验整段没跑**，却报 `downloaded`。唯一线索是一行英文：`Update has already been downloaded to ...\pending\...`。
+
+- 改法一：缓存改由 **Node `fs.rmSync`** 清（不走 PowerShell 层，守卫不适用）。
+- **改法二（更重要）：把「有没有复用」变成断言。** 台子现在检查探测日志里有没有那行复用提示，有就报 `RESULT=INVALID` 而不是 `OK`。**一个观察不到自己前置条件的实验不是实验。**
+
+**② 这条新断言本身也做了反例测试**（否则它只是个恒真的装饰）：热缓存下重跑 → 复用行出现、`--expect-error` 退出 1 → 检测器触发；冷缓存下 → `False` → `OK`。两个状态都能区分，它才算闸。
+
+##### 顺带钉住的两条
+
+- **§八 第 5 条的现象每一轮都复现**：`Cannot download differentially, fallback to full download: Error: Cannot download ".../fanhe-work-setup-0.1.0.exe.blockmap", status 404`。机制可达；正向断言（把旧 blockmap 也放到源上 → 差分成真）留作可选项。
+- electron-updater 会打印 `disableWebInstaller is set to false, you should set it to true if you do not plan on using a web installer` —— 我们不发行 web 安装器，后续可显式关掉以消警。
+
+##### 依赖与打包
+
+- `electron-updater@6.8.9` 写在 **`dependencies`**（不是 devDependencies），否则 electron-builder 不会把它收进 asar。
+- 它锁 `builder-util-runtime@9.7.0`，与已装的 `electron-builder@26.15.3` 恰好一致。
+- 它进 asar 是 builder 的行为（不是靠我们的 `files` 白名单），与 `@fanhe/shared` 同类 —— **两者都用断言钉住**（`verify-pack.mjs` 新增 `/node_modules/electron-updater/package.json` 与 `/out/main.js` 两条）。
+
 ### T6-03c 签名（已决：自签证书进 Windows 证书库）
 - 生成自签代码签名证书并装入 `CurrentUser\My`（§六细则）；**证书与私钥不进版本控制**，工作区内不落 `.pfx`；
 - electron-builder 侧用 `win.signtoolOptions.certificateSubjectName` 指向该证书（**注意：不是 `win.certificateSubjectName`**，见下方执行结果）；产出的 `app-update.yml` 应含 `publisherName`；
@@ -451,7 +560,7 @@ win:
 
 **新增 `apps/desktop/scripts/verify-signature.ps1`（`verify:sign`，与 `verify:pack` 合并为 `verify:all`）**：读 PE 头只能证明「有签名」，证明不了「签成了谁」，而 electron-updater 比对的是**发布者身份**。该脚本用 `Get-AuthenticodeSignature` 取出每个产物的 `Subject` / `Thumbprint` / `Status` 写进 `release/signature-report.txt`（**必须落盘**：本沙箱 PowerShell 静默吞掉 stdout），再由 `verify-pack.mjs` 读回并断言。
 
-- **自签证书的 `Status` 是 `UnknownError`（链不可信），不是 `NotSigned`。** 判「签上了」**不能要求 `Status=Valid`**，只能要求 `!== 'NotSigned'`；签名是否可信与是否签上是两件事，不能混。
+- **自签证书的 `Status` 是 `UnknownError`（链不可信），不是 `NotSigned`。** ~~判「签上了」**不能要求 `Status=Valid`**，只能要求 `!== 'NotSigned'`~~ —— **这条判据在 T6-03b 被证伪并已撤回，见 §七 T6-03b「一条被 T6-03c 漏掉的真拦路虎」**：electron-updater 只在 `Status === 0`（`Valid`）时才比对发布者，所以「不是 NotSigned」不是自签方案的低门槛，而是一条**过不去 electron-updater** 的门槛。正确判据是 `Status == Valid`，前提是把自签根也装进 `CurrentUser\Root`。
 - 脚本自己的摘要行也栽过一次：某一版在「有 1 个产物未签名」时仍打印 `RESULT=OK`，因为它的判据只看了「有产物且签名主体唯一」。这正是 §八 反复强调的**「别把没验的说成验过了」**，已修正为 `RESULT=REVIEW reason=<n>-unsigned`。
 
 `verify:pack` 现为 **27 项断言 + 4 条反例**，全过。新增的反例两条：PE 解析器对 HTML 文件必须抛错；签名报告解析器喂无关文本必须解析不出 EXE。
@@ -470,7 +579,7 @@ win:
 4. 安装 A → 发布 B → 检查 → 下载 → 安装 → 重启，`app.getVersion() === B`。
 5. 只传 `.exe` 不传 `.blockmap` 时，**断言差分不可用**（把「差分」这件事本身也钉住，否则它可能一直是整包下载而没人发现）。
 
-### 八.1 到 T6-03c 为止的完成状态（**如实标注，未验的绝不写成已验**）
+### 八.1 到 T6-03b 为止的完成状态（**如实标注，未验的绝不写成已验**）
 
 | # | 反例 / 断言 | 状态 | 说明 |
 |---|---|---|---|
@@ -478,16 +587,18 @@ win:
 | — | PE 解析器对非 PE 文件必须抛错 | ✅ **T6-03c 已做** | `verify-pack.mjs` 内置 |
 | — | 签名报告解析器对无关文本必须解析不出 EXE | ✅ **T6-03c 已做** | `verify-pack.mjs` 内置 |
 | — | `latest.yml` 的 sha512 与实际安装包一致 | ✅ **T6-03c 已做** | **这是完整性层的正向断言**（等价于第 1 条的静态形式），加了「sha512 解出必须是 88 字符」防正则匹配错行导致假通过 |
-| 1 | 差分下载（改 sha512 → updater 拒绝） | ⏳ **未验，属 T6-03b** | 需要 `electron-updater` 真的跑起来；静态哈希比对已做，但「updater 真的在校验」这句话**现在还没有证据** |
-| 2 | 发布者校验（换签名主体 → updater 拒绝） | ⏳ **未验，属 T6-03b** | 同上。**这是「签名校验生效」的真正判据**，目前只做到「数据两侧一致」（`app-update.yml` 的 `publisherName` = 产物签名主体 = `CN=Fanhe Work`），**没有**证明 updater 会拿它去比 |
-| 4 | 安装 A → 发布 B → 版本变 B | ⏳ **未验，属 T6-03b** | 需要先发一次 v0 垫脚石 |
-| 5 | 只传 `.exe` 不传 `.blockmap` → 差分不可用 | ⏳ **未验，属 T6-03b** | |
+| 1 | 差分下载（改 sha512 → updater 拒绝） | ✅ **T6-03b 已做** | `sha512 checksum mismatch, expected B…, got A…` → `阶段=error`、`是否可安装=否`，`--expect-error` 退出 0。**updater 真的在校验**这句话现在有证据了 |
+| 2 | 发布者校验（换签名主体 → updater 拒绝） | ✅ **T6-03b 已做** | **这是「签名校验生效」的真正判据。** 同一个包、逐字节不变，只把自签根移出 `CurrentUser\Root` → `Status` 由 `0`（Valid）变 `1`（UnknownError）→ `Sign verification failed, installer signed with incorrect certificate` → `阶段=error`；根加回后同一包 `阶段=downloaded`。见 §七 T6-03b |
+| 5 | 只传 `.exe` 不传 `.blockmap` → 差分不可用 | ✅ **T6-03b 已做** | 每轮都复现：`Cannot download differentially, fallback to full download: ... 0.1.0.exe.blockmap, status 404`。**机制可达**；「把旧 blockmap 放上源 → 差分成真」的正向断言留作可选项 |
+| — | 「未受信链」不得穿过签名判据 | ✅ **T6-03b 已做** | `verify-pack.mjs` 新增反例：喂一条 `Status=UnknownError` 的报告，旧的松判据 `!== 'NotSigned'` 会放行 → 断言必须报 FAIL |
+| — | 验收台的前置条件（缓存未被复用） | ✅ **T6-03b 已做** | 探测日志出现 `Update has already been downloaded to ...` 即报 `RESULT=INVALID`。**该断言本身已做反例测试**（热缓存 → 触发；冷缓存 → 不触发），见 §七 T6-03b |
+| 4 | 安装 A → 发布 B → 版本变 B | ⏳ **未验，待首次发布** | 需要真发一次 v0 垫脚石 + 走一次真网 Release，是 T6-03b 的收尾动作 |
 
-**结论**：T6-03c 结束时，`latest.yml` 三件套齐备且自洽、两个产物都真的带上了 `CN=Fanhe Work` 的签名、`app-update.yml` 声明了同一个发布者 —— 但**「更新器会拒绝异签名包」这句话仍未被证明**，因为它要等 T6-03b 把 `electron-updater` 接上。**不要把上面第 2 条记成已验。**
+**结论**：T6-03b 结束后，§八 第 1、2、5 条反例**都已实测通过**，「更新器会拒绝异签名包」这句话**已有证据**（且反例②的因变量只是信任根，是干净的对照）。**仍未验的只剩第 4 条**，它依赖真实发版。另外 T6-03c 留下的「含空格 CN」具象风险**已解除**（`parseDn` 保留空格，实测匹配成功）。
 
-**T6-03b 接上后要第一时间验的两件事**：
-1. §八 第 2 条那条反例（换签名主体 → 拒绝安装）。
-2. electron-updater 从 `Get-AuthenticodeSignature` 的输出里解析证书 CN 的正则，对**带空格的 CN**（`Fanhe Work`）是否照常工作 —— 本项目的发布者名恰好含空格，这是自签方案里一个尚未验证的具象风险点。
+**T6-03b 接上后要第一时间验的两件事（均已闭环）**：
+1. ✅ §八 第 2 条那条反例（换签名主体 → 拒绝安装）—— 已实测通过，见 §七 T6-03b。
+2. ✅ 含空格 CN（`Fanhe Work`）的解析 —— 已用 `parseDn` 测量 + 实跑日志双重确认，**不是问题**。真正的问题是当时没人想到的 `Status === 0` 那道闸。
 
 ---
 
