@@ -17,6 +17,7 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:ping": "tsx src/tools/ping-db.ts",
     "db:create-owner": "tsx src/tools/create-owner.ts",
+    "db:reset-password": "tsx src/tools/reset-password.ts",
     "db:studio": "prisma studio"
   },
   "dependencies": {
