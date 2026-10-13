@@ -5,10 +5,10 @@
 >
 > | 项 | 值 |
 > | -- | -- |
-> | 生成时间 | 2026-10-11 17:55（2026-10-11 21:3x 随 T3-09 回填；22:0x 随 T3-10 回填；22:2x 随 T3-11 回填；22:5x 随 T3-12 回填，**阶段三收口**；2026-10-12 0x:5x 随 **UI 集成**回填；2026-10-12 0x:xx 随 **N-01** 回填至最终态；2026-10-12 0x:xx 随 **T4-01** 回填，**阶段四开工**；2026-10-12 01:4x 随 **阶段性总结**回填；2026-10-12 12:3x 随 **T4-02** 回填；2026-10-12 13:0x 随 **T4-03** 回填；2026-10-12 13:5x 随 **T4-04** 回填，**阶段四收口**；2026-10-12 14:1x 随 **T5-01** 回填，**阶段五开工**；2026-10-12 14:4x 随 **T5-02** 回填；2026-10-12 15:3x 随 **T5-03** 回填；16:0x 随 **T5-04** 回填；18:0x 随 **T6-01** 回填，**阶段六开工**） |
-> | 对应提交 | 代码基线 `ac342e7`（**T6-01 版本清单接口，阶段六第一项**；T5-04 为 `7cf5af3`，T5-03 为 `3b3dc07`，T5-02 为 `16f73e8`，T5-01 为 `ace70bd`，阶段四基线 `760b92f`，T4-03 为 `d76e084`，T4-02 为 `f2bfc16`，T4-01 为 `b03ddb5`，阶段三为 `a5370b0`）；本文档定稿于 T5-04 文档提交，用 `git log -1 -- docs/WORK-STATUS.md` 查 |
-> | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 4/5（T5-05 由用户决定暂缓）；阶段六 1/3：T6-01 版本清单接口已完成。** 下一项是 T6-02 客户端版本比对 |
-> | 最后验证 | 四道门禁全绿（**457 项**，2026-10-12 18:0x 实跑：shared 107 + api 204 + web 70 + desktop 76）；**`GET /api/version` 容器内与公网实测均返回 `0.1.0`**（不设门禁，T6-02 要在登录前拿到）；**空卷验收 30 项 0 失败**（全新卷 → 一条命令 → 6 个迁移自动应用 + 种子 11/4/29 自动写入 + 建 owner 后登录可用，见 4.1.1）；**Tunnel 验收 17 项 0 失败**（公网根路径/深链/反代到 api/未授权 401 四项 + 三层判据证源站无入站暴露，见 4.1.1）；**备份/恢复实测通过**（真恢复演练 + 带 `--force` 恢复后内容回来，不只行数）；浏览器 e2e **149 项**全通过（UI 集成后实跑，本轮无界面改动未重跑）；外壳冒烟 **PASS** |
+> | 生成时间 | 2026-10-11 17:55（2026-10-11 至 10-12 随 T3-09 ~ T3-12、UI 集成、N-01、T4-01 ~ T4-04、T5-01 ~ T5-04、T6-01 逐项回填，阶段三 / 四收口，阶段五开工，阶段六开工；2026-10-13 11:3x 随 **T6-02 / 阶段七 T7-01 / UI 落地对齐** 回填至本版） |
+> | 对应提交 | 代码基线 `5fd7f84`（**UI 落地对齐，当前 HEAD**；阶段七 T7-01 为 `ab96a58` / `49c4f85` / `5dc0c90`，T6-02 为 `d179e81`，T6-01 为 `ac342e7`，T5-04 为 `7cf5af3`，T5-03 为 `3b3dc07`，T5-02 为 `16f73e8`，T5-01 为 `ace70bd`，阶段四基线 `760b92f`，阶段三为 `a5370b0`）；用 `git log -1 -- docs/WORK-STATUS.md` 查本文档最近一次提交 |
+> | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 4/5（T5-05 由用户决定暂缓）；阶段六 2/3（T6-01 版本清单接口、T6-02 客户端版本检查与更新提示已完成，T6-03 外壳升级通道未开始）；阶段七（计划外新开）T7-01 账号与权限管理已完成。** 下一项是 T6-03 外壳升级通道，或按用户决定插入 T5-05 访问策略 |
+> | 最后验证 | 四道门禁全绿（**496 项**，2026-10-13 11:2x 实跑：shared 108 + api 226 + web 86 + desktop 76，含 5 项设计性跳过；T7-01 后 `permissions` 为 **12**）；**`GET /api/version` 容器内与公网实测均返回 `0.1.0`**（不设门禁，T6-02 要在登录前拿到）；**空卷验收 30 项 0 失败**（全新卷 → 一条命令 → 迁移自动应用 + 种子自动写入 + 建 owner 后登录可用，见 4.1.1）；**Tunnel 验收 17 项 0 失败**（公网根路径/深链/反代到 api/未授权 401 四项 + 三层判据证源站无入站暴露，见 4.1.1）；**备份/恢复实测通过**（真恢复演练 + 带 `--force` 恢复后内容回来，不只行数）；浏览器 e2e **149 项**全通过（UI 集成后实跑，UI 落地对齐后未重跑）；外壳冒烟 **PASS** |
 >
 > ⚠️ **换机必读**：`cloudflared` 的 Tunnel Token 在 `.env.compose` 的 `FANHE_TUNNEL_TOKEN`（该文件已被 gitignore，**不随仓库走**）。域名 `work.fanhe.dpdns.org` → Tunnel `fanhe-work`（ID `e71629a6-6a53-4731-a2d9-0f1ffbdfb726`），**这套配置在 Cloudflare 侧，换机器不需要重建**，只要新机上 `.env.compose` 里有那行 Token 即可。
 >
@@ -27,15 +27,23 @@
 
 **界面层已按最终 UI 方案整体整合**（两批，见 `UI-INTEGRATION-2026-10-11.md`）：侧栏导航由 5 项扩为 **18 项 / 4 分组**（含 11 个「功能开发中」占位槽），工作台首页改为**三段式**（案例展示 / 启动通道 / 记录），顶栏账号菜单底部新增**版本号**行。**业务逻辑一行未动** —— 整合只落在界面与导航结构上。
 
-**桌面外壳 4/4，阶段四收口**：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。T4-04 加了启动自检：查每条配置指向的文件还在不在，并把三类失效各配一句**方向正确**的引导（代理不可用去查工作区、配置不合法去重新编辑、路径失效去确认路径）。下一项是阶段五 T5-01 容器编排。
+**桌面外壳 4/4，阶段四收口**：T4-01 把 `apps/desktop` 从空目录落成一个能用的 Electron 外壳 —— 打开即渲染出已有界面，`/api` 由外壳内置的静态服务反代到服务地址（**`apps/web` 一行未改**），冒烟 PASS。T4-02 把服务地址从环境变量常量升级为**可持久化的配置项**，落在**工作区的 `.config/fanhe-work/service.json`**（换机时随工作空间走，被根 `.gitignore` 排除）；`FANHE_SERVICE_URL` 保留为一次性覆盖。T4-03 把 `apps/api/src/launch/agent.ts` **原样**搬进外壳主进程（经 `import()` 动态加载 TS 源码，无构建顺序依赖），**远程模式下也能启动本机软件**；主进程对来自 IPC 的配置另做一道形态复核，因为这条通道没有 HTTP 那侧的权限与回环中间件。T4-04 加了启动自检：查每条配置指向的文件还在不在，并把三类失效各配一句**方向正确**的引导（代理不可用去查工作区、配置不合法去重新编辑、路径失效去确认路径）。
 
-**服务化 3/5**：T5-01 落了容器编排（`docker compose up -d --wait` 拉起 db + api + web）。**T5-02 补上了它漏掉的那件事 —— 迁移的执行者。** T5-01 之所以能一次跑绿，是因为它复用了开发期那个卷（里面的迁移是本机 `db:deploy` 出来的）；实测全新卷 initdb 后 **`public` 模式下 0 张表，而编排层全绿** —— 因为 **api 连得上库，而连接成功与库里有表是两件事**。现在编排是 `db → migrate → api → web` 四个服务，`migrate` 跑完退出；连接串与口令也收成单一来源（改一处不会只改一半）。
+**服务化 4/5**：T5-01 落了容器编排（`docker compose up -d --wait` 拉起 db + api + web）。**T5-02 补上了它漏掉的那件事 —— 迁移的执行者。** T5-01 之所以能一次跑绿，是因为它复用了开发期那个卷（里面的迁移是本机 `db:deploy` 出来的）；实测全新卷 initdb 后 **`public` 模式下 0 张表，而编排层全绿** —— 因为 **api 连得上库，而连接成功与库里有表是两件事**。现在编排是 `db → migrate → api → web` 四个服务，`migrate` 跑完退出；连接串与口令也收成单一来源（改一处不会只改一半）。
 
 **T5-03 补上了第二个洞 —— 建完表的库仍然不能用。** 全新卷跑完迁移后 `permissions` / `roles` / `role_permissions` **全是 0 行**，于是走初始化向导建 owner 直接 **500**（「库里没有 owner 角色，先执行 `pnpm db:seed`」）—— 系统自己说清了该做什么，但那时人已经在一个装不起来的系统里了。权限体系是**代码定义**（跟着代码走，不跟着某台机器的数据走），所以 `db:seed` 挂进了 migrate 容器：**每次部署自动跑一遍**，改了权限定义重跑即生效（幂等：按 code upsert + 关联差集同步）。**种子不建任何账号**，所以自动跑它不会在任何环境里留下默认口令的管理员。**验收脚本扩到 30 项，全新空部署上「建 owner → 登录 → 带令牌读账号」整条链验通。**
 
 **另外落了备份恢复路径**（`tools/checks/db-backup.mjs`，`backup` / `list` / `verify` / `restore`）。`verify` 做的是**真恢复演练**（建临时库 → 真恢复 → 逐表比行数 → 删掉），不是「文件能解开」；实测「备份 → 演练 → 造数据 → 删除 → 无 `--force` 被拒 → 带 `--force` 恢复后**内容回来了而不只是行数对**」整条链路通。备份落在 `projects/fanhe-work/data/backups/`（**不放在 Docker 卷里 —— 卷坏了备份跟着坏，等于没有备份**）。
 
-**T5-04 接上了 Cloudflare Tunnel，现在 `https://work.fanhe.dpdns.org/` 可以从公网访问。** compose 里加了 `cloudflared` 服务（官方镜像，**配置存在 Cloudflare 侧**，容器只拿一个 Tunnel Token 连出去，所以换机器时不用改配置）。**这个服务刻意不绑任何宿主端口 —— 那正是「源站无公网入站端口暴露」的全部实现。** 验收脚本用**三层判据**证这一条：读 `compose config` 展开后的端口、读 `docker inspect` 的运行时端口映射、以及**从独立 bridge 网络探宿主端口**（第三层是唯一不依赖「配置与运行态一致」这个假设的）。实测 8787 / 8080 / 5432 从网络外**全部连不上**，而公网四条全通（根路径 200 / 深链 200 / 反代到 api 拿到 json / 未授权 401 + api 自己的文案）。下一项是 T5-05 访问策略。
+**T5-04 接上了 Cloudflare Tunnel，现在 `https://work.fanhe.dpdns.org/` 可以从公网访问。** compose 里加了 `cloudflared` 服务（官方镜像，**配置存在 Cloudflare 侧**，容器只拿一个 Tunnel Token 连出去，所以换机器时不用改配置）。**这个服务刻意不绑任何宿主端口 —— 那正是「源站无公网入站端口暴露」的全部实现。** 验收脚本用**三层判据**证这一条：读 `compose config` 展开后的端口、读 `docker inspect` 的运行时端口映射、以及**从独立 bridge 网络探宿主端口**（第三层是唯一不依赖「配置与运行态一致」这个假设的）。实测 8787 / 8080 / 5432 从网络外**全部连不上**，而公网四条全通（根路径 200 / 深链 200 / 反代到 api 拿到 json / 未授权 401 + api 自己的文案）。下一项是 **T6-03 外壳升级通道**；T5-05 访问策略仍由用户决定暂缓。
+
+**T6-01 与 T6-02 把更新通道接上了。** T6-01 在服务端建立一个独立的版本事实（`GET /api/version` + shared 的版本比较四种结果，**不设门禁**，因为 T6-02 要在登录之前拿到）；T6-02 让客户端启动时取它并与自己那份构建期常量比对，**只有 `outdated` 才提示更新**。两侧指纹刻意不相等（容器里没有 `.git`，api 侧 `builtAt` 恒空、`commitSha` 恒 `unknown`），所以比的是版本号；「响应不是预期形状」降级为 `unknown` 而不报错，避免客户端起不来。
+
+**阶段七（计划外新开）的 T7-01 把「系统设置」从占位页换成了真实的账号管理页。** owner 可以建子账号、改姓名部门角色状态、重置口令、按账号单独授予或拒绝权限点。权限合并规则是「角色自带 ∪ 账号级授予 − 账号级拒绝」，拒绝优先；owner 短路返回全部权限点，让「owner 不可降权」成为服务端硬规则。界面勾选与服务端两组数据之间的转换由 `diffPermissions` 纯函数完成。另有 `db:reset-password` 作为主账号口令重置通道。
+
+**界面还做了一轮设计稿落地对齐**（2026-10-13，见 `UI合并方案/梵禾Work-落地对齐记录-2026-10-13.md`）：字体栈合成为 `FH Sans SC`（解决 Windows 上 Medium 字面缺失导致层级被压平）、悬停改回「一帧到位」、单元卡补四层材质、内容区改自绘滚动条。改动是构建产物，已 `build web` + `--force-recreate` 生效。
+
+跨阶段复盘（完成度口径、七条风险、优先级建议）见 `docs/PROGRESS-REVIEW-2026-10-13.md`。
 
 **最短三条路径**（假定已按第七节把环境装好）：
 
@@ -64,7 +72,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ### 1.1 项目定位
 
-**梵禾 Work** 是桌面端个人工作台（实验版），按「账号权限 → 主框架 → 个人工作台三板块（纪要 / 事件 / 启动）→ 桌面外壳 → 服务端化 → 更新通道」分七个阶段实现。七个阶段共 50 项任务，编号为「T + 阶段号 + 连字符 + 序号」。
+**梵禾 Work** 是桌面端个人工作台（实验版），按「账号权限 → 主框架 → 个人工作台三板块（纪要 / 事件 / 启动）→ 桌面外壳 → 服务端化 → 更新通道」分七个阶段实现（阶段零至六）。七个阶段共 50 项任务，编号为「T + 阶段号 + 连字符 + 序号」。**另有计划外新开的阶段七（账号与权限管理，T7-01 已完成），尚未并入上面的任务表。**
 
 ### 1.2 技术栈
 
@@ -132,7 +140,8 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ✅ **已完成（4/4）**：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检。出口条件已达成（见第七章） |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | 🔄 进行中：**T5-01 ~ T5-04 已完成（4/5）**：容器编排、数据库连接串与迁移执行者、种子自动执行与备份恢复、**Cloudflare Tunnel 出站接入（公网可达且源站无入站暴露）**；**T5-05 访问策略由用户决定暂缓（2026-10-12 17:00），已知风险见头部** |
-| 阶段六 | 更新通道（T6-01 ~ T6-03） | 🔄 进行中：**T6-01 版本清单接口已完成（1/3）** —— `GET /api/version` + shared 的版本比较规则，见 4.1.1；T6-02 客户端版本比对、T6-03 外壳升级通道未开始 |
+| 阶段六 | 更新通道（T6-01 ~ T6-03） | 🔄 进行中：**T6-01 版本清单接口、T6-02 客户端版本检查与更新提示已完成（2/3）**，实施记录见 4.1.1 与 4.1.9；**T6-03 外壳升级通道未开始** |
+| 阶段七 | 账号与权限管理（计划外新开，T7-01） | ✅ **T7-01 已完成**：`系统设置` 页由占位换成真实账号管理页（九个接口、账号级授予与拒绝、owner 短路、层级判定、软删除、口令重置），见 `T7-01-ACCOUNT-ADMIN.md` 与 4.1.10；后续范围尚未登记进计划文档，见 4.1.0 |
 
 > 阶段三的分母口径（12 项）见 `PROGRESS-REVIEW-2026-10-11.md` 第 28 行。
 
@@ -151,6 +160,11 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
+| `5fd7f84` | fix(UI集成): 按设计稿对齐字体栈、悬停规则与滚动指示器（**当前 HEAD**：`FH Sans SC` 合成家族、移除 10 处 `transition-colors`、单元卡四层材质、自绘滚动条） |
+| `5dc0c90` | docs(阶段七): 回填 T7-01 实施判断与验证结果 |
+| `49c4f85` | feat(阶段七): 主账号口令重置通道 `db:reset-password`（密码从 stdin 读，不进 shell 历史与进程环境表） |
+| `ab96a58` | feat(阶段七): T7-01 账号与权限管理（**阶段七代码基线**：第七个迁移 `user_permissions`、`users.department`、权限点 `system.user.delete`、api 九接口、web 账号管理页；api 22 项） |
+| `d179e81` | feat(阶段六): T6-02 客户端版本检查与更新提示（`apps/web/src/lib/{version-check,use-version-check}.ts`，测试 16 项） |
 | `ac342e7` | feat(阶段六): T6-01 版本清单接口（**阶段六代码基线**：新增 `GET /api/version`（不设门禁）+ `packages/shared/src/version.ts`（版本比较四种结果 + 构建指纹），shared 24 项、api 7 项） |
 | `7cf5af3` | feat(阶段五): T5-04 Cloudflare Tunnel 出站接入（**阶段五代码基线**：新增 `cloudflared` 服务（**不绑任何宿主端口**）、新增 `tools/checks/t504-tunnel.mjs`（17 项，三层判据证「无入站暴露」）） |
 | `3b3dc07` | feat(阶段五): T5-03 种子自动执行与备份恢复（migrate 容器加 `db:seed`、`jwt.secret` 改惰性求值 + `assertRequiredEnv`、新增 `tools/checks/db-backup.mjs`、验收扩到 30 项） |
@@ -186,12 +200,12 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **426 项，0 失败** | `packages/shared` **83** + `apps/api` **197**（**192 通过 / 5 跳过**）+ `apps/web` **70** + **`apps/desktop` 76**。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（+ 代理形态复核 17 + 跨包路径 7）→ T4-04 **76**（+ 自检 24）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项）；shared 由 69 → **83**（导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写） |
+| `pnpm test` | **496 项，0 失败** | `packages/shared` **108** + `apps/api` **226**（**221 通过 / 5 跳过**）+ `apps/web` **86** + **`apps/desktop` 76**。T6-01 之后基线为 457（shared 107 + api 204），T6-02 与 T7-01 再增至 496。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（+ 代理形态复核 17 + 跨包路径 7）→ T4-04 **76**（+ 自检 24）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项），**T6-02 → 86**（新增 `version-check.test.mjs` 16 项）；shared 由 69 → **83**（UI 集成：导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写）→ **108**（T6-01 版本比较 24 项、T7-01 权限合并与 `system.user.delete`） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
 | 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T4-01 无界面改动，未重跑。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
 | 外壳冒烟 | **PASS** | `pnpm --filter @fanhe/desktop smoke`：隐藏窗口加载产物 → 探 DOM → 打印一行结论并按成败设退出码。判据是 `#root` 里有元素 + console 零错误（见 8.5）。**受限环境需 `FANHE_NO_SANDBOX=1`** |
-| 数据库 | 6 个迁移、**12 张业务表**、种子 11 / 4 / 29 | 基线数据：`users` 1（owner `fanhe`）、其余业务表 0 行（跑完 e2e 已清库并重建 owner） |
+| 数据库 | **7 个迁移**、**13 张业务表**、权限点 **12** / 角色 **4** | e2e 之后的干净基线是 `users` 1（owner `fanhe`）、其余业务表 0 行。T7-01 新增第七个迁移 `20261012094234_user_permissions` 与权限点 `system.user.delete`，权限点由 11 增至 **12**。**注意**：日常开发库里有使用者自己建的账号与数据（实测 `users` 3、`notes` 2，含 `fanhe-01` / `guoyao`），清理残留前先按命名前缀与创建时间确认是不是自己的数据，测试残留的命名前缀是 `zz_test_*` |
 
 ---
 
@@ -208,7 +222,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 能力 | 交付 | 关键文件 |
 | -- | -- | -- |
 | 数据模型与首个迁移 | 六张账号权限表，已应用并确认无漂移 | `apps/api/prisma/schema.prisma`、`migrations/20261010150103_init` |
-| 数据库连接与种子 | 11 个权限点、4 个角色、29 条授权关联，重跑无副作用 | `src/db/prisma.ts`、`src/db/seed.ts` |
+| 数据库连接与种子 | 11 个权限点（T7-01 后为 **12**）、4 个角色、29 条授权关联，重跑无副作用 | `src/db/prisma.ts`、`src/db/seed.ts` |
 | 密码哈希 | Argon2id，参数可配置、可判定重算，12 项测试 | `src/auth/password.ts` |
 | 登录与令牌签发 | `POST /api/auth/login`，四种失败共用同一响应（不给枚举用户名的机会） | `src/auth/tokens.ts`、`src/auth/login.ts` |
 | 令牌轮换与撤销 | `refresh` / `logout`，并发轮换用行锁串行化，重放按 `familyId` 整链撤销，撤销分 session / device / all 三层 | `src/auth/session.ts` |
@@ -290,21 +304,67 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **判断见 9.41 / 9.43**；验收对照阶段四第一项「外壳可打开并渲染界面」与第三项「远程模式下可启动本机软件」。
 - **本机代理是 `import()` 进来的源码，不是拷贝，也不是构建产物**：`apps/desktop` 是 CJS、`apps/api` 的产物是 ESM，而真正需要的只有 `runLaunchProfile` 这一个函数 → 走 `import()` 直接执行 `.ts`（Node 类型剥离），于是 `agent.ts` 改完外壳下一次启动就用新的，不存在「忘了先构建 api」。代价是这条路径**只有真机能验**，见 9.43 里那个被单测放过、只有真跑才炸的坑。
 
+### 3.6 阶段五 · 服务端化（4/5 已完成）
+
+**这一阶段把系统从「本机开发形态」变成「可部署的生产形态」并接到公网。**
+
+- **T5-01 容器编排**：新增 `.dockerignore`、`apps/api/Dockerfile`（build 加 runtime 两阶段）、`apps/web/Dockerfile`（node 构建加 nginx 运行）、`apps/web/deploy/nginx.conf`（`/api` 反代 + SPA 回退 + 哈希资源长缓存）、`infra/portable/ws-compose.cmd`（纯 ASCII，包住 `--env-file`）；compose 从单服务扩为 db + api + web。**api 以非 root 运行、端口三处全绑 `127.0.0.1`。**
+- **T5-02 迁移执行者与连接串单一来源**：T5-01 漏了迁移的执行者（新卷里 0 张表而编排层全绿，因为**连接成功与库里有表是两件事**）。补上独立的一次性 `migrate` 服务（`depends_on` 用 `service_completed_successfully`、`restart: 'no'`），连接串与口令收成 `x-database-url` 顶层锚点。**踩到一个真 bug**：migrate 阶段追加在 Dockerfile 末尾且 compose 未写 `target`，导致 api 也构建成 migrate 镜像，症状是反复重启而 healthcheck 报 healthy。
+- **T5-03 种子自动执行与备份恢复**：全新卷跑完迁移后 `permissions` / `roles` / `role_permissions` 全 0 行，建 owner 直接 500（**「迁移全部应用」与「系统可用」之间隔着一个种子**）。`db:seed` 挂进 migrate 容器自动跑（幂等、不建任何账号）；`jwt.secret` 改 getter 惰性求值并补 `assertRequiredEnv()`。新增 `tools/checks/db-backup.mjs`（`backup` / `list` / `verify` / `restore`，`verify` 做真恢复演练）。
+- **T5-04 Cloudflare Tunnel 出站接入**：compose 加 `cloudflared` 服务，**刻意不绑任何宿主端口**，这就是「源站无公网入站端口暴露」的全部实现。域名 `work.fanhe.dpdns.org`，配置存在 Cloudflare 侧（容器只拿一个 Token），换机不需重建。验收用三层判据（配置层 / 运行时层 / 网络层）。
+- **T5-05 访问策略由用户决定暂缓**（2026-10-12 17:00），已知风险见头部。
+- 关键文件：`docker-compose.yml`、`apps/api/Dockerfile`、`apps/web/Dockerfile`、`apps/web/deploy/nginx.conf`、`infra/portable/ws-compose.cmd`、`tools/checks/{t502-empty-volume,t504-tunnel,db-backup}.mjs`。判断见 9.45 ~ 9.48。
+
+### 3.7 阶段六 · 更新通道（2/3 已完成）
+
+- **T6-01 版本清单接口**：`GET /api/version`（**不设门禁**，T6-02 要在登录前拿到）+ `packages/shared/src/version.ts`（`VersionManifestResponse`、`computeBuildFingerprint`、`compareVersions`、`compareManifests` 四种结果）。**版本号在运行时读根 `package.json`**（逐级上溯认 `pnpm-workspace.yaml` 为根），不构建期注入。手写 SHA-256 与 UTF-8 编码均配 `node:crypto` 逐值对照测试。
+- **T6-02 客户端版本检查与更新提示**：`apps/web/src/lib/version-check.ts`（取数、比对、异常降级为 `unknown`）与 `use-version-check.ts`（挂载时机），**只有 `outdated` 才提示更新**。测试 16 项。
+- **T6-03 外壳升级通道未开始**：`electron-updater` 通道与安装包签名校验，属零起点（代码库内暂无 `electron-updater` / `electron-builder` 依赖），开工前需先定发布载体与签名密钥保管方式，见 4.1。
+
+### 3.8 阶段七 · 账号与权限管理（T7-01，计划外新开）
+
+**「系统设置」页由占位页换成真实的账号管理页**，导航项 `system-settings` 的 `planned` 置为 `false`。owner 可以建子账号、改姓名部门角色状态、重置口令、按账号单独授予或拒绝权限点。完整实施文档见 `docs/T7-01-ACCOUNT-ADMIN.md`，要点见 4.1.10。同一时间还有两条配套改动：`db:reset-password` 口令重置通道，以及一轮 UI 设计稿落地对齐（见 3.2 段的界面说明与 `UI合并方案/梵禾Work-落地对齐记录-2026-10-13.md`）。
+
 ---
 
 ## 四、待办事项
 
-### 4.1 下一项：T6-02 客户端版本比对（P1）
+### 4.1 下一项：T6-03 外壳升级通道（P1）
 
-> **T5-05 访问策略由用户决定暂缓（2026-10-12 17:00）；阶段六已完成 T6-01**（版本清单接口）。下一项是 T6-02，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 223 行，阶段验收见第七章。
+> **T5-05 访问策略由用户决定暂缓（2026-10-12 17:00）；阶段六已完成 T6-01 与 T6-02。** 下一项是 T6-03，任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 224 行，阶段验收见第七章。
 
-- ⚠️ **先读头部那条已知风险**：公网上的 `work.fanhe.dpdns.org` **没有 Cloudflare Access 防护**（T5-05 暂缓），任何拿到地址的人都能打开页面，唯一的保护是应用层登录（按 IP 限速）。**这条风险不因做 T6-02 而变化**，但它会被 T6-02 的「版本提示」放到一个更显眼的位置（见下）。
-- **T6-02 要做什么**：客户端启动时取 `/api/version` 与自己这份构建期常量比对，按 `compareManifests` 的四种结果（`same` / `outdated` / `ahead` / `unknown`）分派，其中只有 `outdated` 才提示更新。
-- **两处要先想清楚，都在 9.49 末尾写了。**
-  - **取数必须能识别「拿到的不是清单」。** 外壳（T4-01）加载远程地址时会经过 Cloudflare 那一层，而 **T5-05 暂缓意味着现在没有拦截页** —— 但 T5-05 将来做了就有。所以取数逻辑要把「响应不是预期形状」降级为 `unknown`，**而不是当成解析失败报错**：这一条路径是非关键的，崩掉会让客户端起不来。
-  - **提示放哪里要定。** 版本信息现在只在顶栏账号菜单里（T2-07 那一行），而 T2-03 的导航里「系统设置」还没有实质页面。**「有更新」的提示放顶栏还是新开一处，是个产品决定，不是实现细节。**
-- **T6-03（外壳升级通道）依赖 T6-02**，所以 T6-02 做完阶段六还剩两项。但**它依赖 T4-01 的外壳而不依赖阶段五**，所以与 T5-05 无关，可以继续推进。
-- **一个不该被忽略的取舍**：T6-02 的「提示更新」在没有 T5-05 防护的环境里是**公开可见的** —— 任何访客打开页面都可能看到「有可用更新」。那本身不泄露敏感信息（版本号与提交号本来就在客户端产物里明文可见），但**一个精心设计的更新提示对攻击者也是信息**。若将来要显示更细的内容（「落后 3 个版本」「当前有 N 台设备在线」），要重新评估。
+- ⚠️ **先读头部那条已知风险**：公网上的 `work.fanhe.dpdns.org` **没有 Cloudflare Access 防护**（T5-05 暂缓）。T6-02 的「有可用更新」提示已经在这一层公开可见，而版本号与提交号本来就在客户端产物里明文可见，故不增加信息量。若 T6-03 或后续要显示更细的内容（「落后几个版本」「当前在线设备数」），需要重新评估。
+- **T6-03 要做什么**：为外壳建立 `electron-updater` 更新通道与安装包签名校验（`DEVELOPMENT-PLAN.md` 第七章阶段六第三项为「安装包签名校验生效」）。
+- **开工前必须先定的两件事，属决策而非实现细节**：
+  - **发布载体。** 差分下载需要一处能托管安装包与 `latest.yml` 的位置，候选是对象存储（S3 兼容）或 GitHub Release。选它会连带决定证书与元数据的写法。
+  - **签名密钥的保管方式。** `DEVELOPMENT-PLAN.md` 6.3 第 6 条已约定「更新签名密钥与工作空间分开保管，不随盘移动」，落地时要定具体载体（系统凭据库或独立离线介质）。
+- **零起点。** 实测代码库内没有 `electron-updater` 与 `electron-builder` 依赖，`electron` 目前只被 `apps/desktop` 用作运行时。引入打包链路会改动 `apps/desktop/package.json` 与根 `postinstall`（后者已因 Electron 二进制做过一次），需连同 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 一并核对。
+- **它只依赖 T4-01 外壳，与阶段五无关**，所以 T5-05 是否推进不影响它。
+
+### 4.1.0 阶段七的范围尚未登记（待用户确认）
+
+T7-01 有提交、有独立文档（`docs/T7-01-ACCOUNT-ADMIN.md`），但阶段七未进入 `DEVELOPMENT-PLAN.md` 的任务表、依赖图与验收清单。若后续还有 T7-02 及以后，需要先补齐这三件套，否则无法排期，也无法判定阶段七是否收口。
+
+### 4.1.9 T6-02 的实施记录（已完成，供对照）
+
+- **取数把「响应不是预期形状」降级为 `unknown`，不当作解析失败报错。** 外壳（T4-01）加载远程地址时会经过 Cloudflare 那一层，而 T5-05 暂缓意味着现在没有拦截页（将来做了就有）。这条路是非关键的，崩掉会让客户端起不来。
+- **只有 `outdated` 才提示更新**，`same` / `ahead` / `unknown` 都不提示。`ahead` 与 `unknown` 的存在理由都是避免淹掉有效信号的假提示：开发期本地比线上新是正常状态；取不到构建信息时报「有更新」比不报更糟。
+- **两侧指纹不相等，所以比版本号**（api 侧 `builtAt` 恒空、`commitSha` 恒 `unknown`，见 4.1.1 与 9.49）。
+- **验证结果（2026-10-13）**：`apps/web/test/version-check.test.mjs` **16 项 0 失败**；随三条线一并提交时四道门禁**首次全绿 496 项**（`format:check` 此前剩的 2 处 warn 随本任务一并格式化）。提交 `d179e81`。
+- **生产形态实测**：重建 web 镜像并 `--force-recreate` 后，容器内构建产物含版本检查逻辑，公网 `https://work.fanhe.dpdns.org` 正常渲染。
+
+### 4.1.10 T7-01 的实施记录（已完成，供对照）
+
+T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、表结构、接口清单、四类语义陷阱、改动文件清单、四条已知限制）。要点：
+
+- **权限合并顺序写死在纯函数里**为「角色自带 ∪ 账号级授予 − 账号级拒绝」，`granted` 存布尔而非「存在即授予」，因为必须能写下行表达显式拒绝；只做额外授予的话，收回权限就只能改角色，而改角色会影响所有同角色的人。
+- **owner 短路返回全部权限点、不查 `user_permissions`**，让「owner 不可降权」成为服务端硬规则。同一规则在 `guard.ts`（请求路径）与 `user-admin.ts`（列表展示）两处各实现一次，**必须同步修改**。
+- **越权一律 404、不返回 403**，因为 403 等于告诉调用者「这个账号存在，只是你管不了」，账号列表与详情不该成为枚举接口；「可见但不许做」才返回 403。
+- **停用、改角色、重置密码、删除都吊销该账号全部 refresh token**，少了这一步换完密码别人手机上的旧登录状态还能继续用。
+- **`role_permissions` 挂在 Role 上而不是 User 上**：`USER_SELECT` 一开始写成 User 的一层关系，Prisma 报 `Unknown field 'rolePermissions' for select statement on model 'User'` 致所有 `/api/system/*` 接口 500，改成嵌进 `role` 里取两层。
+- **两条测试自身写错**（比实现更值得记）：admin 断言 DELETE 得 404 而实际 403（admin 没有 `system.user.delete`）；「owner 的权限不可配置」用另一个 owner 当操作者会先被「同级不可见」拦下（404），改用 admin 才验证到 `cannot_modify_owner`。
+- **验证结果（2026-10-13）**：`apps/api/test/user-admin.test.ts` **22 项 0 失败**，四道门禁 **496 项 0 失败**。端到端实测：owner 建 viewer 账号 → 授予 `note.write` / 拒绝 `launch.write` / 授予 `event.write` → 子账号 `/me` 返回 `["personal.note.read","personal.event.read","personal.launch.read","personal.event.write"]`（拒绝压掉角色本没有的项、授予生效、无 system 泄漏），删除 200。提交 `ab96a58` / `49c4f85` / `5dc0c90`。
+- **四条已知限制**：权限调整需在页面上重新进入才刷新显示（服务端下一次请求即生效）；子账号之间看不到对方数据（notes / events / launch_profiles 按 `user_id` 隔离，权限点只管功能开关）；角色清单接口对所有登录用户开放且含 rank；删除的账号无法恢复。
 
 ### 4.1.1 T6-01 的实施记录（已完成，供对照）
 
@@ -460,19 +520,20 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 纪要链（T3-05 → T3-06 / T3-07 → T3-08）与事件链（T3-09 → T3-10 → T3-11 → T3-12）**都收口了，12 项任务全部完成，验收六项全部勾选**。两链的已知边界与有意留白都记在 4.5，**那些是记录不是待办** —— 别把它们当缺陷去「修」。
 
-### 4.3 后三个阶段
+### 4.3 阶段现状与后续
 
-- **阶段四 Electron 外壳（T4-01 ~ T4-04）**：外壳脚手架、本机/远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程（它已经为此设计好了）、启动自检；另把 `credential.ts` 的存储后端换成主进程 `safeStorage`。
-- **阶段五 服务端化（T5-01 ~ T5-05）**：Docker Compose 编排 web/api/db、数据库容器化与连接切换、**种子自动执行与备份恢复（T5-03，已把验收要点改为「空库可用 + 可备份可恢复」，见 4.1.2）**、**Cloudflare Tunnel 出站接入（T5-04，`work.fanhe.dpdns.org` 公网可达且源站无入站暴露，见 4.1.1）**、访问策略（T5-05）。
-- **阶段六 更新通道（T6-01 ~ T6-03）**：版本清单接口（**T6-01 已完成**，见 4.1.1）、客户端版本比对、外壳升级通道、安装包签名校验。
+- **阶段四 Electron 外壳（T4-01 ~ T4-04）**：已完成 4/4，见 3.5。四项分别是外壳脚手架、本机与远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程、启动自检。
+- **阶段五 服务端化（T5-01 ~ T5-05）**：4/5。容器编排、数据库连接串与迁移执行者、种子自动执行与备份恢复、Cloudflare Tunnel 出站接入均已完成，见 3.6；**T5-05 访问策略由用户决定暂缓**，已知风险见头部。
+- **阶段六 更新通道（T6-01 ~ T6-03）**：2/3。版本清单接口（见 4.1.1）与客户端版本检查与更新提示（见 4.1.9）已完成；**T6-03 外壳升级通道未开始**，见 4.1。
+- **阶段七 账号与权限管理（计划外新开，T7-01）**：T7-01 已完成，见 4.1.10；**后续范围尚未登记进 `DEVELOPMENT-PLAN.md`**，见 4.1.0。
 
 ### 4.4 长期遗留（跨阶段，待排期）
 
 - `users.passwordChangedAt` 接入访问令牌载荷（目前改密**不会**让已签发的访问令牌失效）。
 - 改名复用 `normalizeUsername`，并在改名前用归一后的值查一次冲突（否则「只差大小写」的改名会绕过唯一约束）。目前唯一用得上冲突检测的入口是首次初始化。
-- 账号与角色管理的审计挂钩（「授权变更」与「删除」两个事件族还**没有接口可挂**）。
-- 客户信息平台 / **运维信息平台**（UI 集成时由「运营信息平台」改名）的权限点定义；当前 11 个权限点只有 `system` 与 `personal` 两段。
-- **16 个占位导航项的 `module` 目前为 `null`**（对已认证用户一律可见）：除「首页」与「系统设置」外，其余 16 项（含 11 个预留槽位）都还没绑模块段。模块落地时改成对应模块段并同步改 `navigation.test.mjs` 的断言（否则它们会一直对所有人可见）。UI 集成里新加的 14 个子项与顶层「资产 / 搜索」同属这一类。
+- 角色管理的审计挂钩（**T7-01 已把「授权变更」与「删除」两类补上**，`packages/shared/src/audit.ts` 新增 5 个动作码、`apps/api/src/auth/user-admin.ts` 里 5 处 `recordAudit` 已接入；角色管理页面本身未做）。
+- 客户信息平台 / **运维信息平台**（UI 集成时由「运营信息平台」改名）的权限点定义；当前 **12 个权限点**只有 `system` 与 `personal` 两段。
+- **16 个占位导航项的 `module` 目前为 `null`**（对已认证用户一律可见）：除「首页」与「系统设置」外，其余 16 项（含 11 个预留槽位）都还没绑模块段。模块落地时改成对应模块段并同步改 `navigation.test.mjs` 的断言（否则它们会一直对所有人可见）。UI 集成里新加的 14 个子项与顶层「资产 / 搜索」同属这一类。**「系统设置」已于 T7-01 落地**（`module: 'system'`、`planned: false`），不在上述 16 项内，是既有的定位方式而非本次新增的例外。
 - `projects/fanhe-work/`、`apps/api/`、`apps/web/`、`packages/shared/` 四处 `node_modules.old`：**已分析确认应当删除，但用户 2026-10-11 决定暂不删**。约 489 MB、23802 个文件，顶层软链接 100% 悬空于已不存在的 `E:` 盘，且与现役树重复、会污染 lint/format（现靠三处忽略规则压住）。依据见 `SYNC-COMPARE-2026-10-11.md` 第十一节。**将来删的时候不要连带删 `node_modules/`。**
 
 ### 4.5 已知边界与有意留白（不是缺陷）
@@ -504,7 +565,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - **时间线只展示状态流转，不展示编辑历史**：编辑标题 / 描述 / 标签 / 优先级刻意不写日志（详见 3.4）。所以时间线里看不到「谁改了标题」—— 面板回答的是「状态怎么变的」，混进编辑记录就变成另一份东西了。若将来要编辑历史，那是新增一条 `action` 码并改 `PATCH` 的写日志策略，不是界面改动。
 
 **账号与权限**
-- 阶段一验收「关键操作在 `audit_logs` 有记录」**未勾选**：写入链路与四类事件已完成，但缺「授权变更」与「删除」两类事件的接口。
+- 阶段一验收「关键操作在 `audit_logs` 有记录」**仍未勾选，但条件已具备**：T7-01 已把此前悬空的「授权变更」与「删除」两类补上（`audit.ts` 新增 5 个账号管理动作码，`user-admin.ts` 里 5 处 `recordAudit` 已实际调用），只差一条端到端断言。
 
 ---
 
@@ -625,7 +686,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 - 数据在宿主机**命名卷 `fanhe-work-pgdata`**，不随介质移动。
 - 排序规则在建库时定死 **ICU `zh-CN`**，事后更改需重建数据库。
 - 健康检查让 `docker compose up -d --wait` 真正等到可连接（迁移脚本依赖这一点）。
-- **当前 6 个迁移、12 张业务表**（另加 `_prisma_migrations`）：
+- **当前 7 个迁移、13 张业务表**（另加 `_prisma_migrations`）：
 
   | 迁移目录 | 建的对象 |
   | -- | -- |
@@ -635,12 +696,13 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
   | `20261010180508_launch_history` | `launch_history` |
   | `20261011064829_add_notes` | `notes` |
   | `20261011132819_add_events` | `events` / `event_logs`（**阶段三唯一一次建两张表的迁移**） |
+  | `20261012094234_user_permissions` | `user_permissions`（**T7-01 新增**；同一迁移给 `users` 加 `department` 列） |
 
 - **迁移目录的时间戳是 UTC**（`date -u`，与 Prisma 自身一致），因此它比本地时间小 8 小时 —— 别按本地时间去找「今天那个迁移」。
 - **手写迁移的生成方式（Prisma 7.10 起）**：`migrate diff --from-url` **已被移除**，改用
   `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script -o <文件>`（在读得到 `prisma.config.ts` 的目录下跑），再 `prisma migrate deploy` 应用。**生成后用同一条命令复核一次**，输出应当是 `-- This is an empty migration.` —— 那是「库与 schema 已无差异」的判据，比人肉核对 DDL 可靠。
 
-- **种子数据**：11 个权限点、4 个角色、29 条授权关联；重跑无副作用。
+- **种子数据**：**12 个权限点**（T7-01 新增 `system.user.delete`，原 11 个）、4 个角色、29 条以上授权关联；重跑无副作用（按 code upsert + 关联差集同步）。
 - **owner 账号**：登录名 `fanhe`，显示名「梵禾」，状态 active。口令为 24 位强随机，写在被忽略的 `.tmp/owner-credentials.txt`（**该文件不随盘走**）。
 - **owner 存在之后，`apps/api/test/setup.test.ts` 的 5 项首次初始化用例会自动跳过**（前置条件是「库里无 owner」）。看到 api 测试 `skipped=5` 是**设计行为，不是失效**。
 - 常用脚本：`pnpm db:deploy`、`pnpm db:ping`、`pnpm db:seed`、`pnpm db:create-owner`、`pnpm db:generate`、`pnpm db:studio`。
@@ -699,10 +761,10 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 3 | **Git 信任与身份** | `git config --global --add safe.directory "<工作空间根>"`；确认提交身份为 `梵禾 <dev@fanhe.local>` | `git config user.name` / `user.email`；`git log -1` 能正常显示（不报 dubious ownership） |
 | 4 | **凭据重配** | 重配 GitHub 细粒度 PAT 到 GCM（`~/.gitconfig` 是逐机的） | `GIT_TERMINAL_PROMPT=0 HTTPS_PROXY=http://127.0.0.1:7897 git ls-remote origin HEAD` 秒回 |
 | 5 | **依赖重建** | 经入口 `ws-run.cmd pnpm install` | 无 `ERR_PNPM_UNEXPECTED_STORE`；`node_modules` 链到 `<根>/.cache/pnpm-store` |
-| 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **12 张业务表**；种子为 11 / 4 / 29；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
+| 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **13 张业务表**；权限点 **12** / 角色 4；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **360 项、0 失败**（shared 83 + api 197 含 5 跳过 + web 70 + desktop 10）；其余三条全绿 |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **496 项、0 失败**（shared 108 + api 226 含 5 跳过 + web 86 + desktop 76）；其余三条全绿 |
 | 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **149 项全通过**（UI 集成后的结果；改界面就要重跑） |
 | 11 | **外壳（阶段四起）** | 经入口 `pnpm --filter @fanhe/web build` 重建产物 → `pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`） | 输出 `[smoke] PASS`，且 `console错误=0`；详见 8.5 |
 
@@ -810,12 +872,14 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 前端本机草稿暂存（T3-08） | `apps/web/src/lib/note-draft.ts`（槽名、带版本号的序列化、过期与容量清理、写失败重试；接口注入 storage 以便单测） |
 | 前端偏好与主题 | `apps/web/src/lib/{preferences,theme,credential}.ts`、`apps/web/src/index.css` |
 | Prisma 配置与模型 | `apps/api/prisma.config.ts`、`apps/api/prisma/schema.prisma` |
-| 迁移目录 | `apps/api/prisma/migrations/`（**6 个**；时间戳是 UTC） |
+| 迁移目录 | `apps/api/prisma/migrations/`（**7 个**；时间戳是 UTC；第七个是 T7-01 的 `20261012094234_user_permissions`） |
 | 数据库 compose | `projects/fanhe-work/docker-compose.yml`（**T5-01 起三服务、T5-02 起四服务、T5-04 起五个**：`db` / `migrate`（`migrate deploy && db:seed`，跑完退出）/ `api` / `web` / `cloudflared`（**T5-04 加，不绑任何宿主端口** —— 这就是「无公网入站端口」的实现）；连接串收成 `x-database-url` 单一来源；容器操作经 `infra/portable/ws-compose.cmd`，**该脚本不能用绝对路径调**） |
 | Tunnel 验收脚本 | `projects/fanhe-work/tools/checks/t504-tunnel.mjs`（T5-04 **新**，**17 项**；三层判据证「无入站暴露」：配置层读 `compose config` 展开后的 ports、运行时层读 `docker inspect`、**网络层从独立 bridge 网络探宿主端口（唯一不依赖配置假设的那个）**；`--offline` 跳过公网那组并**如实说明未验证**） |
 | 容器构建 | `projects/fanhe-work/.dockerignore`、`apps/api/Dockerfile`（**三阶段：build / runtime / migrate —— migrate 必须在末尾，而 compose 里 api 与 web 都要显式写 `target`**）、`apps/web/Dockerfile`、`apps/web/deploy/nginx.conf` |
 | 空卷验收脚本 | `projects/fanhe-work/tools/checks/t502-empty-volume.mjs`（T5-02 建、T5-03 扩：自建隔离环境 → 空卷 → 一条命令 → **30 项断言（含权限体系 11/4/29 与「建 owner → 登录 → 带令牌读账号」端到端）** → 清理；**可重复跑，不碰现有数据**） |
 | 版本清单接口 | `GET /api/version`（T6-01，**不设门禁** —— T6-02 要在登录前拿到）；实现见 `apps/api/src/version/manifest.ts`（**运行时读根 `package.json`，逐级上溯认 `pnpm-workspace.yaml` 为根**）、类型与比较规则见 `packages/shared/src/version.ts`（**api 侧 `builtAt` 恒空、`commitSha` 恒 `unknown`，故两侧指纹不相等，T6-02 要比版本号**） |
+| 客户端版本检查（T6-02） | `apps/web/src/lib/version-check.ts`（取数 + 比对 + 异常降级为 `unknown`）、`apps/web/src/lib/use-version-check.ts`（挂载时机）、`apps/web/test/version-check.test.mjs`（16 项）；更新提示落在 `apps/web/src/components/TopBar.tsx` 的账号菜单 |
+| 账号与权限管理（T7-01） | 库：`apps/api/prisma/migrations/20261012094234_user_permissions`、`users.department` 与 `UserPermission` 模型；共享包：`packages/shared/src/{permissions,audit,user-admin}.ts`（`system.user.delete` 权限点与 `mergePermissions`）；服务端：`apps/api/src/auth/{guard,user-admin}.ts`、`apps/api/src/routes/system-users.ts`；前端：`apps/web/src/pages/UsersPage.tsx`、`apps/web/src/components/system/UserDialogs.tsx`、`apps/web/src/lib/system-users.ts`（含 `diffPermissions`）；测试：`apps/api/test/user-admin.test.ts`（22 项）；说明文档：`docs/T7-01-ACCOUNT-ADMIN.md` |
 | 数据库备份恢复 | `projects/fanhe-work/tools/checks/db-backup.mjs`（T5-03 **新**：`backup` / `list` / `verify`（真恢复演练）/ `restore <文件> --force`；`pg_dump -Fc` 收 Buffer，恢复走 `docker exec -i` + stdin 且必须 `--clean --if-exists`；产物落 `projects/fanhe-work/data/backups/`，**不放在卷里**） |
 | 容器编排密钥 | `projects/fanhe-work/.env.compose`（**不入版本控制**，`.gitignore` 已排除；内容与 `apps/api/.env` 那份刻意不同） |
 | 环境变量样例 | `apps/api/.env.example` |
@@ -835,7 +899,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 文档 | 职责 |
 | -- | -- |
-| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43、T4-04 为 9.44，服务端化 T5-01 为 9.45 ~ T5-04 为 9.48，阶段六 T6-01 为 9.49）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线），9.44 记录 T4-04 启动自检的实施判断（三类失效的划分、外部模块复用边界、检查类功能的两条通用规则），9.45 记录 T5-01 容器编排的实施判断（生产形态编排、`HOST=0.0.0.0`、六个构建期踩坑），**9.46 记录 T5-02 的实施判断（迁移执行者、`depends_on` 的两种条件、`x-` 锚点与单一来源、「不写 target 停在最后一个 FROM」那个真 bug）**，**9.47 记录 T5-03 的实施判断（任务书与现实不符时怎么重定目标、「建出表 ≠ 系统可用」、惰性求值 vs 注入密钥的取舍与它的代价、备份不能用 `promisify(execFile)`、恢复必须 `--clean`、`n_live_tup` 是估算值）**，**9.48 记录 T5-04 的实施判断（凭据授权方式的取舍、zone ID 填进账户参数会得到误导性的「认证错误」、`172.17.0.1` vs `host.docker.internal`、「绑 127.0.0.1」与「无公网入站」是两件事、三层判据与「验收脚本要能证伪」、`--offline` 不能把「没验」说成「验过了」，以及 T5-05 暂缓与其已知风险）**，**9.49 记录 T6-01 的实施判断（运行时读清单 vs 构建期注入、两侧指纹不相等所以要比版本号、路径查找读错会得到 `0.0.0` 这个「永远提示有更新」的合法错误答案、手写 SHA-256 必须配 node:crypto 逐值对照、`lib` 不含 DOM 时手写 UTF-8 而非扩大 lib）**。 |
+| `docs/DEVELOPMENT-PLAN.md` | 总体方案、任务表（第三章）、阶段验收（第七章）、里程碑（第八章）、**逐任务实施判断（第九章，阶段三为 9.28 ~ 9.39，UI 集成为 9.40，桌面外壳 T4-01 为 9.41、T4-02 为 9.42、T4-03 为 9.43、T4-04 为 9.44，服务端化 T5-01 为 9.45 ~ T5-04 为 9.48，阶段六 T6-01 为 9.49）**。9.34 专门记录中文检索的选型，9.35 记录草稿自动保存的三写三清与那个时序坑，9.36 记录事件板块两张表的语义区分与状态流水的写法，9.37 记录事件列表视图的分工（分组在前端、排序在服务端），9.38 记录勾选切换的四处判断（乐观更新与重拉如何并存、回滚为什么是「重新对齐服务端」、串行化、「乐观」那条断言怎么才证得了），9.39 记录详情面板与 e2e 指针事件的判断，9.40 记录 UI 集成的实施判断，9.41 记录 T4-01 外壳的实施判断（内置静态服务 vs `file://`、`/api` 反代、CJS 与沙箱、Electron 无 postinstall 等），9.42 记录 T4-02 的实施判断，9.43 记录 T4-03 的实施判断（跨包 `import()` 加载源码、主进程复核、IPC 通道缺防线），9.44 记录 T4-04 启动自检的实施判断（三类失效的划分、外部模块复用边界、检查类功能的两条通用规则），9.45 记录 T5-01 容器编排的实施判断（生产形态编排、`HOST=0.0.0.0`、六个构建期踩坑），**9.46 记录 T5-02 的实施判断（迁移执行者、`depends_on` 的两种条件、`x-` 锚点与单一来源、「不写 target 停在最后一个 FROM」那个真 bug）**，**9.47 记录 T5-03 的实施判断（任务书与现实不符时怎么重定目标、「建出表 ≠ 系统可用」、惰性求值 vs 注入密钥的取舍与它的代价、备份不能用 `promisify(execFile)`、恢复必须 `--clean`、`n_live_tup` 是估算值）**，**9.48 记录 T5-04 的实施判断（凭据授权方式的取舍、zone ID 填进账户参数会得到误导性的「认证错误」、`172.17.0.1` vs `host.docker.internal`、「绑 127.0.0.1」与「无公网入站」是两件事、三层判据与「验收脚本要能证伪」、`--offline` 不能把「没验」说成「验过了」，以及 T5-05 暂缓与其已知风险）**，**9.49 记录 T6-01 的实施判断（运行时读清单 vs 构建期注入、两侧指纹不相等所以要比版本号、路径查找读错会得到 `0.0.0` 这个「永远提示有更新」的合法错误答案、手写 SHA-256 必须配 node:crypto 逐值对照、`lib` 不含 DOM 时手写 UTF-8 而非扩大 lib）**，**9.50 记录 T6-02 客户端版本检查的实施判断（异常降级为 `unknown` 而不当报错、四种结果不并成布尔、只有 `outdated` 才提示），9.51 记录 T7-01 账号与权限管理的实施判断（`granted` 存布尔、owner 短路、越权一律 404、三处「立刻生效」要吊销 refresh token、`role_permissions` 的查询层级、两条写错的测试断言）**。 |
 | `docs/PHASE-SUMMARY-2026-10-12.md` | **阶段性工作总结（换机检查点）**：总体进度、已完成 / 进行中 / 待办、文件与版本状态、换机衔接步骤、下一步 T4-02。**换机或新会话接手时先读本文，再读主文档。** |
 | `docs/UI-INTEGRATION-2026-10-11.md` | **本次 UI 集成记录（最终态）**：18 项导航信息架构与分层路径、两批边界、改动文件清单、四个关键对接点、五项用户裁决、版本号的展示与更新方式、验证结果与实跑中修掉的六个渲染层问题。 |
 | `docs/NEXT-TASK-PREP-阶段四-2026-10-11.md` | 阶段四开工准备（T4-01 开工清单；§八 为阶段三收口后的收尾更新）。**下一阶段执行前先读这份**。 |
@@ -845,7 +909,9 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | `docs/IMPLEMENTATION-PLAN.md` | 实施层面的方案对照 |
 | `docs/HANDOFF-2026-10-10.md` | 阶段一收口时的交接（当日成果、决策、未解决问题、逐文件清单、换机步骤 7.x） |
 | `docs/HANDOFF-2026-10-11.md` | T3-04 当日补记 |
-| `docs/PROGRESS-REVIEW-2026-10-11.md` | 任务进度盘点（完成 / 进行中 / 未开始、九条风险 R1~R9、下一步优先级）。**数字已过期，以本文为准** |
+| `docs/PROGRESS-REVIEW-2026-10-11.md` | 任务进度盘点（完成 / 进行中 / 未开始、九条风险 R1~R9、下一步优先级）。**数字已过期，以 2026-10-13 那版与本文为准** |
+| `docs/PROGRESS-REVIEW-2026-10-13.md` | **本轮进度复盘**：计划内 48/50 的口径、已完成 / 进行中 / 未开始、运行状态与验证基线、七条风险 R1~R7、下一步优先级 P0~P3、三个待确认点。**数字与本文一致** |
+| `docs/T7-01-ACCOUNT-ADMIN.md` | T7-01 账号与权限管理的实施文档：权限模型（三处合并与 owner 短路）、表结构、接口清单、四类语义陷阱、改动文件清单、四条已知限制 |
 | `docs/SYNC-COMPARE-2026-10-11.md` | 工作空间与远端仓库逐项对比（含 `node_modules.old` 的完整分析，第十一节） |
 | `docs/SYNC-AUDIT-*.md` | 仓库同步审计 |
 | `docs/PROJECT-SURVEY-*.md` | 项目结构与依赖现状扫描 |
@@ -856,7 +922,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ---
 
-## 十一、本次（2026-10-11 ~ 10-12）工作留痕
+## 十一、本次（2026-10-11 ~ 10-13）工作留痕
 
 | 时间 | 事项 | 结果 |
 | -- | -- | -- |
@@ -919,6 +985,12 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 10-12 17:3x | **T6-01 三个关键判断** | ① **运行时读根 `package.json` 而非构建期注入** —— 注入式最常见的失效是「改了清单忘了重建而接口仍报旧版本」；且运行时阶段本就 COPY 了它（pnpm 链接式布局需要），顺带被用上，**不用改 Dockerfile**。② **两侧指纹不相等，T6-02 要比版本号** —— `.dockerignore` 排掉 `.git`，容器里 `builtAt` 恒空、`commitSha` 恒 `unknown`。③ **找不到根清单时抛错不回落** —— 而 `0.0.0` 恰好是「永远提示有更新」的值，一个说谎的版本号比启动失败更糟 |
 | 10-12 17:3x | **T6-01 踩的坑** | ① 路径查找第一版「上溯三层」实际落到 `apps/api/package.json`（`0.0.0`）→ 改成逐级上溯认 `pnpm-workspace.yaml` 为根，**且顺序不能反**（先确认是根再读版本号）；判据不能换成「目录里有没有 package.json」（沿路每层都有且都是 `0.0.0`）。② `TextEncoder` 在 shared 不可用（`lib: ["ES2023"]` 不含 DOM）→ 手写 UTF-8，**不为一个纯计算函数扩大整个包的 lib**；手写时 `codePointAt` 读完增补平面字符要跳过代理对后半截。③ `.mjs` 测试里写 TS 标注直接 `SyntaxError`（连文件都加载不了）；`Buffer`/`TextEncoder` 都不在 shared 测试的 eslint 环境（Node 全局块覆盖 `packages/**/*.{ts,tsx}` 不含 `*.mjs`，既有缺口，**没有顺手改全局配置**）。④ **手写 SHA-256 必须配对照测试** —— 风险形态是「能算出结果但算错了」，故用 `node:crypto` 逐值对照并覆盖**四种长度**（不足一块 / 跨块 / 超两块 / 全空，补位逻辑在跨块时最易写错），四种全部一致 |
 | 10-12 16:0x | **T5-04 写验收脚本时踩的坑** | ① 探针用 `host.docker.internal` 报三个端口全 OPEN —— **它在 Linux Docker 上解析到宿主网关，而服务绑的是 `127.0.0.1`（只听回环）**，探错了对象；改 `172.17.0.1` 全 CLOSED。② `execFile` 直接 spawn `.cmd` 抛 `spawn EINVAL`，改绝对路径调 `ws-compose.cmd` 报 `'F:\fanhe' 不是内部或外部命令`（**真实原因是路径里有空格**）→ `shell: true` + 相对路径。③ `--offline` 下仍打印「结论：外部可访问」—— **把「没验」说成「验过了」，已改为如实说明未验证**。④ **做了反例测试**：临时给 `cloudflared` 加 `ports:`，确认断言真报 FAIL 并打出数组内容，再恢复 —— **全绿的脚本可能只是因为断言恒真而全绿** |
+| 10-13 09:2x | **交接包导出（换机准备）** | `交接-20261012/` 13MB / 37 文件：数据库备份（含真恢复演练，14 张表行数一致）、数据卷原始归档（1398 条目）、Docker 全量清单与 inspect、compose 展开后配置、两条线的未提交代码归档、新机还原脚本与 README |
+| 10-13 09:2x ~ 09:5x | **T7-01 实施（账号与权限管理）· 阶段七** | 库加 `user_permissions` 与 `users.department`，shared 加 `system.user.delete`（权限点 11 → 12）与 `mergePermissions`，api 加九接口与三路合并权限解析，web 加账号管理页与三个对话框。api 22 项；修掉两处真 bug（`role_permissions` 写成 User 一层关系致 `/api/system/*` 全 500、Docker 引擎隔夜未启动）与两条写错的测试断言 |
+| 10-13 10:0x | **`db:reset-password` 通道** | 新增 `apps/api/src/tools/reset-password.ts`：密码从 stdin 读，不进 shell 历史与进程环境表。实测活跃会话 1 → 0、失败计数清零、新密码可登录、旧密码失效 |
+| 10-13 11:2x | **UI 落地对齐（设计稿 → 真机）** | 字体栈合成为 `FH Sans SC`（判据：`400=280.20 / 500=287.06 / 700=296.05`，对照 `Microsoft YaHei 400=500=291.55`）、移除 10 处 `transition-colors`、单元卡四层材质、`prefers-reduced-motion` 降级、自绘 6px 滚动条。改动 10 个前端文件，`build web` + `--force-recreate` 生效，容器内产物自检含 `FH Sans SC`×5 / `glow-bloom`×2 / `scroll-thumb`×3 |
+| 10-13 11:2x | **三条线整理提交并推送** | 工作树积压的 T6-02 / T7-01 / UI 对齐按「一个任务一笔、代码与文档分两笔」拆成五笔（`d179e81` / `ab96a58` / `49c4f85` / `5dc0c90` / `5fd7f84`），`dev` 用 `git branch -f dev main` 同步跟随；`format:check` 因此首次全绿（基线 496 项）。踩到并回填两个坑：全局 `.gitconfig` 的 URL 级代理项压过 `http.proxy` 与环境变量、推内联 URL 不更新 `refs/remotes/origin/*`（判据以 `ls-remote` 为准） |
+| 10-13 11:3x | **本轮：进度复盘 + 文档回填** | 新增 `docs/PROGRESS-REVIEW-2026-10-13.md`（七条风险、四级优先级、三个待确认点）；本文档头部 / §0 / §2.1 / §2.3 / §2.4 / §3.6 ~ §3.8 / §4.1 / §4.1.0 / §4.1.9 / §4.1.10 / §4.3 / §9 / §10 / §11 同步至 `5fd7f84`；`DEVELOPMENT-PLAN.md` 追加 9.50 / 9.51 并登记阶段七 |
 
 
 **§十一 新增/修改的关键文件（T6-01）**：`projects/fanhe-work/packages/shared/src/version.ts`（**新**：`VersionManifestResponse` / `BUILD_FINGERPRINT_LENGTH` / `computeBuildFingerprint` / `compareVersions` / `compareManifests` / `VersionComparison`，含手写 SHA-256 与 UTF-8 编码，**每一处手写都注明了「为什么不用标准库」与它的风险形态**）、`packages/shared/src/index.ts`（加 `export * from './version.js'`）、`packages/shared/test/version.test.mjs`（**新** 24 项）、`projects/fanhe-work/apps/api/src/version/manifest.ts`（**新**：`GET /api/version`、逐级上溯认 `pnpm-workspace.yaml`、**找不到就抛错**、不设门禁的理由与复查起点写在注释里）、`apps/api/src/app.ts`（接线）、`apps/api/test/version-manifest.test.ts`（**新** 7 项，含**从编译产物位置出发**的那条）、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/web/src` 与 `packages/shared/src` 其余文件一行未改。**
