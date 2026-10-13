@@ -103,18 +103,104 @@ export function apiSourceRoot(workspaceRoot: string): string {
  * 于是它在 desktop 全绿的情况下一直是坏的。因此必须 `pathToFileURL` 转一次，
  * 顺带也把工作区路径里的空格（`fanhe Work`）正确编码掉 —— 手拼 `file://` 十有八九
  * 会漏掉这一步，而漏掉的症状是「路径里有空格时才坏」，更难查。
+ *
+ * ## 装完之后没有工作区（T6-03a）
+ *
+ * 开发态吃的是工作区里的源码，改完 `agent.ts` 下次启动即生效。但**安装包形态下根本
+ * 没有工作区** —— `locateWorkspaceRoot` 会返回 `null`，而那不是出错，是那一形态的
+ * 正常状态。所以这里多一条 `bundledAgent` 降级：找不到工作区时就加载随包资源
+ * （安装目录 `resources/agent/agent.ts`，见 `electron-builder.yml`）。
+ *
+ * **`bundledAgent` 是可选参数，且开发态调用方不传它。** 这一条是刻意的：不传时
+ * 三条分支的行为与 T4-03 一字不差（报错文本也一样），于是既有的路径回归测试不需要
+ * 为了让新分支通过而放宽。传了才启用降级。
+ *
+ * 降级能成立的前提是**那份源码运行时依赖为零**（只有 node 内建 + 一条会被抹掉的
+ * `import type`），所以它可以原样投递、不必编译 —— 这一点已实测，见
+ * `docs/T6-03-UPDATE-CHANNEL.md` §3.2。
  */
-export async function apiLaunchModule(fromDir: string): Promise<unknown> {
+export async function apiLaunchModule(fromDir: string, bundledAgent?: string): Promise<unknown> {
+  // 「传了随包路径」就是「允许降级」的信号。开发态的调用方不传，于是四条失败分支
+  // 各自还抛原来那句话（报错文本被 T4-03 的测试钉着），行为与那时一字不差。
+  const target = resolveWorkspaceAgent(fromDir, bundledAgent !== undefined)
+  if (target !== null) return await import(pathToFileURL(target).href)
+
+  if (bundledAgent !== undefined && existsSync(bundledAgent)) {
+    return await import(pathToFileURL(bundledAgent).href)
+  }
+
+  throw new Error(
+    `本机代理核心没找到。工作区侧从 ${fromDir} 推不出 apps/api/src/launch/agent.ts，` +
+      `随包侧 ${String(bundledAgent)} 也不存在。` +
+      `开发态查工作区是否完整（要有 .ws-root 与 apps/api/src）；` +
+      `安装态查安装目录下 resources/agent/agent.ts 有没有随包投出。`,
+  )
+}
+
+/**
+ * 工作区里的代理源码路径；推不出来时按 `lenient` 决定是抛错还是返回 `null`。
+ *
+ * `lenient === false`（开发态）**逐条抛出可照着修的话**，这是 T4-03 定下的行为：
+ * 「介质拷漏了」与「盘符变了」在外壳上的表现都是「点启动说本机代理不可用」，
+ * 原因却在一条 `join()` 里，所以报错必须说清缺的是哪一段。
+ *
+ * `lenient === true`（安装态）**一律返回 `null` 不抛**：装完之后根本没有工作区，
+ * 那是那一形态的正常状态而不是错误，此时该做的是接着去找随包资源。
+ * 四条分支都要覆盖到 —— 只覆盖「找不到 .ws-root」是不够的：一台插着残缺介质的
+ * 机器会走到「有根但没有 api 源码」那一支，而那一支原来会抛错把降级顶掉。
+ */
+function resolveWorkspaceAgent(fromDir: string, lenient: boolean): string | null {
   const root = locateWorkspaceRoot(fromDir)
   if (root === null) {
+    if (lenient) return null
     throw new Error(
       `未找到工作区根（从 ${fromDir} 向上找不到 .ws-root）。` +
         `本机代理需要定位 apps/api 源码，确认工作区完整。`,
     )
   }
-  const target = join(apiSourceRoot(root), 'launch', 'agent.ts')
+
+  let apiRoot: string
+  try {
+    apiRoot = apiSourceRoot(root)
+  } catch (error) {
+    if (lenient) return null
+    throw error
+  }
+
+  const target = join(apiRoot, 'launch', 'agent.ts')
   if (!existsSync(target)) {
+    if (lenient) return null
     throw new Error(`未找到本机代理核心：${target}。确认 apps/api/src/launch/agent.ts 存在。`)
   }
-  return await import(pathToFileURL(target).href)
+  return target
+}
+
+/**
+ * 前端构建产物的落点。
+ *
+ * 开发态它是 `apps/desktop/dist` 的上两级兄弟（`apps/web/dist`），由
+ * `pnpm --filter @fanhe/web build` 生成；**打包态 asar 里没有兄弟目录**，
+ * 产物由 `electron-builder.yml` 的 extraResources 投到 `resources/web`。
+ *
+ * 参数是显式的而不是在函数里读 `app.isPackaged` / `process.resourcesPath`：
+ * 那两样都要求在 Electron 运行时里才拿得到，而这个模块要能在纯 Node 的单测里直接跑
+ * （与 `locateWorkspaceRoot` 的 `fromDir` 同一条理由）。
+ */
+export function webDistRoot(options: {
+  packaged: boolean
+  resourcesPath: string
+  fromDir: string
+}): string {
+  if (options.packaged) return join(options.resourcesPath, 'web')
+  return resolve(options.fromDir, '../../web/dist')
+}
+
+/**
+ * 随包投出的本机代理源码路径（`electron-builder.yml` 的 `agent/agent.ts`）。
+ *
+ * 单列一个函数是为了让「安装态去哪儿找」这件事只有一个定义处 —— 它同时被
+ * `main.ts` 与说明文档引用，两处各写一遍迟早会偏。
+ */
+export function bundledAgentPath(resourcesPath: string): string {
+  return join(resourcesPath, 'agent', 'agent.ts')
 }

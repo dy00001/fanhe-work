@@ -291,3 +291,80 @@ test('写配置时自动建目录', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+/*
+ * 以下是 T6-03a 新增的「装完之后」那一半。
+ *
+ * 装出来的客户端没有工作区，而服务地址这件配置必须有地方落盘 —— 否则界面上的
+ * 「切换服务地址」在安装版里根本写不进去（`service:set` 会一直返回「未找到配置文件
+ * 路径」），而缺省值又指向本机 8787，在别人机器上连的是一个不存在的端口。
+ */
+
+test('安装态：配置落在 configDir 下，且 service:set 真的写得进去', async () => {
+  // 临时目录上方没有 .ws-root —— 正是装完之后的样子。
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-config-packed-'))
+  const configDir = join(root, 'userData')
+  try {
+    const loaded = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+
+    // `path` 非空是这一条的核心：main.ts 的 `service:set` 拿不到路径就写不了。
+    assert.equal(loaded.path, join(configDir, 'service.json'))
+    assert.equal(loaded.source, 'default')
+    assert.equal(loaded.config.serviceUrl, 'https://work.example.tld')
+
+    // 真写一次再读回来 —— 只断言路径形状证明不了「写得进去」。
+    await saveServiceConfig(loaded.path, { serviceUrl: 'https://other.example.tld' })
+    const again = await loadServiceConfig({ fromDir: root, configDir, env: {} })
+    assert.equal(again.source, 'file')
+    assert.equal(again.config.serviceUrl, 'https://other.example.tld')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('安装态的兜底地址必须按形态给，不能共用开发态那个', async () => {
+  // 开发态的兜底是 127.0.0.1:8787，在开发机上恰好是对的（api 就在本机），
+  // 装到别人机器上却是一个不存在的端口 —— 而本机冒烟还能全绿。
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-config-fallback-'))
+  try {
+    const loaded = await loadServiceConfig({ fromDir: root, configDir: join(root, 'ud'), env: {} })
+    assert.equal(
+      loaded.config.serviceUrl,
+      DEFAULT_SERVICE_URL,
+      '不传 defaultUrl 时应当仍是开发态那个缺省值',
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('安装态：configDir 压过工作区根（插着介质也不读那边的配置）', async () => {
+  // 这台机器上恰好插着一个工作区时，安装版仍然该读自己的配置 —— 否则「装完的
+  // 客户端连哪儿」会随 U 盘在不在而变，而那是一种极难解释的间歇性故障。
+  const root = await makeWorkspace()
+  const configDir = join(root, 'userData')
+  try {
+    await saveServiceConfig(configPathFor(root), { serviceUrl: 'https://from-workspace.tld' })
+
+    const loaded = await loadServiceConfig({
+      fromDir: join(root, 'projects', 'fanhe-work', 'apps', 'desktop', 'dist'),
+      configDir,
+      defaultUrl: 'https://from-package.tld',
+      env: {},
+    })
+
+    assert.equal(loaded.path, join(configDir, 'service.json'))
+    assert.equal(
+      loaded.config.serviceUrl,
+      'https://from-package.tld',
+      '不该读到工作区那份 https://from-workspace.tld',
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

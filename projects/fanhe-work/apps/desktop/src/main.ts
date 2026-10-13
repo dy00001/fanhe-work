@@ -42,7 +42,7 @@
  */
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import {
   describeSource,
   findWorkspaceRoot,
@@ -52,11 +52,34 @@ import {
 } from './config.js'
 import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from './agent.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
-import { apiLaunchModule } from './paths.js'
+import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
 
-/** 前端构建产物的绝对路径。`__dirname` 是 `apps/desktop/dist`。 */
-const DIST_ROOT = resolve(__dirname, '../../web/dist')
+/**
+ * 前端构建产物的绝对路径。
+ *
+ * **两种形态的落点不同**（T6-03a）：开发态 `__dirname` 是 `apps/desktop/dist`，
+ * 产物在它的上两级兄弟 `apps/web/dist`；打包态 asar 里没有兄弟目录，产物由
+ * `electron-builder.yml` 的 extraResources 投到 `resources/web`。
+ * 判据是 `app.isPackaged` —— 它看的是「跑在打包产物里吗」，而不是「是不是生产构建」，
+ * 所以 `--smoke` 与正式启动走的是同一条分支。
+ */
+const DIST_ROOT = webDistRoot({
+  packaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  fromDir: __dirname,
+})
+
+/**
+ * 安装态在没有任何配置时连的地址。
+ *
+ * 开发态的兜底是 `http://127.0.0.1:8787`（`config.ts` 的 `DEFAULT_SERVICE_URL`），
+ * 那在开发机上恰好是对的 —— api 就在本机跑。**装到别人机器上却会去连一个不存在的
+ * 本机端口**，界面是坏的，而本机的冒烟还能全绿。所以兜底必须按形态给。
+ *
+ * 取值就是这套系统的线上地址（Cloudflare Tunnel，见 T5-04）。换域名时要改这一行。
+ */
+const PACKAGED_SERVICE_URL = 'https://work.fanhe.dpdns.org'
 
 const IS_SMOKE = process.argv.includes('--smoke')
 
@@ -193,12 +216,17 @@ function registerServiceIpc(): void {
  * 可能是工作区不完整 —— 那不该让外壳连界面都开不出来。两个调用方（`launch:run` 与
  * `launch:diagnostics`）都需要它，**共用这一处**是为了让「代理不可用」这个状态在两条
  * 通道上的说法完全一致；分成两处写，迟早会有一处忘了带上原因。
+ *
+ * **安装态没有工作区**（T6-03a），所以打包时把随包资源的位置一并传下去，让
+ * `paths.ts` 在工作区推不出来时退到 `resources/agent/agent.ts`。开发态传 `undefined`，
+ * 于是那四条失败分支的报错与 T4-03 一字不差 —— 降级只在真正需要它的形态里生效。
  */
 async function loadLaunchAgent(): Promise<
   { ok: true; module: LaunchAgentModule } | { ok: false; detail: string }
 > {
   try {
-    return { ok: true, module: (await apiLaunchModule(__dirname)) as LaunchAgentModule }
+    const bundled = app.isPackaged ? bundledAgentPath(process.resourcesPath) : undefined
+    return { ok: true, module: (await apiLaunchModule(__dirname, bundled)) as LaunchAgentModule }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     console.error(`[launch] 本机代理不可用：${detail}`)
@@ -285,7 +313,17 @@ async function bootstrap(): Promise<void> {
     throw new Error(`未找到前端构建产物：${DIST_ROOT}。请先运行 pnpm --filter @fanhe/web build`)
   }
 
-  currentService = await loadServiceConfig({ fromDir: __dirname })
+  // 安装态没有工作区，配置改落 userData —— 与凭据密钥库同一处逐用户目录。
+  // 不这么改的话 `currentService.path` 是空串，`service:set` 会一直返回
+  // 「未找到配置文件路径」，界面上的「切换服务地址」在安装版里是死的。
+  //
+  // 用展开而不是直接传 `undefined`：`tsconfig.base.json` 开了
+  // `exactOptionalPropertyTypes`，把「属性缺席」与「属性是 undefined」当作两件事，
+  // 而 `loadServiceConfig` 的可选参数只在缺席时才走开发态那条分支。
+  const packagedOnly = app.isPackaged
+    ? { configDir: app.getPath('userData'), defaultUrl: PACKAGED_SERVICE_URL }
+    : {}
+  currentService = await loadServiceConfig({ fromDir: __dirname, ...packagedOnly })
   const serviceUrl = currentService.config.serviceUrl
 
   // 这三行是「配置跟着工作空间走」这件事的直接后果：换台电脑时它读的是那边工作区
@@ -295,6 +333,9 @@ async function bootstrap(): Promise<void> {
     `[config] 服务地址 ${serviceUrl}（来源：${describeSource(currentService.source)}）` +
       (workspaceRoot === null ? '' : `，工作区 ${workspaceRoot}`),
   )
+  // 打印运行形态是给排障用的：安装态与开发态的前端产物落在完全不同的地方，
+  // 而「界面是旧的」这类报告的第一分岔点就是这里。
+  console.log(`[config] 运行形态 ${app.isPackaged ? '安装态' : '开发态'}，前端产物 ${DIST_ROOT}`)
   if (currentService.warning !== null) console.warn(`[config] ${currentService.warning}`)
 
   registerServiceIpc()

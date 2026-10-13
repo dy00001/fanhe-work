@@ -162,11 +162,31 @@ export async function loadServiceConfig(options: {
   fromDir: string
   /** 工作区根。给定则跳过向上查找，主要给测试与显式场景用。 */
   workspaceRoot?: string | null
+  /**
+   * 配置目录。给定则**不用工作区根**，配置落在 `<configDir>/service.json`。
+   *
+   * 装完之后没有工作区（T6-03a），而「服务地址」这件配置必须有地方落盘、且要能被
+   * `service:set` 写回 —— 否则界面上的「切换服务地址」在安装版里是死的。安装态的
+   * 调用方传 `app.getPath('userData')`，与凭据密钥库同在系统盘的逐用户目录里。
+   *
+   * **开发态不传这个参数**，于是路径仍由 `.ws-root` 推出、配置随工作空间走，
+   * 与 T4-02 的行为一字不差。
+   */
+  configDir?: string
+  /**
+   * 什么配置都读不到时的兜底地址。缺省是 `DEFAULT_SERVICE_URL`。
+   *
+   * 安装态要传线上地址：那条「退回本机 8787」的兜底在开发机上恰好是对的（api 容器
+   * 就在那儿），装到别人机器上却会连一个不存在的本机端口 —— 界面是坏的，而冒烟在本机
+   * 还能全绿。**兜底值必须按形态给，不能共用一个。**
+   */
+  defaultUrl?: string
   /** 环境变量来源，默认 `process.env`。 */
   env?: NodeJS.ProcessEnv
 }): Promise<LoadResult> {
   const env = options.env ?? process.env
   const fromDir = options.fromDir
+  const fallbackUrl = options.defaultUrl ?? DEFAULT_SERVICE_URL
 
   const override = normalizeServiceUrl(env['FANHE_SERVICE_URL'])
   if (override.ok) {
@@ -182,35 +202,41 @@ export async function loadServiceConfig(options: {
   }
 
   const workspaceRoot = options?.workspaceRoot ?? findWorkspaceRoot(fromDir)
-  if (workspaceRoot === null) {
+
+  // 路径的两条来源互斥：显式给了配置目录就用它（安装态），否则由工作区根推（开发态）。
+  let path: string
+  if (options.configDir !== undefined) {
+    path = join(options.configDir, 'service.json')
+  } else if (workspaceRoot !== null) {
+    path = configPathFor(workspaceRoot)
+  } else {
     return {
-      config: { serviceUrl: DEFAULT_SERVICE_URL },
+      config: { serviceUrl: fallbackUrl },
       source: 'default',
       path: '',
-      warning: `未找到工作区根（向上找不到 .ws-root），退回缺省服务地址 ${DEFAULT_SERVICE_URL}。`,
+      warning: `未找到工作区根（向上找不到 .ws-root），退回缺省服务地址 ${fallbackUrl}。`,
     }
   }
 
-  const path = configPathFor(workspaceRoot)
   let raw: string
   try {
     raw = await readFile(path, 'utf8')
   } catch {
     return {
-      config: { serviceUrl: DEFAULT_SERVICE_URL },
+      config: { serviceUrl: fallbackUrl },
       source: 'default',
       path,
-      warning: `未找到服务地址配置（${path}），退回缺省 ${DEFAULT_SERVICE_URL}。`,
+      warning: `未找到服务地址配置（${path}），退回缺省 ${fallbackUrl}。`,
     }
   }
 
   const parsed = parseConfig(raw)
   if (!parsed.ok) {
     return {
-      config: { serviceUrl: DEFAULT_SERVICE_URL },
+      config: { serviceUrl: fallbackUrl },
       source: 'default',
       path,
-      warning: `服务地址配置不可用（${parsed.error}），退回缺省 ${DEFAULT_SERVICE_URL}。`,
+      warning: `服务地址配置不可用（${parsed.error}），退回缺省 ${fallbackUrl}。`,
     }
   }
 

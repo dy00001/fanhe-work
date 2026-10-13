@@ -14,6 +14,18 @@ export default [
       // 依赖重建遗留的备份目录。它只含第三方包，名字却不匹配 node_modules，
       // 于是被 lint 与 format 扫到，产生大量与源码无关的报错。
       '**/node_modules.old/**',
+      // 临时目录。`ws-env.sh` 会把 TMP/TEMP 指到这里，所以调试脚本、隔离出来的
+      // 坏依赖、各种一次性的取证产物都往这儿丢。它已在 .gitignore 与
+      // .prettierignore 里，唯独漏了这一处 —— 2026-10-13 往 .tmp 放了一份
+      // node_modules 隔离副本，直接让 lint 报出 11064 条错，全部与源码无关。
+      // 这三处忽略规则必须一起维护（见工作区 MEMORY.md「门禁 / 忽略」）。
+      '.tmp/**',
+      // electron-builder 的输出目录（`apps/desktop/release/`，配置见
+      // `apps/desktop/electron-builder.yml`）。装的是整份 Electron 运行时与
+      // 前端构建产物，全是机器产物。`dist/` 被忽略而它不是 —— 因为默认输出目录
+      // 本来是 `dist`，为了不与 tsc 撞车才改名成 `release`，于是错过了那条规则。
+      // 2026-10-13 实测：漏了它，仅 `resources/web/assets/index-*.js` 一项就报 2238 条。
+      '**/release/**',
       // Prisma 生成的客户端。机器产物，改动它的格式没有任何意义，
       // 而且下次 generate 会整体覆盖。
       '**/src/generated/**',

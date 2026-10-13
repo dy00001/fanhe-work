@@ -16,7 +16,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { apiLaunchModule, apiSourceRoot, locateWorkspaceRoot } from '../src/paths.ts'
+import {
+  apiLaunchModule,
+  apiSourceRoot,
+  bundledAgentPath,
+  locateWorkspaceRoot,
+  webDistRoot,
+} from '../src/paths.ts'
 
 /**
  * 干净暂存根。**不能用 `os.tmpdir()`** —— 经 `ws-run.cmd` 跑时它被指向工作区的
@@ -117,4 +123,123 @@ test('工作区路径里有空格也能加载（import 收的是 URL，不是路
 
   const loaded = await apiLaunchModule(process.cwd())
   assert.equal(typeof loaded.runLaunchProfile, 'function')
+})
+
+/*
+ * 以下是 T6-03a 新增的「装完之后」那一半。
+ *
+ * 那些用例守的是一件开发态看不见的事：**安装包形态下根本没有工作区**，
+ * 于是原来那条「向上找 .ws-root」的路必然走不通，而那不是出错。
+ */
+
+/** 造一个「随包资源」目录：resources/agent/{agent.ts,package.json}。 */
+async function makeBundledAgent(root, marker) {
+  const dir = join(root, 'resources', 'agent')
+  await mkdir(dir, { recursive: true })
+  // 旁边这份 package.json 不是装饰：`.ts` 的模块类型由最近的 package.json 决定，
+  // 缺失会告警、写成 commonjs 会让加载直接失败（见 docs/T6-03-UPDATE-CHANNEL.md §3.5）。
+  // 这里照抄真实布局，顺带让测试输出保持干净。
+  await writeFile(join(dir, 'package.json'), '{"type":"module"}\n', 'utf8')
+  await writeFile(
+    join(dir, 'agent.ts'),
+    `export function runLaunchProfile() { return { ok: true, marker: ${JSON.stringify(marker)} } }\n` +
+      `export function inspectExecutablePath() { return Promise.resolve('ok') }\n`,
+    'utf8',
+  )
+  return bundledAgentPath(join(root, 'resources'))
+}
+
+test('安装态：没有工作区时退到随包资源加载代理', async () => {
+  // 这一条是 T6-03a 的存在理由。临时目录上方没有 .ws-root，正是装完之后的样子；
+  // 此时 `locateWorkspaceRoot` 返回 null，而 null 表示「这一形态本该如此」，
+  // 不是「出错了」—— 所以必须能接着往随包资源走，而不是抛错。
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-paths-packed-'))
+  try {
+    const bundled = await makeBundledAgent(root, 'packed')
+    const loaded = await apiLaunchModule(join(root, 'app', 'resources'), bundled)
+
+    assert.equal(typeof loaded.runLaunchProfile, 'function')
+    assert.equal(
+      loaded.runLaunchProfile().marker,
+      'packed',
+      '必须真的加载了随包那一份，而不是碰巧从别处拿到一个同名的函数',
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('安装态：介质残缺（有 .ws-root 但没有 api 源码）也要能降级', async () => {
+  // 这一条不是假想分支。`apiSourceRoot` 在缺目录时**抛错**，如果降级只挡在
+  // 「找不到 .ws-root」那一支上，一台插着残缺介质的机器就会在到达随包资源之前
+  // 被那条抛错顶掉 —— 报的还是「确认工作区完整」，与安装态的事实不符。
+  const root = await makeWorkspace()
+  await mkdir(join(root, 'projects', 'fanhe-work', 'apps'), { recursive: true })
+  const bundled = await makeBundledAgent(root, 'packed')
+
+  try {
+    const loaded = await apiLaunchModule(root, bundled)
+    assert.equal(loaded.runLaunchProfile().marker, 'packed')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('两处都没有时报一条同时说清两条路的话', async () => {
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-paths-none-'))
+  try {
+    // 随包路径指向一个不存在的文件：这是「打包时漏投了资源」的样子。
+    await assert.rejects(
+      apiLaunchModule(root, join(root, 'resources', 'agent', 'agent.ts')),
+      (error) => {
+        assert.match(error.message, /本机代理核心没找到/)
+        // 报错要同时提到开发态与安装态该查什么 —— 只提一边的话，另一种形态的人照着查会白费工夫。
+        assert.match(error.message, /开发态/)
+        assert.match(error.message, /安装态/)
+        return true
+      },
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('开发态不传随包路径时，报错文本与 T4-03 完全一致', async () => {
+  // 降级是**加**上去的一条路，不是把原来的路改掉。这条用「不传第二个参数」把
+  // 老行为钉死：否则将来有人图省事把参数改成必填，介质拷漏时的报错就会变味，
+  // 而那正是这类故障唯一的线索。
+  const root = await makeWorkspace()
+  try {
+    await assert.rejects(apiLaunchModule(root), (error) => {
+      assert.match(error.message, /未找到 api 源码目录/)
+      return true
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('前端产物落点：开发态取工作区兄弟目录，安装态取 resources/web', () => {
+  const fromDir = join('C:', 'ws', 'projects', 'fanhe-work', 'apps', 'desktop', 'dist')
+
+  assert.equal(
+    webDistRoot({ packaged: false, resourcesPath: 'C:\\ignored', fromDir }),
+    join('C:', 'ws', 'projects', 'fanhe-work', 'apps', 'web', 'dist'),
+    '开发态不看 resourcesPath —— 它在那儿没有意义',
+  )
+  assert.equal(
+    webDistRoot({ packaged: true, resourcesPath: 'C:\\App\\resources', fromDir }),
+    join('C:\\App\\resources', 'web'),
+    '安装态必须走 resourcesPath，asar 里没有 apps/web/dist 这个兄弟目录',
+  )
+})
+
+test('随包代理路径的形状与打包配置一致', () => {
+  // 这条看着像废话，但它钉的是**两处配置的一致性**：`electron-builder.yml` 把
+  // agent.ts 投到 `agent/agent.ts`，而这个函数负责算出它在哪儿。两边各写一遍、
+  // 其中一边改了，症状是装完之后点启动说「本机代理不可用」。
+  assert.equal(
+    bundledAgentPath('C:\\App\\resources'),
+    join('C:\\App\\resources', 'agent', 'agent.ts'),
+  )
 })

@@ -12,6 +12,13 @@ out/
 .next/
 *.tsbuildinfo
 
+# electron-builder 的输出目录（配置在 apps/desktop/electron-builder.yml 的
+# directories.output）。里面是安装包与 unpacked 目录，单个文件上十 MB，
+# 绝不能进版本控制。注意默认值是 dist/，本项目改成了 release/ 以免和 tsc
+# 的 outDir 与 Vite 的构建产物混淆 —— 两个目录同名会让「哪份是要发布的」变成
+# 每次都要现查的问题。
+release/
+
 # Prisma 生成的客户端。由 `pnpm db:generate` 从 schema 重建，产物随 schema
 # 变化而整体重写，提交进来只会制造无意义的 diff 与冲突。
 apps/api/src/generated/

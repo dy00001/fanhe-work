@@ -1,0 +1,88 @@
+# Electron 外壳的打包配置（T6-03a）。
+#
+# 用法：`pnpm --filter @fanhe/desktop dist`（见 apps/desktop/package.json）。
+# 取舍与踩点记在 `projects/fanhe-work/docs/T6-03-UPDATE-CHANNEL.md`，这里只留会改坏东西的那几条。
+#
+# 三处刻意偏离默认值，都是被本项目既有规则逼出来的：
+#
+#   1. `directories.output` 改成 `release/` —— electron-builder 的默认输出目录是
+#      `dist`，而 `dist` 正是 tsc 的 outDir（main.js / preload.js 就躺在里面）。
+#      两者叠在一起时，`files` 匹配 `dist/**` 可能把上一轮的安装包也读进去，一轮比一轮大。
+#
+#   2. `directories.buildResources` 挪到 `deploy/` —— 默认值是 `build/`，而
+#      `projects/fanhe-work/.gitignore` 第 10 行已经把 `build/` 忽略了。放进去能打包成功、
+#      但**永远进不了版本控制**，换台机器拉下来就没有图标，报错却是「找不到图标」。
+#
+#   3. 全部路径相对本文件所在目录（`apps/desktop/`），**不出现盘符或绝对路径** ——
+#      工作区在可移动介质上，盘符在 `E:` / `F:` 之间变（阶段零就立下的规矩）。
+#
+# 产物名刻意用 ASCII：`fanhe-work-setup-<版本>.exe`。产品名是中文没有关系（那是装完之后
+# 显示给人看的），但**资产名要经 GitHub Release 的 URL**，而 T6-03b 的更新器要从那里下载。
+# 中文资产名会被百分号编码，是没必要引入的一处不确定性。
+
+appId: org.fanhe.work
+productName: 梵禾 Work
+copyright: Copyright © 2026 梵禾
+
+directories:
+  output: release
+  buildResources: deploy
+
+# 刻意显式列出，不用默认的 `**/*`：包里真正需要的东西只有四类，
+# 而默认会把 src/ 与 test/ 一并装进去。这里没有列进 `files` 的东西，
+# **打包产物里就没有**，缺了会在启动时才炸 —— 所以这张表要跟着运行期依赖一起改。
+files:
+  - dist/**
+  - package.json
+  # 外壳是 CJS 而 @fanhe/shared 是纯 ESM，壳在运行时要 require 它（Electron 的
+  # Node 24 支持 require(esm)）。pnpm 下它是指向 packages/shared 的符号链接，
+  # 显式列出比指望打包器自己解引用可靠。
+  - node_modules/@fanhe/shared/dist/**
+
+# 装完之后的目录形态（安装目录/resources 下）：
+#
+#   web/            前端构建产物。开发态它在 apps/web/dist，是 __dirname 的兄弟；
+#                   打包后 asar 内没有兄弟目录，所以走 resources（见 src/paths.ts）。
+#   agent/agent.ts  本机代理核心。**原样投递 TS 源码，不编译** —— 那份文件运行时
+#                   依赖为零（只有 node 内建 + 一条会被抹掉的 import type），
+#                   而外壳的开发态本来就是直接吃 api 的源码。
+#   agent/package.json  内容是 {"type":"module"}。**这一份不能省**：`.ts` 的模块类型
+#                   由最近的 package.json 决定，缺失只告警、写成 commonjs 则直接
+#                   SyntaxError 整条链路失效（实测见 docs/T6-03-UPDATE-CHANNEL.md §3.5）。
+extraResources:
+  - from: ../web/dist
+    to: web
+  - from: ../api/src/launch/agent.ts
+    to: agent/agent.ts
+  - from: deploy/agent
+    to: agent
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 图标源是 web 的品牌 logo（apps/web/public/brand/logo.png，362×391）。
+  # 它不是方形、也没有透明通道，所以任务栏与开始菜单里会带底色 —— 记为已知限制，
+  # 换成一枚方形带 alpha 的 .ico 即可，本文件改一行，别的都不用动。
+  icon: ../web/public/brand/logo.png
+
+nsis:
+  # 不做一键装：这台机器没有管理员权限（perMachine 必须为 false，
+  # 否则要 UAC 提权），而允许改安装目录对内部工具更实用。
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 梵禾 Work
+  artifactName: fanhe-work-setup-${version}.${ext}
+
+# 发布载体已定为 GitHub（公开仓库，见 docs/T6-03-UPDATE-CHANNEL.md §四）。
+# T6-03a 只打包不发布，靠命令行传 `--publish never` 兜住；这一段现在就写在这里，
+# 是因为**只有配了 publish，electron-builder 才会产出 latest.yml 与 blockmap** ——
+# 而「发布链路是通的」这件事在这一步就该被验到。
+publish:
+  provider: github
+  owner: dy00001
+  repo: fanhe-work

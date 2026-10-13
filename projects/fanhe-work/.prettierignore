@@ -2,6 +2,18 @@ node_modules/
 node_modules.old/
 dist/
 
+# electron-builder's output directory (`apps/desktop/release/`, see
+# `apps/desktop/electron-builder.yml`). Machine artefacts only — a full Electron
+# runtime plus the built frontend. It is not `dist/` only because the default
+# output directory collides with tsc's outDir, so it slips past the rule above.
+release/
+
+# Scratch directory. `ws-env.sh` points TMP/TEMP here, so debug scripts, quarantined
+# copies of broken dependencies and one-off forensics all land in it. Git already
+# ignores it (workspace-root .gitignore); eslint and prettier must match, or every
+# temporary file shows up as a source-level failure. Keep all three in sync.
+.tmp/
+
 # Lockfile is generated; formatting it only produces noise in diffs.
 pnpm-lock.yaml
 
