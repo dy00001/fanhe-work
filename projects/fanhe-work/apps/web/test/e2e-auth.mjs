@@ -1641,23 +1641,33 @@ async function main() {
       ),
     )
 
-    // 5c. 切换导航项应切换内容区。占位模块进入统一的占位页，页面注明规划范围并提供
-    //     返回落地模块的入口。这一段走守卫的正常路径（请求项可见时直接采用）；回退路径
-    //     由单元测试覆盖 —— 触发它需要在会话存续期间改动权限，而那要等账号管理接口落地。
-    await evaluate(client, clickSidebarIconLink('系统设置'))
+    // 5c. 切换导航项应切换内容区。
+    //
+    // **占位页断言的目标模块在 T7-01 之后换过。** 这一段原本点的是「系统设置」，
+    // 当时它还是占位页；T7-01 把 `planned` 置为 false 之后它分派到真实的账号管理
+    // 页，页面上再没有「功能开发中」字样，于是这条断言在 T7-01 落地之后就一直是
+    // 失败的 —— 一直没被发现，是因为浏览器 e2e 要清库才能跑，代价高到没人随手跑。
+    //
+    // 现在占位页断言改用「综合看板」：它仍是 `planned: true`，是真正会渲染
+    // PlaceholderPage 的模块。同时补一条系统设置的正向断言，钉住「它已经落地
+    // 成真实页面」这个事实 —— 否则将来有人把它改回占位，e2e 也不会报。
+    //
+    // 占位模块的回退路径由单元测试覆盖：触发它需要在会话存续期间改动权限，
+    // 而那要等账号管理接口落地。
+    await evaluate(client, clickNavByLabel('综合看板'))
     await evaluate(
       client,
       waitFor(
-        `document.querySelector('main h1')?.innerText === '系统设置'`,
+        `document.querySelector('main h1')?.innerText === '综合看板'`,
         5000,
-        '系统设置内容区',
+        '综合看板内容区',
       ),
     )
     const systemPanel = await evaluate(client, `document.querySelector('main').innerText`)
     record('点击占位项进入统一占位页', systemPanel.includes('功能开发中'), '')
     record(
       '占位页注明规划范围',
-      systemPanel.includes('规划范围') && systemPanel.includes('账号、角色与审计日志管理'),
+      systemPanel.includes('规划范围') && systemPanel.includes('客户总量'),
       '',
     )
     const backHref = await evaluate(
@@ -1670,8 +1680,46 @@ async function main() {
     record('占位页提供返回落地模块的入口', backHref === '/workbench', `href=${backHref}`)
     await screenshot(client, '4b-nav-system')
 
+    // 5c-2. 系统设置已由占位页变成真实的账号管理页（T7-01）。单钉一条「不再标注
+    //      功能开发中」，因为那是它从占位页转正时最容易回退的标志。账号列表的
+    //      增删改查由账号管理页自己的 e2e 覆盖，这里只钉分派结果。
+    await evaluate(client, clickSidebarIconLink('系统设置'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '系统设置'`,
+        5000,
+        '系统设置内容区',
+      ),
+    )
+    const usersPanel = await evaluate(client, `document.querySelector('main').innerText`)
+    record(
+      '系统设置已落地为账号管理页（不再标注功能开发中）',
+      !usersPanel.includes('功能开发中') && usersPanel.includes('账号'),
+      '',
+    )
+    await screenshot(client, '4e-nav-users')
+
     // 5d. 点占位页的返回入口应回到首页，且不再出现占位标注。用入口本身返回，
     //     而不是再点一次侧栏，顺带把「操作入口真的可用」纳入覆盖。
+    await evaluate(client, clickSidebarIconLink('系统设置'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '系统设置'`,
+        5000,
+        '系统设置内容区',
+      ),
+    )
+    await evaluate(client, clickNavByLabel('综合看板'))
+    await evaluate(
+      client,
+      waitFor(
+        `document.querySelector('main h1')?.innerText === '综合看板'`,
+        5000,
+        '综合看板内容区',
+      ),
+    )
     await evaluate(
       client,
       `(() => {
@@ -1753,12 +1801,12 @@ async function main() {
     //     重载后会话由 localStorage 里的刷新令牌静默恢复，不需要重新登录 —— 这本身
     //     也顺带验证了深链接与会话恢复能同时成立。
     const deepLoaded = client.once('Page.loadEventFired')
-    await client.send('Page.navigate', { url: `${APP_URL}/system-settings` })
+    await client.send('Page.navigate', { url: `${APP_URL}/customer/overview` })
     await deepLoaded
     await evaluate(
       client,
       waitFor(
-        `document.querySelector('main h1')?.innerText === '系统设置'`,
+        `document.querySelector('main h1')?.innerText === '综合看板'`,
         20000,
         '直接访问子路由',
       ),
@@ -1766,8 +1814,8 @@ async function main() {
     const deepPath = await evaluate(client, 'location.pathname')
     const deepText = await evaluate(client, "document.querySelector('main').innerText")
     record(
-      '直接访问 /system-settings 落到该模块且地址栏未被改写',
-      deepPath === '/system-settings' && deepText.includes('功能开发中'),
+      '直接访问 /customer/overview 落到该模块且地址栏未被改写',
+      deepPath === '/customer/overview' && deepText.includes('功能开发中'),
       `路径 ${deepPath}`,
     )
     await screenshot(client, '5b-deep-link')
