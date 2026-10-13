@@ -114,6 +114,11 @@ model User {
   username     String     @unique @db.VarChar(64)
   passwordHash String     @map("password_hash") @db.VarChar(255)
   displayName  String     @map("display_name") @db.VarChar(64)
+  /// 所属部门。纯展示用途，不参与任何授权判断。
+  /// 授权只看 role_id 与 user_permissions 两处，部门只是给人看的分组标签 ——
+  /// 把它接进权限判断会让「调岗」变成一次授权变更，而调岗本身不该影响权限。
+  /// 允许为空：owner 账号不属于任何部门。
+  department   String?    @db.VarChar(64)
   status       UserStatus @default(active)
   roleId       String     @map("role_id") @db.Uuid
 
@@ -134,6 +139,9 @@ model User {
   launchProfiles LaunchProfile[]
   launchHistory  LaunchHistory[]
   notes          Note[]
+
+  /// 账号级权限覆盖。见 UserPermission。
+  userPermissions UserPermission[]
 
   /// 这个账号名下的事件。
   events          Event[]
@@ -186,6 +194,7 @@ model Permission {
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   rolePermissions RolePermission[]
+  userPermissions UserPermission[]
 
   @@index([module, object])
   @@map("permissions")
@@ -210,6 +219,39 @@ model RolePermission {
   @@unique([roleId, permissionId])
   @@index([permissionId])
   @@map("role_permissions")
+}
+
+/// 账号与权限的多对多，用于**账号级**权限覆盖。
+///
+/// 与 role_permissions 的分工：前者回答「这个角色能做什么」，本表回答「这个账号
+/// 额外能做什么、又拿掉了什么」。最终权限 = 角色权限 ∪ 本表 granted − 本表 denied。
+///
+/// **必须有 denied 一侧，不能只有 granted。** 只做「额外授予」的话，收回某个权限
+/// 只能改角色，而改角色会影响所有同角色的人 —— 于是「给张三单独加个查看权限」这件
+/// 事做完之后，想撤销就只能把他降级成 viewer，连他原本自带的权限一起丢。显式拒绝
+/// 让收回成为一次精确操作，而「按需授予」不能。
+///
+/// 因此 `granted` 是布尔而不是「存在即授予」：denied 行必须能被写下来。
+///
+/// **owner 账号不写任何行。** 服务端在算权限时对 owner 短路返回全部权限点，
+/// 本表的数据对 owner 一律不生效。这让「owner 不可降权」成为服务端的一条硬规则，
+/// 而不依赖「管理员忘了去勾选」这种约定。
+model UserPermission {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  granted      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  /// 复合唯一：同一账号对同一权限点只能有一条覆盖记录。
+  /// 缺了它，「勾上再取消」会插出第二行，而计算权限时哪一行生效取决于查询顺序，
+  /// 表现为「取消勾选后有时还生效、有时不生效」。
+  @@unique([userId, permissionId])
+  @@index([permissionId])
+  @@map("user_permissions")
 }
 
 // ---------------------------------------------------------------------------

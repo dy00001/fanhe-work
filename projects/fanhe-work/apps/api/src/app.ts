@@ -1,11 +1,14 @@
+import { ALL_PERMISSIONS } from '@fanhe/shared'
 import Fastify, { type FastifyInstance } from 'fastify'
 
 import { registerAuthSupport } from './auth/guard.js'
+import { initPermissionCatalog } from './auth/user-admin.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerEventRoutes } from './routes/events.js'
 import { registerLaunchRoutes } from './routes/launch.js'
 import { registerNoteRoutes } from './routes/notes.js'
 import { registerSetupRoutes } from './routes/setup.js'
+import { registerSystemUserRoutes } from './routes/system-users.js'
 import { registerVersionRoutes } from './version/manifest.js'
 
 /**
@@ -32,6 +35,11 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   // 认证结果的容器必须在注册任何使用守卫的路由之前挂上。
   registerAuthSupport(app)
 
+  // 账号管理服务需要知道「有哪些权限点」才能校验提交上来的权限码。把权限清单
+  // 从模块加载期移到显式初始化，是因为它依赖 @fanhe/shared 的导出，而 app.ts
+  // 是这个包的所有者 —— 让它决定注入什么，而不是让服务层自己去 import。
+  initPermissionCatalog(ALL_PERMISSIONS)
+
   app.get('/api/health', async () => ({
     status: 'ok',
     service: 'fanhe-api',
@@ -43,6 +51,7 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerLaunchRoutes(app)
   registerNoteRoutes(app)
   registerEventRoutes(app)
+  registerSystemUserRoutes(app)
   // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
   registerVersionRoutes(app)
 

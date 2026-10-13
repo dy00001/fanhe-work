@@ -25,6 +25,7 @@ export type PermissionModule = (typeof PERMISSION_MODULES)[number]
 export const PERMISSIONS = {
   SYSTEM_USER_READ: 'system.user.read',
   SYSTEM_USER_MANAGE: 'system.user.manage',
+  SYSTEM_USER_DELETE: 'system.user.delete',
   SYSTEM_ROLE_READ: 'system.role.read',
   SYSTEM_ROLE_MANAGE: 'system.role.manage',
   SYSTEM_AUDIT_READ: 'system.audit.read',
@@ -45,6 +46,10 @@ export const ALL_PERMISSIONS: readonly PermissionCode[] = Object.values(PERMISSI
 const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.SYSTEM_USER_READ]: '查看账号列表与详情',
   [PERMISSIONS.SYSTEM_USER_MANAGE]: '创建、停用账号，重置密码',
+  // 删除与其它账号操作分成两个权限点。软删除会让账号立刻无法登录，比改个姓名
+  // 严重得多 —— 混在 manage 里的话，能改名的账号就能删人。分成独立一点，将来要
+  // 在界面上单独要求二次确认时，判据也已经就位。
+  [PERMISSIONS.SYSTEM_USER_DELETE]: '删除账号',
   [PERMISSIONS.SYSTEM_ROLE_READ]: '查看角色及其权限分配',
   [PERMISSIONS.SYSTEM_ROLE_MANAGE]: '修改角色与权限分配',
   [PERMISSIONS.SYSTEM_AUDIT_READ]: '查看审计日志',
@@ -245,4 +250,31 @@ export function hasPermission(
   required: PermissionCode,
 ): boolean {
   return granted.includes(required)
+}
+
+/**
+ * 账号级权限覆盖。与角色权限合并，算出这个账号最终持有的权限点。
+ *
+ * 合并顺序固定为 **角色权限 ∪ granted − denied**：先加授予，再扣拒绝。
+ * 两条都要有，且拒绝在后 —— 若反过来，同一对 (userId, permissionId) 同时存在
+ * 授予与拒绝行时结果会取决于写入顺序，表现为「权限有时生效有时不生效」。
+ * 唯一约束已经保证不会出现这种行，这里仍写死顺序，是为了让「以拒绝为准」这条
+ * 规则不依赖数据形状。
+ *
+ * 刻意不校验 granted 与 denied 是否互斥。调用方传进来的两组数据来自同一份界面
+ * 的勾选结果，重复处理它们没有收益；反过来在纯函数里做去重会让这个函数的
+ * 行为依赖于调用方没告诉它的信息。
+ *
+ * 三组都应为已收窄的 PermissionCode。传入未知码不会报错，但那些码既不会命中
+ * hasPermission，也会在前端渲染成一项孤立权限。收窄在服务端做。
+ */
+export function mergePermissions(
+  rolePermissions: readonly PermissionCode[],
+  granted: readonly PermissionCode[],
+  denied: readonly PermissionCode[],
+): PermissionCode[] {
+  const merged = new Set<PermissionCode>(rolePermissions)
+  for (const code of granted) merged.add(code)
+  for (const code of denied) merged.delete(code)
+  return [...merged]
 }

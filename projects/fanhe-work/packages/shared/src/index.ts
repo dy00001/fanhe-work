@@ -17,6 +17,7 @@ export * from './launch.js'
 export * from './navigation.js'
 export * from './note.js'
 export * from './permissions.js'
+export * from './user-admin.js'
 export * from './version.js'
 
 export const APP_NAME = '梵禾 Work'

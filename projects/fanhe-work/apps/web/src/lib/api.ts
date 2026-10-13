@@ -2,6 +2,8 @@ import type {
   ApiErrorResponse,
   CreateEventRequest,
   CreateLaunchProfileRequest,
+  CreateManagedUserRequest,
+  CreateManagedUserResponse,
   CreateNoteRequest,
   DeleteEventResponse,
   DeleteLaunchProfileResponse,
@@ -16,12 +18,18 @@ import type {
   LaunchProfileStatusListResponse,
   LoginResponse,
   LogoutResponse,
+  ManagedUserActionResponse,
+  ManagedUserDetailResponse,
+  ManagedUserListResponse,
   MeResponse,
   NoteListResponse,
   NoteResponse,
   NoteTagListResponse,
+  PermissionCatalogResponse,
+  PermissionCode,
   RefreshResponse,
   ReorderLaunchProfilesRequest,
+  RoleListResponse,
   RunLaunchProfileResponse,
   SetEventStatusRequest,
   SetNoteArchivedRequest,
@@ -29,6 +37,7 @@ import type {
   SetupStatusResponse,
   UpdateEventRequest,
   UpdateLaunchProfileRequest,
+  UpdateManagedUserRequest,
   UpdateNoteRequest,
 } from '@fanhe/shared'
 
@@ -86,6 +95,16 @@ type RequestOptions = {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   accessToken?: string | null
+  /**
+   * 中断信号。**只有版本清单那条请求会传**（见 `versionManifestRequest`）——
+   * 它由界面上的一个动作触发（打开账号菜单），网络不通时那个 Promise 会永远挂着，
+   * 而挂着的 Promise 在 React 里就是一个永不 settle 的状态机。
+   *
+   * 做成可选而不是给所有请求都设默认超时：给全部接口统一加超时是一件需要逐个核对
+   * 业务上限的事（备份、启动配置这些接口的正常耗时远长于查版本），顺手在这里设一个
+   * 「看起来合理」的值会让它们在正常使用时被误杀。
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -130,6 +149,12 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const init: RequestInit = { method: options.method, headers }
   if (options.body !== undefined) {
     init.body = JSON.stringify(options.body)
+  }
+  // signal 同样只在真的给了才写上去：RequestInit.signal 的取值域是 AbortSignal | null，
+  // 不含 undefined，而 exactOptionalPropertyTypes 下显式传 undefined 与「没这个属性」
+  // 不再等价。
+  if (options.signal !== undefined) {
+    init.signal = options.signal
   }
 
   let response: Response
@@ -189,6 +214,33 @@ export function meRequest(accessToken: string): Promise<MeResponse> {
 
 export function setupStatusRequest(): Promise<SetupStatusResponse> {
   return request<SetupStatusResponse>('/api/setup/status', { method: 'GET' })
+}
+
+/**
+ * 取服务端当前的版本清单。
+ *
+ * **不附访问令牌**，与该接口不设门禁一致（理由见服务端 `version/manifest.ts` 的注释）。
+ *
+ * **返回 `unknown` 而不是 `VersionManifestResponse`。** 上面的 `request<T>` 对成功响应
+ * 是直接 `as T` 的断言，不做任何形状检查 —— 平时那没问题（响应体形状由服务端代码保证，
+ * 改坏了会立刻在别处暴露），但这条路径拿到的响应会**先经过 Cloudflare 那一层**：
+ * T5-05 落地后它会先返回 Access 的登录/拦截页，那是一个 HTTP 200 + HTML 正文。
+ * 按 `as` 断言它会变成一个「版本号是 undefined 的清单」，而这个错误要到比对时才暴露，
+ * 报出来的是 `compareVersions` 里的 `undefined.split`。
+ *
+ * 所以形状校验放在 `lib/version-check.ts`（那里能降级为 `unknown`），这里只负责取数与
+ * 把 HTTP 错误规范化。**这不是重复校验，而是把「断言」与「校验」分开**：这一层是传输，
+ * 不知道什么叫版本清单。
+ *
+ * 超时 5 秒。`/api/version` 是读根目录的 `package.json` 再算一次哈希，正常在毫秒级；
+ * 5 秒足够覆盖冷启动与跨公网往返，又不至于让菜单里的那一行提示悬着不出现。
+ */
+export function versionManifestRequest(signal?: AbortSignal): Promise<unknown> {
+  return request<unknown>('/api/version', {
+    method: 'GET',
+    // 与上面那条注释同源：signal 只在给了时才写进 RequestOptions（exactOptionalPropertyTypes）。
+    ...(signal === undefined ? {} : { signal }),
+  })
 }
 
 export function initializeOwnerRequest(input: {
@@ -535,4 +587,122 @@ export function deleteEventRequest(accessToken: string, id: string): Promise<Del
     method: 'DELETE',
     accessToken,
   })
+}
+
+// ---------------------------------------------------------------------------
+// 账号与权限管理
+// ---------------------------------------------------------------------------
+
+/** 账号列表。只返回当前账号能管理的那些，外加当前账号自己。 */
+export function managedUsersRequest(accessToken: string): Promise<ManagedUserListResponse> {
+  return request<ManagedUserListResponse>('/api/system/users', {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/**
+ * 账号详情。除账号本身，还返回角色自带的权限与账号级覆盖。
+ *
+ * 界面需要「角色默认权限」才能算出勾选框的初始状态：光看最终权限无法区分
+ * 「这个权限是角色给的」与「这个权限是单独授予的」，而这两种在再次保存时的
+ * 处理方式不同。
+ */
+export function managedUserDetailRequest(
+  accessToken: string,
+  id: string,
+): Promise<ManagedUserDetailResponse> {
+  return request<ManagedUserDetailResponse>(`/api/system/users/${encodeURIComponent(id)}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/**
+ * 创建账号。
+ *
+ * 返回值含 `effectivePermissions`，让界面在创建成功后就能显示「这个账号实际能做
+ * 什么」，不必再拉一次详情 —— 少一次往返，也少一处「创建成功但列表还没刷新」
+ * 的中间态。
+ */
+export function createManagedUserRequest(
+  accessToken: string,
+  input: CreateManagedUserRequest,
+): Promise<CreateManagedUserResponse> {
+  return request<CreateManagedUserResponse>('/api/system/users', {
+    method: 'POST',
+    accessToken,
+    body: input,
+  })
+}
+
+/** 编辑账号。只传要改的字段，服务端按部分更新处理。 */
+export function updateManagedUserRequest(
+  accessToken: string,
+  id: string,
+  input: UpdateManagedUserRequest,
+): Promise<ManagedUserActionResponse> {
+  return request<ManagedUserActionResponse>(`/api/system/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    accessToken,
+    body: input,
+  })
+}
+
+/**
+ * 删除账号。要求独立的 `system.user.delete` 权限。
+ *
+ * 服务端是软删除，且会一并吊销该账号的全部会话 —— 停用与删除都必须立刻生效，
+ * 否则「删掉了」只是不再登录，已登录的人还能继续用。
+ */
+export function deleteManagedUserRequest(
+  accessToken: string,
+  id: string,
+): Promise<ManagedUserActionResponse> {
+  return request<ManagedUserActionResponse>(`/api/system/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+/** 重置密码。服务端会吊销该账号全部会话并清零锁定计数。 */
+export function resetManagedUserPasswordRequest(
+  accessToken: string,
+  id: string,
+  newPassword: string,
+): Promise<ManagedUserActionResponse> {
+  return request<ManagedUserActionResponse>(
+    `/api/system/users/${encodeURIComponent(id)}/reset-password`,
+    { method: 'POST', accessToken, body: { newPassword } },
+  )
+}
+
+/**
+ * 设置账号级权限覆盖。整体替换，不是增量。
+ *
+ * 请求体是 `{ granted, denied }` 两组而不是一个最终集合：服务端需要区分「取消一个
+ * 勾选」（写 denied 行）与「从没勾过」（不写行），而这两者在保存时做的事不同。
+ */
+export function setManagedUserPermissionsRequest(
+  accessToken: string,
+  id: string,
+  permissions: { granted: readonly PermissionCode[]; denied: readonly PermissionCode[] },
+): Promise<ManagedUserActionResponse> {
+  return request<ManagedUserActionResponse>(
+    `/api/system/users/${encodeURIComponent(id)}/permissions`,
+    { method: 'PUT', accessToken, body: permissions },
+  )
+}
+
+/** 权限点清单，供勾选树渲染。 */
+export function permissionCatalogRequest(accessToken: string): Promise<PermissionCatalogResponse> {
+  return request<PermissionCatalogResponse>('/api/system/permissions', {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/** 角色清单，供创建与编辑时的角色下拉。 */
+export function roleListRequest(accessToken: string): Promise<RoleListResponse> {
+  return request<RoleListResponse>('/api/system/roles', { method: 'GET', accessToken })
 }

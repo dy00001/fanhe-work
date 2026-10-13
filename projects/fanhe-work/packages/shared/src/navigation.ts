@@ -391,7 +391,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     slug: 'system-settings',
     group: null,
     module: 'system',
-    planned: true,
+    // 账号与权限管理已落地（T7-01），`planned` 置为 false 让路由分派到真实页面。
+    // 角色与审计日志仍未做，将来接上时在 ModuleRoute 里补分支即可，这一侧不用动。
+    planned: false,
     slot: false,
     summary: '账号、角色与审计日志管理。仅持有 system 段权限的账号可见。',
   },

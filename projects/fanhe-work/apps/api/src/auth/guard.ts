@@ -1,4 +1,10 @@
-import { ALL_PERMISSIONS, hasPermission, type PermissionCode } from '@fanhe/shared'
+import {
+  ALL_PERMISSIONS,
+  hasPermission,
+  mergePermissions,
+  ROLE_CODES,
+  type PermissionCode,
+} from '@fanhe/shared'
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify'
 
 import { prisma } from '../db/prisma.js'
@@ -20,6 +26,8 @@ export type AuthContext = {
   username: string
   displayName: string
   roleCode: string
+  /** 角色 code 的层级。账号管理用它判定「能不能操作这个账号」。 */
+  roleRank: number
   permissions: readonly PermissionCode[]
 }
 
@@ -59,6 +67,49 @@ function toPermissionCodes(codes: readonly string[]): PermissionCode[] {
 }
 
 /**
+ * 算出一个账号最终持有的权限点。
+ *
+ * 三部分合并：角色自带的、账号级授予的、账号级拒绝的。合并规则见共享包的
+ * mergePermissions —— 拒绝优先于授予。
+ *
+ * **owner 短路返回全部权限点，不查 user_permissions。** 这让「owner 不可降权」
+ * 成为服务端的一条硬规则：即便有人往 owner 的 user_permissions 里写了 denied 行，
+ * 也不生效。想给 owner 降权的人看到的是静默无效 —— 那正是应该的，owner 是这个
+ * 系统最后的入口，降权它等于把自己锁在外面，而这类操作只有误操作一种成因，
+ * 不该有成功的路径。
+ *
+ * 短路同时省掉 owner 每次请求的一次查询。
+ */
+async function resolvePermissions(
+  userId: string,
+  roleCode: string,
+  rolePermissions: readonly string[],
+): Promise<PermissionCode[]> {
+  if (roleCode === ROLE_CODES.OWNER) {
+    return [...ALL_PERMISSIONS]
+  }
+
+  const overrides = await prisma.userPermission.findMany({
+    where: { userId },
+    select: { granted: true, permission: { select: { code: true } } },
+  })
+
+  const granted: PermissionCode[] = []
+  const denied: PermissionCode[] = []
+  for (const row of overrides) {
+    // 过滤未知码的理由与 toPermissionCodes 相同：库里可能残留权限清单里已删掉的
+    // 权限点，它们在精确匹配下本来就命中不了任何 required，但留着会让「这个账号
+    // 持有哪些权限」的展示凭空多出几项。
+    const code = toPermissionCodes([row.permission.code])[0]
+    if (code === undefined) continue
+    if (row.granted) granted.push(code)
+    else denied.push(code)
+  }
+
+  return mergePermissions(toPermissionCodes(rolePermissions), granted, denied)
+}
+
+/**
  * 解析访问令牌，加载账号与权限。
  *
  * **每次请求都查库，不做缓存。** 访问令牌本身是无状态的，但授权必须有状态：
@@ -66,6 +117,9 @@ function toPermissionCodes(codes: readonly string[]): PermissionCode[] {
  * 而撤权需要立刻生效。加一层缓存会把这条保证退化成「最多延迟 N 秒」，且延迟
  * 长短取决于缓存是否命中，排查时看不出来。将来真要优化，正确做法是给角色加
  * 版本号、在授权变更时递增，而不是给缓存设一个拍脑袋的 TTL。
+ *
+ * 账号级权限覆盖让这条保证多了一个好处：调整某个账号的权限在**下一次请求**就
+ * 生效，不需要等令牌过期，也不需要前端重新拉 /me 才能让服务端放行。
  *
  * 既然这趟查询本来就要做，顺带把 status 与 deletedAt 读出来。账号被停用或
  * 删除后，已经签发的访问令牌立刻失效，不必等它自然过期。
@@ -100,6 +154,7 @@ async function resolveAuthContext(request: FastifyRequest): Promise<AuthContext 
       role: {
         select: {
           code: true,
+          rank: true,
           rolePermissions: {
             where: { permission: { deletedAt: null } },
             select: { permission: { select: { code: true } } },
@@ -113,12 +168,15 @@ async function resolveAuthContext(request: FastifyRequest): Promise<AuthContext 
     return null
   }
 
+  const rolePermissions = user.role.rolePermissions.map((row) => row.permission.code)
+
   return {
     userId: user.id,
     username: user.username,
     displayName: user.displayName,
     roleCode: user.role.code,
-    permissions: toPermissionCodes(user.role.rolePermissions.map((row) => row.permission.code)),
+    roleRank: user.role.rank,
+    permissions: await resolvePermissions(user.id, user.role.code, rolePermissions),
   }
 }
 

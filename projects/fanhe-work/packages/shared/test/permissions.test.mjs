@@ -19,6 +19,7 @@ import { test } from 'node:test'
 import {
   ALL_PERMISSIONS,
   PERMISSIONS,
+  PERMISSION_CATALOG,
   ROLE_PERMISSIONS,
   expandGrants,
   matchesGrant,
@@ -41,13 +42,26 @@ const PERSONAL_ALL = [
 
 const sorted = (codes) => [...codes].sort()
 
-test('权限点清单是 11 条，且三段式拆分正确', () => {
-  assert.equal(ALL_PERMISSIONS.length, 11)
-  assert.equal(new Set(ALL_PERMISSIONS).size, 11)
+/**
+ * 权限点总数。
+ *
+ * **从 `PERMISSION_CATALOG` 派生，不写死数字。** 写死的写法下每加一个权限点就要改
+ * 这里，而那次失败的表现是「某个角色的权限点数对不上」——它指向角色配置，而真正
+ * 变的是清单。一个永远等于常量的断言其实什么都没验，但它确实能验「清单与常量
+ * 同步」，因此保留，只是数字不再手写。
+ */
+const TOTAL_PERMISSIONS = PERMISSION_CATALOG.length
+
+test('权限点清单与常量一致、无重复，且三段式拆分正确', () => {
+  assert.equal(ALL_PERMISSIONS.length, TOTAL_PERMISSIONS)
+  // 去重后长度不变，说明清单里没有重复项。重复的权限码会让种子里的授权关联
+  // 插入两次，而 role_permissions 的复合唯一约束会让整个种子事务失败。
+  assert.equal(new Set(ALL_PERMISSIONS).size, TOTAL_PERMISSIONS)
+  assert.deepEqual(sorted(ALL_PERMISSIONS), sorted(PERMISSION_CATALOG.map((p) => p.code)))
 })
 
 test('`*` 覆盖全部权限', () => {
-  assert.equal(expandGrants(['*']).length, 11)
+  assert.equal(expandGrants(['*']).length, TOTAL_PERMISSIONS)
 })
 
 test('末尾通配符吞掉剩余段：`personal.*` 覆盖模块下全部权限', () => {
@@ -87,11 +101,25 @@ test('精确编码只命中自身', () => {
   assert.equal(matchesGrant(PERMISSIONS.PERSONAL_NOTE_READ, PERMISSIONS.PERSONAL_NOTE_WRITE), false)
 })
 
-test('四个内置角色展开后的权限点数分别是 11 / 9 / 6 / 3', () => {
-  assert.equal(ROLE_PERMISSIONS.owner.length, 11)
-  assert.equal(ROLE_PERMISSIONS.admin.length, 9)
-  assert.equal(ROLE_PERMISSIONS.member.length, 6)
-  assert.equal(ROLE_PERMISSIONS.viewer.length, 3)
+test('owner 拿到全部权限，其余三个角色按层级递减', () => {
+  // **不断言具体点数，只断言层级关系。** 点数会随每个新权限点漂移，写死数字
+  // 意味着每加一个权限点就要改一遍这里，而那次失败读起来像「角色配置错了」，
+  // 真正变的却是清单。层级关系才是这条该守的东西。
+  assert.deepEqual(sorted(ROLE_PERMISSIONS.owner), sorted(ALL_PERMISSIONS))
+
+  const { owner, admin, member, viewer } = ROLE_PERMISSIONS
+  assert.ok(owner.length > admin.length, 'owner 应当多于 admin')
+  assert.ok(admin.length > member.length, 'admin 应当多于 member')
+  assert.ok(member.length > viewer.length, 'member 应当多于 viewer')
+})
+
+test('owner 是唯一持有删除账号权限的角色', () => {
+  // 删除与其它账号操作分成两个权限点。这条断言守的是「混在 manage 里的话，
+  // 能改名的账号就能删人」那条设计意图 —— 少一个权限点，多一个能删人的角色。
+  const withDelete = Object.entries(ROLE_PERMISSIONS)
+    .filter(([, perms]) => perms.includes(PERMISSIONS.SYSTEM_USER_DELETE))
+    .map(([code]) => code)
+  assert.deepEqual(withDelete, ['owner'])
 })
 
 test('admin 有账号管理但没有角色管理与审计查看', () => {

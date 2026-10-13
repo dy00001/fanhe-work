@@ -6,6 +6,7 @@ import { AppShell } from './components/AppShell'
 import { NoAccessPage } from './pages/NoAccessPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
+import { UsersPage } from './pages/UsersPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
 /**
@@ -126,6 +127,11 @@ function ModuleRoute({ code }: { code: NavCode }) {
   if (target.planned) return <PlaceholderPage item={target} />
 
   if (target.code === NAV_CODES.WORKBENCH) return <WorkbenchPage item={target} />
+
+  // 账号与权限管理（T7-01）。放在 planned 判断之后、分派表末尾的兜底之前 ——
+  // 这两处都不能省：planned 拦掉未落地的模块，兜底则接住清单里新增却还没写页面的
+  // 那一档。
+  if (target.code === NAV_CODES.SYSTEM_SETTINGS) return <UsersPage item={target} />
 
   // 共享包新增了 `planned` 为 false 却还没有对应页面的模块时的兜底。渲染占位页而不是
   // 抛错：界面保持可用，且「功能开发中」的标注比一片空白更容易被注意到。

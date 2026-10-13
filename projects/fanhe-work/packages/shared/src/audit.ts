@@ -20,6 +20,16 @@ export const AUDIT_ACTIONS = {
   AUTH_SESSION_REUSE: 'auth.session.reuse',
   /** 首次初始化创建 owner 账号。 */
   SYSTEM_SETUP_INITIALIZE: 'system.setup.initialize',
+  /** 创建子账号。 */
+  SYSTEM_USER_CREATE: 'system.user.create',
+  /** 修改子账号的姓名、部门、角色或状态。 */
+  SYSTEM_USER_UPDATE: 'system.user.update',
+  /** 删除子账号（软删除）。 */
+  SYSTEM_USER_DELETE: 'system.user.delete',
+  /** 重置子账号密码。detail 里**不含**新口令。 */
+  SYSTEM_USER_RESET_PASSWORD: 'system.user.reset_password',
+  /** 调整子账号的账号级权限覆盖。 */
+  SYSTEM_USER_SET_PERMISSIONS: 'system.user.set_permissions',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
