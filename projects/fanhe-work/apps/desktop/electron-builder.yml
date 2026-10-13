@@ -67,6 +67,46 @@ win:
   # 换成一枚方形带 alpha 的 .ico 即可，本文件改一行，别的都不用动。
   icon: ../web/public/brand/logo.png
 
+  # ── 代码签名（T6-03c）────────────────────────────────────────────────
+  # 🔴 **签名相关的键必须写在 `signtoolOptions` 里面**，不能平铺在 `win` 下。
+  # electron-builder 26.x 把这一组选项整体挪进了 `WindowsSigntoolConfiguration`
+  # 子对象，而 `win` 本身是 `additionalProperties: false` —— 平铺会得到一个
+  # 完全不说人话的报错：`configuration.win should be one of these: null`（不点名
+  # 是哪个键错了，只让你去翻文档）。实测依据：`app-builder-lib/scheme.json` 的
+  # `WindowsConfiguration` 32 个属性里没有 `certificateSubjectName`，而
+  # `WindowsSigntoolConfiguration` 里有；运行期读的也是
+  # `platformSpecificBuildOptions.signtoolOptions?.certificateSubjectName`。
+  # 注意 `out/options/winOptions.d.ts` 里 `certificateSubjectName` 确实存在，
+  # 但它属于第 73 行起的 `WindowsSigntoolConfiguration` 接口 —— 只看「文件里有没有
+  # 这个词」会得出相反结论，要看它在哪个 interface 里。
+  signtoolOptions:
+    # 证书不进版本控制、工作区内不落 `.pfx`：身份就是 `CurrentUser\My` 里那张自签
+    # 证书（Windows 证书库受 DPAPI 与登录态保护，且**随机器不随盘**，正好满足
+    # DEVELOPMENT-PLAN.md 6.3 第 6 条「签名密钥与工作空间分开保管」）。
+    # 新建/复用证书：`pnpm --filter @fanhe/desktop signing:cert`。
+    #
+    # 用证书库而不是 `certificateFile` + 口令，是因为后者要把 `.pfx` 与口令送进构建
+    # 进程（口令经环境变量传、`.pfx` 落盘），多两处会泄漏的东西。
+    #
+    # 主题名刻意用 ASCII：它会穿过 PowerShell → 证书库 → signtool → `app-update.yml`
+    # → electron-updater 的字符串比对，其中任何一步编码有损都会静默破坏更新校验。
+    # 与产物名用 ASCII 是同一条理由。证书的 display name 对用户不可见。
+    #
+    # 🔴 **换机器必须先在目标机跑一次 `signing:cert`**，否则打包会报找不到证书 ——
+    # 且证书换了等于换了签名主体，已装旧版的机器更新校验会失败。
+    #
+    # 只按主题名匹配是可行的：electron-builder 用
+    # `Get-ChildItem -Recurse Cert: -CodeSigningCert` 取候选、拿第一个命中的。
+    # 实测本机该命令只返回一条（`CurrentUser\My`，有私钥）；`TrustedPublisher` 里
+    # 那份公开副本没有被它枚举到，所以不会选中「没有私钥的那一份」而签名失败。
+    certificateSubjectName: CN=Fanhe Work
+    signingHashAlgorithms:
+      - sha256
+    # 时间戳**没有**在这里配，走 electron-builder 的默认值
+    # `http://timestamp.digicert.com`（实测可达）。有可信时间戳，签名在证书过期后
+    # 仍然有效；若哪天网络不通导致打包失败，用 `ELECTRON_BUILDER_OFFLINE=true`
+    # 可以整体跳过时间戳（代价是签名只在证书有效期内有效）。
+
 nsis:
   # 不做一键装：这台机器没有管理员权限（perMachine 必须为 false，
   # 否则要 UAC 提权），而允许改安装目录对内部工具更实用。

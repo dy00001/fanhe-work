@@ -43,6 +43,9 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  openSync,
+  readSync,
+  closeSync,
   mkdtempSync,
   cpSync,
   writeFileSync,
@@ -266,7 +269,291 @@ check('resources/agent/package.json 内容为 {"type":"module"}', () => {
   return manifest.type
 })
 
-console.log('\n三、随包 agent.ts 的实际加载（进程内 import）')
+// ── 三、代码签名（T6-03c） ───────────────────────────────────────────────
+/**
+ * 读 PE 的 Certificate Table 目录项（数据目录第 4 项）。大小非零即有内嵌签名。
+ *
+ * 本函数只判「**有没有**签上」。「**签成了谁**」是另一件事，走
+ * `scripts/verify-signature.ps1` 生成的报告（见下面「签名身份报告」）——
+ * 两者必须分开，因为 electron-updater 比的是**发布者身份**，光有签名不够。
+ *
+ * 为什么不在这里直接调 `Get-AuthenticodeSignature`：它是 PowerShell 的，
+ * 而本进程起不了子进程（原因见文件头），且本沙箱的 PowerShell 会静默吞掉 stdout。
+ * 那份 .ps1 把结果写进文件、这里读回来，是唯一能真正拿到文本的通道。
+ *
+ * 为什么不把报告的「Status」当成通过判据：`Status` 把「签名存在」与
+ * 「证书链可信」混在一个字段里，而自签证书在任何没导入过它的机器上必然是
+ * 不可信的 —— 那不是打包缺陷。所以这里只要求 `Status !== 'NotSigned'`，
+ * 并把实际 Status 原文记进输出，不粉饰。
+ */
+function peCertificateTable(file) {
+  const buf = Buffer.alloc(4096)
+  const fd = openSync(file, 'r')
+  // 刻意不给初值：`read` 只在 try 里被赋值、且 readSync 抛错时这里根本走不到，
+  // 给个 `= 0` 会被 no-useless-assignment 判为「赋了没用的值」。
+  let read
+  try {
+    read = readSync(fd, buf, 0, buf.length, 0)
+  } finally {
+    closeSync(fd)
+  }
+  const d = buf.subarray(0, read)
+  expect(d.length >= 0x40, `文件头不足 64 字节，不像 PE：${file}`)
+  expect(d.readUInt16LE(0) === 0x5a4d, `没有 MZ 头，不是 PE：${file}`)
+  const peOffset = d.readUInt32LE(0x3c)
+  expect(
+    d.subarray(peOffset, peOffset + 4).toString('latin1') === 'PE\0\0',
+    `没有 PE 签名：${file}`,
+  )
+  const optionalHeader = peOffset + 4 + 20
+  const magic = d.readUInt16LE(optionalHeader)
+  expect(
+    magic === 0x20b || magic === 0x10b,
+    `可选头 magic 是 0x${magic.toString(16)}，不认识：${file}`,
+  )
+  // PE32+ 的数据目录从可选头偏移 112 起，PE32 从 96 起；第 4 项（0-based）是 Certificate Table。
+  const entry = optionalHeader + (magic === 0x20b ? 112 : 96) + 4 * 8
+  return { offset: d.readUInt32LE(entry), size: d.readUInt32LE(entry + 4) }
+}
+
+/**
+ * 读回 `scripts/verify-signature.ps1` 写出的报告。
+ *
+ * 报告是 `KEY=VALUE` 与 `EXE=<名字>` 交替的平铺文本（.ps1 里刻意不写 JSON，
+ * 免得为了转义再引入一层出错机会）。这里只取签名身份相关的四列，其余忽略。
+ * 解析不出任何 EXE 时 `byName` 为空，由调用方的断言把它报成失败 ——
+ * 而不是静默地「没有坏消息就是好消息」。
+ */
+function parseSignatureReport(text) {
+  const byName = new Map()
+  let count = 0
+  let current = null
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/^\uFEFF/, '')
+    const exe = /^EXE=(.+)$/.exec(line)
+    if (exe !== null) {
+      current = { name: exe[1], status: '', subject: '', thumbprint: '' }
+      byName.set(current.name, current)
+      continue
+    }
+    const kv = /^\s+(PATH|SIZE|STATUS|SUBJECT|THUMBPRINT|ERROR)=([\s\S]*)$/.exec(line)
+    if (kv !== null && current !== null) {
+      const key = kv[1].toLowerCase()
+      if (key in current) current[key] = kv[2].trim()
+      continue
+    }
+    const total = /^EXE_COUNT=(\d+)$/.exec(line)
+    if (total !== null) count = Number(total[1])
+  }
+  return { byName, count }
+}
+
+console.log('\n三、代码签名（T6-03c）')
+
+// 期望的签名主体从打包配置里读，而不是在脚本里再写一份常量：
+// 这样「配置说要签成谁」与「产物实际签成谁」必须对得上，两份常量漂移不会互相掩护。
+const builderConfig = readFileSync(join(desktopDir, 'electron-builder.yml'), 'utf8')
+const subjectMatch = /^\s*certificateSubjectName:\s*(.+?)\s*$/m.exec(builderConfig)
+const configuredSubject = subjectMatch === null ? null : subjectMatch[1].replace(/^['"]|['"]$/g, '')
+
+if (configuredSubject === null) {
+  console.log('  skip electron-builder.yml 里没有 certificateSubjectName，本节签名断言未运行')
+} else {
+  console.log(`  (配置的签名主体：${configuredSubject})`)
+
+  // 安装包与辅助程序所在目录（release/），与应用本体目录（release/win-unpacked）分开。
+  const releaseDir = dirname(installDir)
+  const listExesIn = (dir) =>
+    !existsSync(dir)
+      ? []
+      : readdirSync(dir)
+          .filter((n) => n.toLowerCase().endsWith('.exe') && !/^(elevate|uninstall)/i.test(n))
+          .map((n) => ({ name: n, path: join(dir, n) }))
+
+  // 「本轮」的起点 = app.asar 的写入时刻。electron-builder 每轮都会重写它，而
+  // `release/` 下的安装包**不会**被 `--dir` 那一轮清掉 —— 上一轮完整 `dist` 留下的
+  // 安装包会原地不动。拿它当判据，才能区分「这轮产出的」与「上轮留下的」，
+  // 否则验收会对着一个三轮之前的安装包下结论。
+  const roundStart = existsSync(asarPath) ? statSync(asarPath).mtimeMs : 0
+
+  // ① 应用本体 —— 用户实际双击的那个。
+  const appExes = listExesIn(installDir)
+  check('应用本体目录里有 exe', () => {
+    expect(appExes.length > 0, `${installDir} 下一个 exe 都没有（elevate/Uninstall 已排除）`)
+    return appExes.map((e) => e.name).join(', ')
+  })
+  for (const exe of appExes) {
+    check(`${exe.name} 有内嵌签名（PE 签名表非空）`, () => {
+      const { offset, size } = peCertificateTable(exe.path)
+      expect(size > 0, 'PE 签名表为空 —— 没签上。先确认证书在 CurrentUser\\My（跑 signing:cert）')
+      return `签名表 ${size} 字节 @ 0x${offset.toString(16)}`
+    })
+  }
+
+  // ② 安装包 —— 更新器下载后校验的正是它，所以这条比①更贴近更新链路。
+  // 只在「本轮真的产出了安装包」时断言：`--dir` 只出 win-unpacked。
+  const installerExes = listExesIn(releaseDir).filter((e) => /setup/i.test(e.name))
+  const staleInstallers = installerExes.filter((e) => statSync(e.path).mtimeMs < roundStart)
+  const freshInstallers = installerExes.filter((e) => statSync(e.path).mtimeMs >= roundStart)
+  if (freshInstallers.length === 0) {
+    console.log(
+      `  未验证 本轮没产出安装包（目录里有 ${staleInstallers.length} 个，属上一轮，已排除）。\n` +
+        '         `--dir` 只出 win-unpacked，所以「安装包已签名」与下面的 app-update.yml\n' +
+        '         这两组断言**本轮既不算通过也不算失败** —— 跑完整 `dist` 才能验。',
+    )
+  } else {
+    for (const exe of freshInstallers) {
+      check(`${exe.name}（安装包）有内嵌签名`, () => {
+        const { offset, size } = peCertificateTable(exe.path)
+        expect(size > 0, '安装包 PE 签名表为空 —— 更新器校验下载包时会拒绝安装')
+        return `签名表 ${size} 字节 @ 0x${offset.toString(16)}`
+      })
+    }
+  }
+
+  // ③ electron-updater 比对发布者用的就是这份文件。
+  //
+  // 它**只在真正的 nsis 构建里才会生成**，这一点不查源码会误判成 bug：electron-builder
+  // 在 onAfterPack 里有一道 `isSuitableWindowsTarget` 闸（out/publish/PublishManager.js:391），
+  // 只认 `nsis` / `nsis-*`（或 appx 且开了 electronUpdaterAware）。`--dir` 用的 `dir`
+  // 目标不在此列 → 文件本来就不存在。所以这里跟着②一起判断，不对 `--dir` 报假 FAIL。
+  //
+  // 另一个前置条件是 `WinPackager.isForceCodeSigningVerification`（out/winPackager.js:26）
+  // = `verifyUpdateCodeSignature !== false`。本项目没有把它设成 false，故为真，
+  // publisherName 会被写进去；哪天有人为了「跳过校验」把它设成 false，这里就会先炸。
+  if (freshInstallers.length === 0) {
+    console.log('  未验证 app-update.yml（本轮无安装包 → 不是 nsis 构建 → 本来就不会生成它）')
+  } else {
+    check('resources/app-update.yml 存在且含 publisherName', () => {
+      const target = join(resourcesDir, 'app-update.yml')
+      expect(existsSync(target), `没有 ${target} —— electron-updater 从这里读更新源与发布者`)
+      const m = /^\s*publisherName:\s*(.+?)\s*$/m.exec(readFileSync(target, 'utf8'))
+      expect(
+        m !== null,
+        `app-update.yml 里没有 publisherName，更新校验就没有发布者可依据。内容：\n${readFileSync(target, 'utf8')}`,
+      )
+      return m[1]
+    })
+
+    check('publisherName 与配置的证书主体对得上', () => {
+      const simpleName = configuredSubject.replace(/^CN=/, '')
+      const m = /^\s*publisherName:\s*(.+?)\s*$/m.exec(
+        readFileSync(join(resourcesDir, 'app-update.yml'), 'utf8'),
+      )
+      expect(m !== null, 'app-update.yml 里没有 publisherName')
+      expect(
+        m[1].includes(simpleName),
+        `publisherName 是「${m[1]}」，配置的证书主体是「${configuredSubject}」（简单名 ${simpleName}）—— 对不上，说明签名用的不是这张证书`,
+      )
+      return m[1]
+    })
+
+    // ④ latest.yml 与实际安装包的一致性 —— 这是更新器的**完整性**那一层
+    // （§八 第 1 条），与 ③ 的**身份**那一层（第 2 条）是两件事，都要钉。
+    // 更新器下载后先按 latest.yml 的 sha512 校验，对不上直接丢弃，
+    // 所以「元数据与实际文件对得上」是发布链路能用的前提。
+    check('latest.yml 的 sha512/size 与实际安装包一致', () => {
+      const latestPath = join(releaseDir, 'latest.yml')
+      expect(existsSync(latestPath), `没有 ${latestPath}（配了 publish 才会产出）`)
+      const text = readFileSync(latestPath, 'utf8')
+      const fileMatch = /^path:\s*(.+?)\s*$/m.exec(text)
+      expect(fileMatch !== null, 'latest.yml 里没有顶层的 path（安装包文件名）')
+      const shaMatch = /^sha512:\s*(.+?)\s*$/m.exec(text)
+      expect(shaMatch !== null, 'latest.yml 里没有顶层的 sha512')
+      const declared = shaMatch[1]
+      // sha512 的 base64 定长 88 字符；长度不对说明正则匹配到了别的东西，
+      // 那样下面的相等断言可能只是「两边都为空」的假通过。
+      expect(
+        declared.length === 88,
+        `latest.yml 的 sha512 解出来是 ${declared.length} 字符（应为 88），正则可能匹配错了行`,
+      )
+
+      const target = join(releaseDir, fileMatch[1])
+      expect(existsSync(target), `latest.yml 指向 ${fileMatch[1]}，但 ${target} 不存在`)
+      const actual = createHash('sha512').update(readFileSync(target)).digest('base64')
+      expect(
+        actual === declared,
+        `latest.yml 声明的 sha512 与 ${fileMatch[1]} 的实际值不一致 —— 更新器会拒绝这个包`,
+      )
+      return `${fileMatch[1]} ${actual.slice(0, 16)}…`
+    })
+  }
+
+  // 反例：证明上面那条「有内嵌签名」不是恒真。
+  check('反例 · PE 解析器对非 PE 文件必须报错', () => {
+    let threw = false
+    try {
+      peCertificateTable(join(resourcesDir, 'web', 'index.html'))
+    } catch {
+      threw = true
+    }
+    expect(threw, '对一个 HTML 文件也返回了结果 —— 那么「有内嵌签名」这条断言不可信')
+    return '如预期抛错'
+  })
+
+  // ⑤ 签名身份 —— 只在有报告时才验，缺报告时**明说未验证**，不当成通过。
+  const reportPath = join(releaseDir, 'signature-report.txt')
+  if (!existsSync(reportPath)) {
+    console.log(
+      '  未验证 签名身份报告不存在，本节目前只证明了「签上了」、**没有**证明「签成了谁」。\n' +
+        '         先跑 `pnpm --filter @fanhe/desktop verify:sign` 生成报告（沙箱里 PowerShell 的\n' +
+        '         stdout 会被吞掉，只有落盘这一条路），再重跑本脚本。',
+    )
+  } else {
+    const report = parseSignatureReport(readFileSync(reportPath, 'utf8'))
+
+    // 报告是独立脚本对整个 release 目录扫出来的，可能含上一轮留下的产物。
+    // 只对本轮真正产出的名字下结论，其余的明说被排除 —— 而不是默默算进去，
+    // 也不是默默忽略（后者会让「报告里 3 项全过」听起来比实际覆盖得多）。
+    const expectedNames = new Set([
+      ...appExes.map((e) => e.name),
+      ...freshInstallers.map((e) => e.name),
+    ])
+    const considered = [...report.byName.entries()].filter(([n]) => expectedNames.has(n))
+    const ignored = [...report.byName.keys()].filter((n) => !expectedNames.has(n))
+    if (ignored.length > 0) {
+      console.log(`  (报告里 ${ignored.length} 项不属于本轮，已排除：${ignored.join(', ')})`)
+    }
+
+    check('签名报告覆盖了本轮全部产物', () => {
+      expect(
+        considered.length === expectedNames.size,
+        `本轮有 ${expectedNames.size} 个产物（${[...expectedNames].join(', ')}），报告只覆盖了 ${considered.length} 个。先重跑 verify:sign`,
+      )
+      return `${considered.length} 个`
+    })
+
+    check('签名报告里每个产物都不是 NotSigned', () => {
+      const notSigned = considered.filter(([, v]) => v.status === 'NotSigned').map(([k]) => k)
+      expect(notSigned.length === 0, `报告为 NotSigned：${notSigned.join(', ')}`)
+      const statuses = [...new Set(considered.map(([, v]) => v.status))]
+      return `${considered.length} 个 exe，状态 ${statuses.join('/')}`
+    })
+
+    check('签名报告里的主体与配置的证书主体一致', () => {
+      const simpleName = configuredSubject.replace(/^CN=/, '')
+      const subjects = [...new Set(considered.map(([, v]) => v.subject).filter(Boolean))]
+      expect(subjects.length > 0, '报告里没有任何签名主体，无法证明用了哪张证书')
+      expect(
+        subjects.every((s) => s.includes(simpleName)),
+        `报告里的签名主体是 ${JSON.stringify(subjects)}，配置的是「${configuredSubject}」—— 不是同一张证书`,
+      )
+      return subjects.join(' / ')
+    })
+
+    // 反例：证明上面两条依赖的解析器不是「怎么喂都返回一条」。
+    check('反例 · 报告解析器对无关文本必须解析不出 EXE', () => {
+      const garbage = parseSignatureReport('hello\nworld=1\n')
+      expect(
+        garbage.byName.size === 0,
+        `喂无关文本却解析出 ${garbage.byName.size} 个 EXE —— 那么「每个产物都不是 NotSigned」可能只是恒真`,
+      )
+      return '如预期为空'
+    })
+  }
+}
+
+console.log('\n四、随包 agent.ts 的实际加载（进程内 import）')
 const agentFile = join(resourcesDir, 'agent', 'agent.ts')
 
 // 断言的是「这条路径能加载出这些导出」，而不是「文件存在」——

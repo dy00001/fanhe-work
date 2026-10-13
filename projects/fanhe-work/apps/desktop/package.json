@@ -16,7 +16,10 @@
     "smoke": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/launch.mjs --smoke",
     "dist:dir": "node scripts/sync-version.mjs && tsc -p tsconfig.json && electron-builder --win --dir --publish never",
     "dist": "node scripts/sync-version.mjs && tsc -p tsconfig.json && electron-builder --win --publish never",
-    "verify:pack": "node --experimental-strip-types scripts/verify-pack.mjs"
+    "verify:pack": "node --experimental-strip-types scripts/verify-pack.mjs",
+    "verify:sign": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-signature.ps1",
+    "verify:all": "pnpm run verify:sign && pnpm run verify:pack",
+    "signing:cert": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*"
