@@ -58,8 +58,9 @@ const AI_MODULES: readonly { title: string; desc: string; hue: string; Icon: Luc
  * **不照抄那四段文案**：在拿不到数据的地方写死一段看起来很确定的字，比留白更糟 ——
  * 用户会以为授权已经检查过了。
  *
- * 主卡也**不接原型那张 webp 海报**：它是视频的替代帧，而这里还没有视频可放。
- * 卡面直接取 `--hero-surface` 的磨砂灰，结构与其余取值一处不动（见 index.css）。
+ * 主卡里接的是**原型的媒体层**：背景素材、横向压暗渐变、`::after` 发丝高光三层都在
+ * （取值与理由见 index.css 的「一键启动主卡的媒体层」）。素材是静态海报帧，不是原版
+ * 那样循环播放的两条 `<video>` —— 首帧与实测截图的卡片内容一致，接动效等有片子再说。
  *
  * 管理入口（新增 / 编辑 / 排序 / 删除）仍在完整面板上，地址是 `/workbench/launch`；
  * 本区块只做「选一条 + 启动」。区块头右侧的「管理配置」是它的入口 —— 原型这里没有
@@ -166,8 +167,13 @@ export function LaunchSection() {
       </div>
 
       <div className="grid grid-cols-4 grid-rows-[200px_128px] gap-4">
-        {/* 主卡。跨两列。 */}
-        <div className="relative isolate col-span-2 flex flex-col justify-end gap-2 overflow-hidden rounded-2xl bg-[var(--hero-surface)] px-4 py-6 text-[var(--hero-fg)] shadow-[var(--shadow-card)] backdrop-blur-[12.5px]">
+        {/* 主卡。跨两列。
+            媒体层与压暗层是负 `z-index` 的绝对定位**兄弟节点**，必须写在内容之前 ——
+            它们的叠放顺序由 DOM 顺序决定，靠后写会盖住文字。发丝高光挂在
+            `.hero-card::after` 上，所以卡面要带这个类名。 */}
+        <div className="hero-card relative isolate col-span-2 flex flex-col justify-end gap-2 overflow-hidden rounded-2xl bg-[var(--hero-surface)] px-4 py-6 text-[var(--hero-fg)] shadow-[var(--shadow-card)] backdrop-blur-[12.5px]">
+          <div aria-hidden="true" className="hero-media" />
+          <div aria-hidden="true" className="hero-shade" />
           <div className="flex min-w-0 flex-col gap-2">
             <div className="flex items-center gap-2">
               <h3 className="text-xl leading-6 font-medium">设计软件一键登录</h3>
