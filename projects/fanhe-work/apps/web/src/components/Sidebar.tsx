@@ -177,7 +177,9 @@ function NavEntry({
       to={navPath(item.code)}
       className={({ isActive }: NavLinkRenderProps) =>
         cn(
-          'flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl transition-colors',
+          // 悬停「一帧到位」、不带 transition —— 设计稿（原型 §5 规则①）里原 UI
+          // 除分段控件外所有悬停都是瞬时的，导航项是其中最典型的一处。
+          'flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl',
           collapsed ? 'justify-center px-0' : indent ? 'pr-2.5 pl-[38px]' : 'px-2.5',
           // 当前项按原型是「加 2px 字号」而不是加粗（16/400）。
           isActive
@@ -249,7 +251,7 @@ function NavGroupBlock({
           aria-label={group.label}
           title={group.label}
           className={cn(
-            'grid h-8 w-full place-items-center rounded-xl transition-colors',
+            'grid h-8 w-full place-items-center rounded-xl',
             flyoutOpen
               ? 'bg-accent text-foreground'
               : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -304,7 +306,7 @@ function NavGroupBlock({
         aria-expanded={!closed}
         aria-label={`${closed ? '展开' : '收起'}${group.label}`}
         title={`${closed ? '展开' : '收起'}${group.label}`}
-        className="flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl px-2.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <HeadIcon className="size-[18px] shrink-0" />
         <span className="truncate">{group.label}</span>
@@ -399,7 +401,7 @@ function SideFoot({
             title={item.label}
             className={({ isActive }: NavLinkRenderProps) =>
               cn(
-                'grid size-8 shrink-0 place-items-center rounded-xl transition-colors',
+                'grid size-8 shrink-0 place-items-center rounded-xl',
                 isActive
                   ? 'bg-accent text-foreground'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -415,7 +417,7 @@ function SideFoot({
         type="button"
         aria-label="通知"
         title="通知"
-        className="grid size-8 shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="grid size-8 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <span className="relative grid place-items-center">
           <Bell className="size-[18px]" />

@@ -125,7 +125,9 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
             <button
               type="button"
               aria-label="账号菜单"
-              className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              // 悬停压暗一档（原型 `.avatar:hover{opacity:.88}`），不带过渡 —— 与
+              // 「除分段控件外所有悬停瞬时到位」这条设计稿规则一致。
+              className="rounded-full outline-none hover:opacity-[0.88] focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               <Avatar className="size-8">
                 <AvatarFallback className="bg-primary text-xs font-medium text-primary-foreground">

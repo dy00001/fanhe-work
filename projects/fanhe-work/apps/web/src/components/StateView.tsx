@@ -58,6 +58,15 @@ type EmptyStateProps = {
    * 转发自己收到的 className，转发方自己也可能没收到 —— 那时就是一个显式的 undefined。
    */
   className?: string | undefined
+  /**
+   * 追加到标题上的类名。
+   *
+   * 存在的理由是占位页：设计稿的占位页标题取 `18 / 700 / 27`（原型 `.ph h2`），
+   * 是全站唯一一处 700；而 `EmptyTitle` 的默认是 `text-lg font-medium`。让调用点
+   * 覆盖比在 `ui/empty.tsx` 里改默认值安全 —— 后者会连带改掉 404 / 500 / 无权限
+   * 这些状态页，而它们的取值没有设计稿依据。
+   */
+  titleClassName?: string | undefined
 }
 
 /**
@@ -73,6 +82,7 @@ export function EmptyState({
   action,
   variant = 'card',
   className,
+  titleClassName,
 }: EmptyStateProps) {
   const TitleTag = variant === 'card' ? 'h1' : 'div'
 
@@ -82,7 +92,15 @@ export function EmptyState({
         <EmptyMedia variant="icon">
           <Icon />
         </EmptyMedia>
-        <EmptyTitle className={variant === 'plain' ? 'text-sm' : undefined}>
+        {/* `tracking-normal` 是有意的：`EmptyTitle` 自带 `tracking-tight`，而设计稿
+            的字距规则是「一律 normal，不做特殊处理」。 */}
+        <EmptyTitle
+          className={cn(
+            variant === 'plain' ? 'text-sm' : undefined,
+            'tracking-normal',
+            titleClassName,
+          )}
+        >
           <TitleTag>{title}</TitleTag>
         </EmptyTitle>
         {description !== undefined && <EmptyDescription>{description}</EmptyDescription>}

@@ -1,5 +1,5 @@
 import { ROLES, navCodeFromPath, resolveActiveNav } from '@fanhe/shared'
-import { useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Outlet, useLocation } from 'react-router'
 
 import { useAuth } from '../auth/useAuth'
@@ -40,6 +40,7 @@ export function AppShell() {
   const visibleItems = useVisibleNavItems()
   const { pathname } = useLocation()
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
+  const mainRef = useRef<HTMLElement>(null)
 
   // 先算再写。不用 `setCollapsed` 的函数式更新把写回塞进去：那样写操作会落在
   // React 的状态更新函数里，而 StrictMode 下更新函数会被调用两次 —— 写入同一个值
@@ -85,11 +86,90 @@ export function AppShell() {
           }}
         />
 
-        {/* 内容区：上 20 / 左右 48 / 下 0，与原 UI 的 main 同度量，且通栏铺满。 */}
-        <main className="flex-1 overflow-y-auto px-12 pt-5">
+        {/* 内容区：上 20 / 左右 48 / 下 0，与原 UI 的 main 同度量，且通栏铺满。
+            `hide-scrollbar` 与设计稿一致 —— 系统滚动条（Windows 上是 15px 的槽）会
+            顶掉内容区右侧那 48px 的留白，因此改由 `ScrollThumb` 自绘一条 6px 的
+            指示器。两者的可见性必须一起改，只藏系统滚动条而不给指示器等于砍掉反馈。 */}
+        <main ref={mainRef} className="hide-scrollbar flex-1 overflow-y-auto px-12 pt-5">
           <Outlet />
         </main>
       </div>
+
+      {/* 指示器挂在最外层：`.scroll-thumb` 的 `right: 4px` 以窗口右缘为基准，
+          与内容区右边界同一条线（系统滚动条已隐藏，两者重合）。 */}
+      <ScrollThumb target={mainRef} contentKey={pathname} />
     </div>
+  )
+}
+
+/**
+ * 内容区自绘滚动指示器（设计稿 `.scroll-thumb`）。
+ *
+ * 复刻原型的四条取值与三条行为：
+ *   - 宽 6 / 圆角 999 / `right: 4px` / `top: 72px`（与顶栏下缘对齐）—— 写在
+ *     `index.css` 的 `.scroll-thumb` 里，位置走 `translateY` 走上合成层，不触发重排；
+ *   - 高度按「可视高 / 内容高」算，最小 32px（内容再长也留一段可抓的视觉长度）；
+ *   - **滚到顶部时整个节点不渲染**。原型是把节点从 DOM 里摘掉，而不是 `opacity: 0`
+ *     —— 后者会留一条看不见但参与命中的元素。
+ *
+ * `contentKey` 是路由地址。给它的理由是内容区的**自身尺寸不变但内容换了一整块**：
+ * `ResizeObserver` 只认盒子尺寸，路由切换时若新页面恰好和旧页面一样高，观察器一次
+ * 都不回调，指示器会停在上一页的比例上。带上地址、让副作用随路由重挂，是这里最省
+ * 的一种正确写法。
+ */
+function ScrollThumb({
+  target,
+  contentKey,
+}: {
+  target: RefObject<HTMLElement | null>
+  contentKey: string
+}) {
+  const [thumb, setThumb] = useState<{ height: number; offset: number } | null>(null)
+
+  useEffect(() => {
+    const el = target.current
+    if (el === null) return
+
+    const measure = () => {
+      const view = el.clientHeight
+      const total = el.scrollHeight
+      // 内容没有溢出时不给指示器：一条占满整个可视区的滚动条没有信息量，还容易被
+      // 误读成「还有更多内容」。
+      if (total <= view + 1) {
+        setThumb(null)
+        return
+      }
+      const height = Math.max(32, (view / total) * view)
+      const maxScroll = total - view
+      const travel = view - height
+      const offset = maxScroll <= 0 ? 0 : (el.scrollTop / maxScroll) * travel
+      setThumb({ height, offset })
+    }
+
+    measure()
+    el.addEventListener('scroll', measure, { passive: true })
+
+    // 两处都要观察：`el` 自己在窗口缩放时变高，它的第一个子节点（页面根元素）在数据
+    // 加载完、卡片长高时变高。只观察其中之一会漏掉另一类变化，而症状都是「指示器
+    // 的长度不再对得上内容」。
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    const page = el.firstElementChild
+    if (page !== null) observer.observe(page)
+
+    return () => {
+      el.removeEventListener('scroll', measure)
+      observer.disconnect()
+    }
+  }, [target, contentKey])
+
+  if (thumb === null || thumb.offset <= 0) return null
+
+  return (
+    <div
+      aria-hidden
+      className="scroll-thumb"
+      style={{ height: thumb.height, transform: `translateY(${thumb.offset}px)` }}
+    />
   )
 }

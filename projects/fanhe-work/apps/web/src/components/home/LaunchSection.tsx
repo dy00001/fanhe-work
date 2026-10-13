@@ -158,7 +158,7 @@ export function LaunchSection() {
         </span>
         <Link
           to={`${navPath(NAV_CODES.WORKBENCH)}/launch`}
-          className="ml-auto flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="ml-auto flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
           管理配置
           <ArrowRight className="size-3.5" />
@@ -211,7 +211,7 @@ export function LaunchSection() {
                       onClick={() => setSelectedId(profile.id)}
                       aria-pressed={active}
                       className={[
-                        'rounded-full border px-2.5 py-px text-xs leading-[18px] transition-colors',
+                        'rounded-full border px-2.5 py-px text-xs leading-[18px]',
                         active
                           ? 'border-transparent bg-[var(--hero-chip)] text-[var(--hero-fg)]'
                           : 'border-[var(--hero-line)] text-[var(--hero-sub)] hover:text-[var(--hero-fg)]',
@@ -293,15 +293,19 @@ export function LaunchSection() {
           <div
             key={title}
             style={{ '--hue': hue } as React.CSSProperties}
-            className="group relative isolate flex flex-col items-start justify-between gap-2.5 overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-[var(--shadow-card)] transition-colors hover:border-ring"
+            /* 卡面、`::before` 辉光层、悬停的 box-shadow 辉光与 0.6s `glow-bloom`
+               都写在 `index.css` 的 `.mod-card` 里（原型 `.mod` 的四层材质）。
+               这里刻意**不给任何 transition 类**：设计稿的悬停是一帧到位，
+               全站只有侧栏底部的分段控件带过渡。 */
+            className="mod-card"
           >
             <span className="absolute top-3 right-3 z-[1] rounded-full border border-border px-2 text-xs leading-[1.6] text-muted-foreground-weak">
               开发中
             </span>
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
+            <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
               <Icon className="size-[18px]" />
             </span>
-            <div className="w-full min-w-0">
+            <div className="mod-body w-full min-w-0">
               <h4 className="mb-0.5 text-lg leading-7 font-medium">{title}</h4>
               <p className="text-sm leading-5 text-muted-foreground">{desc}</p>
             </div>

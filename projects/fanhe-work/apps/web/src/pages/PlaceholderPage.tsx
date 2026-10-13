@@ -39,6 +39,9 @@ export function PlaceholderPage({ item }: { item: NavItem }) {
     <EmptyState
       icon={Icon}
       title={item.label}
+      /* 设计稿的占位页标题取 18 / 700 / 27（原型 `.ph h2`），是全站唯一一处 700；
+         字号 18 由 `EmptyTitle` 的 `text-lg` 提供，这里只覆盖字重与行高。 */
+      titleClassName="font-bold leading-[27px]"
       description={
         <span className="flex flex-col items-center gap-1.5">
           <Badge variant="secondary">功能开发中</Badge>

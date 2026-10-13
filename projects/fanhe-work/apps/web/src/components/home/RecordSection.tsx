@@ -12,9 +12,9 @@ import { formatRelativeTime } from '../../lib/relative-time'
 /** 每张卡最多列几条。原型是四条，这个数字决定两张卡的高度能否对齐。 */
 const PREVIEW_COUNT = 4
 
-/** 新建 / 查看全部这类入口的样式。原型 `.card-head .more`。 */
+/** 新建 / 查看全部这类入口的样式。原型 `.card-head .more`。悬停瞬时变色，不带过渡。 */
 const MORE_CLASS =
-  'ml-auto flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground'
+  'ml-auto flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground'
 
 /**
  * 工作纪要及事件记录（原型编号 11）。
@@ -109,7 +109,7 @@ export function RecordSection() {
                 <Link
                   key={note.id}
                   to={`${navPath(NAV_CODES.WORKBENCH)}/notes`}
-                  className="flex items-center gap-3 border-t border-border-soft px-4 py-3 transition-colors first:border-t-0 hover:bg-accent"
+                  className="flex items-center gap-3 border-t border-border-soft px-4 py-3 first:border-t-0 hover:bg-accent"
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-base leading-6 font-medium">
@@ -153,7 +153,7 @@ export function RecordSection() {
                 <Link
                   key={event.id}
                   to={`${navPath(NAV_CODES.WORKBENCH)}/events`}
-                  className="relative block py-2.5 pl-[18px] transition-colors hover:text-foreground"
+                  className="relative block py-2.5 pl-[18px] hover:text-foreground"
                 >
                   {/* 时间线的点与连线。用绝对定位的伪元素在原型里实现；这里用两个
                       真实元素，因为连线要连到「下一项」，而 CSS 无法在最后一项上

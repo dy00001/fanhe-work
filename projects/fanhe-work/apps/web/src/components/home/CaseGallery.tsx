@@ -119,7 +119,7 @@ export function CaseGallery() {
             type="button"
             onClick={() => page(-1)}
             aria-label="上一页"
-            className="absolute left-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background transition-colors hover:bg-foreground"
+            className="absolute left-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
             style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
           >
             <ArrowLeft className="size-5" />
@@ -130,7 +130,7 @@ export function CaseGallery() {
             type="button"
             onClick={() => page(1)}
             aria-label="下一页"
-            className="absolute right-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background transition-colors hover:bg-foreground"
+            className="absolute right-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
             style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
           >
             <ArrowRight className="size-5" />

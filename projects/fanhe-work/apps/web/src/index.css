@@ -44,6 +44,48 @@
    少了它，覆盖在层叠顺序上会输给工具类。 */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* =============================================================================
+   字体：把三档真实字面登记成一个自建家族
+   =============================================================================
+
+   设计稿（`UI合并方案/梵禾Work-首页改造预览.html`）全站只使用 400 / 500 / 700
+   三档字重，其中 500 承担了区块标题、单元卡标题、主按钮这几处层级。此前本项目的
+   字体栈是 `system-ui, …, 'Segoe UI', 'Microsoft YaHei'`，而 Windows 上落到的
+   这两支字体**都没有 Medium 字面**：浏览器要么取最近字面再合成、要么直接退回 400，
+   于是所有 `font-weight:500` 的视觉结果与 400 完全一致 —— 层级被压平，这正是
+   「字体不如设计稿好看」的根因，而不是某处字号写错。
+
+   本机装了 Noto Sans SC（思源黑体的 Google 发行版）的 Regular / Medium / Bold
+   三个字面，字形气质与设计稿的原字体最接近，且**带真正的 Medium**。这三个字面在
+   系统里是三个独立家族（"Noto Sans SC" / "… Medium" / "… Bold"），只写家族名
+   会命中 Regular，500 依然被伪粗，所以用 `@font-face` + `local()` 按字重一一对应
+   地登记成 `"FH Sans SC"`。
+
+   `local()` 只读系统字体：不联网、不落盘，机器上没有这套字体时整体回退到栈里下一条，
+   不会出现方框字。回退链与原栈保持兼容（macOS 落苹方、Windows 落雅黑 UI / 雅黑）。
+   ============================================================================= */
+@font-face {
+  font-family: 'FH Sans SC';
+  src: local('Noto Sans SC');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'FH Sans SC';
+  src: local('Noto Sans SC Medium');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'FH Sans SC';
+  src: local('Noto Sans SC Bold');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* 浏览器自己画的那部分（滚动条、输入框自动填充底色、日期选择器）取不到我们的
      令牌，只能靠这个属性告诉它该用哪套配色。下面 `.dark` 里对应写 `dark`。 */
@@ -222,8 +264,12 @@
   --shadow-md: 0 4px 16px rgb(0 0 0 / 0.06);
   --shadow-lg: 0 8px 24px rgb(0 0 0 / 0.08);
 
-  /* 字体栈。放令牌里是为了让 `font-sans` 与 body 用同一份定义，改一处两边都变。 */
-  --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* 字体栈。放令牌里是为了让 `font-sans` 与 body 用同一份定义，改一处两边都变。
+     首位的 `FH Sans SC` 是上面 `@font-face` 登记的自建家族，它存在的唯一目的是让
+     500 与 700 落到真实字面上；其余各条是回退链（换一台机器时依次尝试）。 */
+  --font-sans:
+    'FH Sans SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui,
+    sans-serif;
 
   /* 语义色映射。左边是 Tailwind 生成工具类用的名字，右边指向上面的原始值。 */
   --color-background: var(--background);
@@ -344,4 +390,142 @@
 .launch-cta:focus-visible {
   outline: 2px solid var(--hero-fg);
   outline-offset: 2px;
+}
+
+/* =============================================================================
+   一键启动的单元卡：四层材质与悬停辉光
+   =============================================================================
+
+   设计稿（原型 `.mod`）的单元卡有四层：卡面、::before 辉光层、悬停追加的 box-shadow
+   辉光、以及悬停跑一次的 0.6s `glow-bloom` 扩散环。本项目此前只搬了静态的卡面与
+   一条 `hover:border-ring`，辉光层与关键帧都没落 —— 悬停时卡片是「边界变色」，而
+   设计稿是「边界变清晰 + 一层同色相的呼吸光」。
+
+   写成具名规则而不是 Tailwind 任意值类名：`radial-gradient` 里嵌 `color-mix` 与两个
+   自定义属性，塞进类名之后（`bg-[radial-gradient(130%_115%_at_50%_0%,color-mix(...))]`）
+   无法阅读，而且 `@keyframes` 本来就写不进类名。
+
+   **必须不带 transition。** 设计稿的悬停规则是「一帧到位」，全站只有侧栏底部的分段
+   控件带过渡（`.seg button` 的 background .2s / color .2s）。给这里补一条
+   `transition: box-shadow` 会让「瞬时变色 + 0.6s 扩散环」变成两段互相拖尾的动画。
+
+   `--hue` 由组件按模块分色注入（`--m-teal` 等），所以换主题只改 `--wash` /
+   `--wash-glow` 两个强度参数，色相不动。
+   ============================================================================= */
+.mod-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+
+/* 辉光层。静止 opacity 0、悬停 1 —— 与设计稿一致。`inset: 0` 覆盖整卡，
+   `pointer-events: none` 让它不吃点击，`border-radius: inherit` 让它跟着卡圆角走。 */
+.mod-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    130% 115% at 50% 0%,
+    color-mix(in srgb, var(--hue) var(--wash-glow), transparent),
+    transparent 72%
+  );
+  opacity: 0;
+}
+
+/* 卡片内容要压在辉光层之上。**不能写成 `.mod-card > *`** —— 那张「开发中」角标是
+   绝对定位的兄弟节点，一并加上 `position: relative` 会把它从角上拉回文档流。 */
+.mod-card > .mod-icon,
+.mod-card > .mod-body {
+  position: relative;
+  z-index: 1;
+}
+
+.mod-card:hover {
+  border-color: var(--ring);
+  box-shadow:
+    var(--shadow-card),
+    0 0 26px color-mix(in srgb, var(--hue) var(--wash-glow), transparent);
+  animation: glow-bloom 0.6s ease-out;
+}
+
+.mod-card:hover::before {
+  opacity: 1;
+}
+
+/* 悬停那 0.6 秒的扩散环。**base 那层阴影必须写进关键帧里** —— 关键帧会整体盖掉
+   `box-shadow`，不带上的话卡片本身的柔光阴影会在动画期间被吃掉一下再弹回来。 */
+@keyframes glow-bloom {
+  0% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 0 color-mix(in srgb, var(--hue) 34%, transparent);
+  }
+  100% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 14px color-mix(in srgb, var(--hue) 0%, transparent);
+  }
+}
+
+/* =============================================================================
+   内容区：隐藏系统滚动条，改用自绘指示器
+   =============================================================================
+
+   设计稿的做法来自原 UI —— 隐藏系统滚动条（Windows 上那条 15px 的槽会明显破坏
+   内容区右侧的留白），改由 `.scroll-thumb` 自绘一条 6px 的指示器。
+   `will-change: transform` 是有意的：位移走 `translateY`（合成层），不触发重排。
+   ============================================================================= */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* 轨道与内容区对齐（top = 顶栏高 72），指示器本身由组件按「可视高 / 内容高」算高与
+   位移，最小 32px。滚到顶部时整个节点不渲染，而不是 opacity: 0 —— 这是设计稿的
+   「用存在 / 不存在代替可见 / 不可见」。 */
+.scroll-thumb {
+  position: absolute;
+  right: 4px;
+  top: 72px;
+  width: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 72%, transparent);
+  will-change: transform;
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* =============================================================================
+   降级动效
+   =============================================================================
+
+   设计稿里这一块是**补原 UI 的缺陷**：对方 22 个样式表 0 命中 `prefers-reduced-motion`。
+   这里连 `animation` 一起关 —— 悬停辉光那 0.6s 的缩放扩散对前庭敏感用户属于不必要
+   动效，只关 `transition` 关不干净。
+   ============================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

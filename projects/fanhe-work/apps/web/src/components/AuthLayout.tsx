@@ -14,7 +14,9 @@ export function AuthLayout({ subtitle, children }: { subtitle: string; children:
         <div className="flex items-center gap-3">
           <img src="/brand/logo.png" alt="" className="h-10 w-auto" />
           <div>
-            <h1 className="text-lg font-medium tracking-tight text-foreground">梵禾 Work</h1>
+            {/* 字距保持 normal —— 设计稿的字距规则是「一律 normal，不做特殊处理」，
+                这里此前带的 `tracking-tight` 是体系外的散值。 */}
+            <h1 className="text-lg font-medium text-foreground">梵禾 Work</h1>
             <p className="text-xs text-muted-foreground">{subtitle}</p>
           </div>
         </div>
