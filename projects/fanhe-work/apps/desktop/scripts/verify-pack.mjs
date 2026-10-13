@@ -6,6 +6,7 @@
  *   node --experimental-strip-types scripts/verify-pack.mjs
  *   node --experimental-strip-types scripts/verify-pack.mjs <安装目录>
  *   node --experimental-strip-types scripts/verify-pack.mjs --keep-broken
+ *   node --experimental-strip-types scripts/verify-pack.mjs --identity <身份档案路径>
  *   （或 `pnpm --filter @fanhe/desktop verify:pack`）
  *
  * ## 为什么要有这个脚本，而不是手工 `ls` 一眼
@@ -58,6 +59,16 @@ import { join, dirname, resolve as resolvePath, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+// 签名身份档案的纯逻辑（解析 / 比对 / 描述漂移）。放 scripts/ 而不是 src/，
+// 是因为 src/ 是 tsc 输入、dist/** 又整目录进 asar —— 见该模块头部的说明。
+import {
+  defaultIdentityPath,
+  describeIdentity,
+  describeIdentityDrift,
+  parseSigningIdentity,
+  sameThumbprint,
+} from './signing-identity.mjs'
+
 // asar 是 CJS，用 createRequire 而不是 import 去加载它。
 const require_ = createRequire(import.meta.url)
 
@@ -85,7 +96,20 @@ if (repoRoot === null) {
 // ── 参数 ────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2)
 const keepBroken = argv.includes('--keep-broken')
-const positional = argv.filter((a) => !a.startsWith('--'))
+
+// `--identity <path>`：覆盖身份档案的位置。默认 `%LOCALAPPDATA%\FanheWork\signing\signing-identity.json`。
+// 提供这个开关是为了让第六节那条断言**可被验证** —— 否则只能对着本机唯一那份档案跑，
+// 而「档案存在、且与产物指纹一致」这条路径在本机恰好走不到（证书不在），断言就成了摆设。
+const identityFlagIndex = argv.indexOf('--identity')
+const identityOverride = identityFlagIndex === -1 ? null : (argv[identityFlagIndex + 1] ?? null)
+if (identityFlagIndex !== -1 && identityOverride === null) {
+  console.error('[verify-pack] --identity 后面要跟一个档案路径。')
+  process.exit(2)
+}
+
+// `--identity` 的取值必须以位置参数的身份被剔除，否则它会被当成安装目录 ——
+// 那样脚本会安静地去检查一个叫 `signing-identity.json` 的目录，报一堆与档案无关的错。
+const positional = argv.filter((a, i) => !a.startsWith('--') && i !== identityFlagIndex + 1)
 const installDir =
   positional[0] !== undefined
     ? resolvePath(positional[0])
@@ -536,7 +560,7 @@ function parseSignatureReport(text) {
   return { byName, count }
 }
 
-console.log('\n三、代码签名（T6-03c）')
+console.log('\n三、代码签名（T6-03c 签名 / T6-03d 身份档案）')
 
 // 期望的签名主体从打包配置里读，而不是在脚本里再写一份常量：
 // 这样「配置说要签成谁」与「产物实际签成谁」必须对得上，两份常量漂移不会互相掩护。
@@ -691,6 +715,10 @@ if (configuredSubject === null) {
   // 一条会给出「已验证」的假象的断言，比没有断言危险得多。
   const reportIsFresh = existsSync(reportPath) && statSync(reportPath).mtimeMs >= roundStart
 
+  // 第六节（签名身份档案）要拿它做指纹比对。在下面那个分支里被赋值；分支没走到时
+  // 保持空数组 —— 于是第六节会明说「没有可用报告，比对没做」，而不是静默通过。
+  let considered = []
+
   if (!existsSync(reportPath)) {
     console.log(
       '  未验证 签名身份报告不存在，本节目前只证明了「签上了」、**没有**证明「签成了谁」。\n' +
@@ -714,7 +742,7 @@ if (configuredSubject === null) {
       ...appExes.map((e) => e.name),
       ...freshInstallers.map((e) => e.name),
     ])
-    const considered = [...report.byName.entries()].filter(([n]) => expectedNames.has(n))
+    considered = [...report.byName.entries()].filter(([n]) => expectedNames.has(n))
     const ignored = [...report.byName.keys()].filter((n) => !expectedNames.has(n))
     if (ignored.length > 0) {
       console.log(`  (报告里 ${ignored.length} 项不属于本轮，已排除：${ignored.join(', ')})`)
@@ -807,6 +835,130 @@ if (configuredSubject === null) {
       )
       return '未登记列抛错，且 STATUS_VALUE 确实落到 statusValue'
     })
+  }
+
+  // ── ⑥ 签名身份档案（T6-03d） ──────────────────────────────────────────
+  //
+  // ①~⑤ 答不了这一问：**「本轮用的证书，还是上次发布那张吗」**。
+  // 它们只看「签上了没有」「主体名对不对」「Status 是不是 Valid」，而**主体名相同、
+  // 指纹不同的两张证书在它们眼里完全一样** —— 恰恰就是重跑 `signing:cert` 会造出来的
+  // 那个局面。
+  //
+  // 🔴 这里必须把「换了证书为什么致命」说准，否则这条断言会被当成形式主义。
+  // 直觉给的答案是「因为 `publisherName` 变了」，**那是错的**，查过源码：
+  //
+  //   publisherName 由证书的 Subject DN 推出来（`app-builder-lib/out/publish/
+  //   PublishManager.js:202` → `windowsSignToolManager.js` 的 `computePublisherName`，
+  //   取不到才回落 `CN=ms`），同 CN 就同字符串。实测产物里写的就是
+  //   `publisherName: [Fanhe Work]`。**换一张同 CN 的证书不会让它变样。**
+  //
+  // 真正断掉的是它**上面那一层**：
+  //
+  //   electron-updater 只在 `data.Status === 0`（Valid）时才进入发布者名比对
+  //   （`electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56`），
+  //   而 `Status` 要求证书链走到一张**本机受信任**的根。
+  //
+  // 自签根是**逐机**导入的（`create-signing-cert.ps1` 第 3 步只装当前用户），所以
+  // **换证书 = 换信任根 = 已装机器上没有它 → Status 变 UnknownError(1) → 整段比对被
+  // 跳过 → 更新被拒**。与 T6-03b 在本机撞到的是同一个闸，只是换机之后重现一次。
+  //
+  // 结论（已装机器收不到更新）不变，但**原因不同**：要补的是信任根。按错的因果去修，
+  // 会去改一个本来就没问题的配置项 —— 所以这条断言失败时的提示也照这个口径写。
+  const identityPath =
+    identityOverride !== null ? resolvePath(identityOverride) : defaultIdentityPath()
+
+  if (identityPath === null) {
+    console.log(
+      '  未验证 读不到 LOCALAPPDATA，定位不了签名身份档案，本轮无法证明用的还是上次那张证书。',
+    )
+  } else if (!existsSync(identityPath)) {
+    // 缺档案**不是失败** —— 从没跑过 v2 脚本的机器本来就没有它，那正是 v1 兼容路径。
+    // 但它意味着这一问无人回答，所以明说未验证，而不是当作通过。
+    console.log(
+      `  未验证 没有身份档案（${identityPath}）。\n` +
+        '         这不代表有问题：从没跑过 v2 脚本的机器本来就没有它。但它意味着\n' +
+        '         「本轮用的证书是不是上次发布那张」**无人证明**，只能靠人工记得。\n' +
+        '         跑一次 `pnpm --filter @fanhe/desktop signing:cert` 会补上档案（复用已有证书，不新建）。',
+    )
+  } else {
+    const parsed = parseSigningIdentity(readFileSync(identityPath, 'utf8'))
+
+    check('签名身份档案可读且形状正确', () => {
+      expect(
+        parsed.ok,
+        `档案 ${identityPath} 解析失败：${parsed.ok ? '' : parsed.reason}。\n` +
+          '        ⚠️ **不要直接删掉它重建** —— 它是「上次发布用的是哪张证书」的唯一记录，\n' +
+          '        而重建出来的档案会把下一张证书认成「当前身份」，等于把这次漂移洗成正常。\n' +
+          '        先查损坏原因（PS 5.1 写 BOM、手工编辑、磁盘问题），能从 .corrupt-* 备份里恢复就恢复。',
+      )
+      return describeIdentity(parsed.identity)
+    })
+
+    if (parsed.ok) {
+      if (considered.length === 0) {
+        console.log(
+          `  未验证 档案在（${describeIdentity(parsed.identity)}），但本轮没有可用的签名身份报告，\n` +
+            '         拿不到产物实际的指纹，比不了。先跑 verify:sign 再重跑本脚本。',
+        )
+      } else {
+        check('产物实际用的证书与身份档案一致（指纹比对）', () => {
+          const thumbs = [...new Set(considered.map(([, v]) => v.thumbprint).filter(Boolean))]
+          expect(
+            thumbs.length > 0,
+            `签名报告里读不到任何 THUMBPRINT（${considered.map(([n]) => n).join(', ')}）。\n` +
+              '        两种可能，按可能性排序：\n' +
+              '        ① 产物根本没签上 —— 上面「有内嵌签名」那条应该已经报红了，先解决它；\n' +
+              '        ② 报告是旧版 verify-signature.ps1 生成的 —— 重跑 verify:sign。\n' +
+              '        ⚠️ 这**不是**身份漂移，别去动身份档案。',
+          )
+          const drifted = thumbs.filter((t) => !sameThumbprint(t, parsed.identity.thumbprint))
+          expect(
+            drifted.length === 0,
+            '产物签名用的不是档案里记的那张证书。\n' +
+              `        档案：${describeIdentity(parsed.identity)}\n` +
+              `        产物：${thumbs.join(', ')}\n` +
+              `        ${describeIdentityDrift(parsed.identity, {
+                subject: considered[0][1].subject,
+                thumbprint: thumbs[0],
+              })}\n` +
+              '        ⇒ 已装机器上**没有**这张新证书的信任根，electron-updater 会因 Status≠Valid\n' +
+              '          拒绝每一个下载到的版本，且不报错、只静默失败。两条出路：\n' +
+              '          ① 把原证书找回来（`signing:import` 配合 -ImportPath <pfx>）—— 推荐；\n' +
+              '          ② 明确接受后果，在**每一台**已装机器上补装新根（`signing:cert` 第 3 步\n' +
+              '             只装当前机器，其余机器要各自导一次）。',
+          )
+          return `${thumbs.join(', ')}（与档案一致）`
+        })
+      }
+
+      // 反例：证明上面那条指纹比对不是「怎么喂都通过」。
+      // 一条恒真的断言比没有断言更危险 —— 它会给出「已经验过了」的假象。
+      check('反例 · 指纹不同必须判为漂移且能说出原因', () => {
+        const foreign = { subject: parsed.identity.subject, thumbprint: '0'.repeat(40) }
+        expect(
+          !sameThumbprint(foreign.thumbprint, parsed.identity.thumbprint),
+          '一条恒真的指纹比对 —— 那么「产物与档案一致」这条断言不可信',
+        )
+        const drift = describeIdentityDrift(parsed.identity, foreign)
+        expect(drift !== '', '指纹不同却描述不出漂移 —— 断言失败时就没有可读的原因')
+        expect(
+          /信任根/.test(drift),
+          `漂移原因必须落在信任根上（实际是「${drift}」）—— 说成 publisherName 是把因果说反了`,
+        )
+        return '如预期判为漂移，且原因指向信任根'
+      })
+
+      // 反例：两个都读不到指纹时**不许**判成「一致」。
+      // 「都读不到」是最容易把一条断言变成恒真的输入。
+      check('反例 · 两侧都读不到指纹时必须判为不一致', () => {
+        expect(
+          !sameThumbprint('', ''),
+          '空与空被判成相等 —— 那么「读不到指纹」会伪装成「指纹一致」',
+        )
+        expect(!sameThumbprint(null, undefined), 'null 与 undefined 被判成相等')
+        return '如预期判为不一致'
+      })
+    }
   }
 }
 

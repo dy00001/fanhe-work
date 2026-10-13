@@ -19,7 +19,11 @@
     "verify:pack": "node --experimental-strip-types scripts/verify-pack.mjs",
     "verify:sign": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-signature.ps1",
     "verify:all": "pnpm run verify:sign && pnpm run verify:pack",
-    "signing:cert": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1"
+    "signing:cert": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1",
+    "signing:check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -CheckOnly",
+    "signing:adopt": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -AdoptFromArtifact -ArtifactPath",
+    "signing:export": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -ExportPath",
+    "signing:import": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -ImportPath"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*",
