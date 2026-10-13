@@ -1809,6 +1809,39 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 
 **验证结果（2026-10-13）**：`dist:dir` 2 分 5 秒、`dist` 6 分 1 秒，均 exit 0；产出 `release/fanhe-work-setup-0.1.0.exe`（116,303,500 字节）+ `.exe.blockmap` + `latest.yml`（**差分三件套齐备**，印证「只有配了 `publish` 才产出后两者」）；`latest.yml` **无 `publisherName`**，两个 PE 的签名表大小均为 0（未签名，属 T6-03c）。安装态冒烟 **PASS**：`渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0` / `服务地址=https://work.fanhe.dpdns.org 来源=缺省值 反代到达上游=是` / `启动自检=可用 代理=可用`。`verify-pack.mjs` **17 项断言 + 2 条反例全过**；随包 `agent.ts` 在**安装目录那个 Electron 44 运行时**（Electron 内置 Node 24，与开发机的 Node 22 不是同一版本）里加载出 5 个导出且 stderr 为空。四道门禁 desktop 由 76 增至 **86**。**未发版、未接 updater。** 任务定义与决策见 `docs/T6-03-UPDATE-CHANNEL.md`。
 
+### 9.53 T6-03c 安装包签名实施中的几处判断
+
+**计划里自己写错的一处，是靠实测纠正的，值得单独记。** §9.52 与 `T6-03-UPDATE-CHANNEL.md` 原先都写「electron-builder 侧用 `win.certificateSubjectName`」。照此配置，electron-builder 26.15.3 直接拒绝启动：
+
+```
+⨯ Invalid configuration object. … does not match the API schema.
+ - configuration.win should be one of these:
+   null
+```
+
+**这个报错不点名是哪个键错了**，只让你去翻文档 —— 是本任务里最费时间的一步。真因：26.x 把签名相关选项整体挪进了 `WindowsSigntoolConfiguration` 子对象，而 `win` 本身是 `additionalProperties: false`（32 个属性里没有签名键）。正确写法是 `win.signtoolOptions.certificateSubjectName`。
+
+**更容易踩的是「怎么查」这一步。** 我先按「`certificateSubjectName` 在不在 `winOptions.d.ts` 里」去确认，结论是「在」（第 96 行）—— **方向正好相反**：它属于第 73 行起的 `WindowsSigntoolConfiguration` 接口，而 `WindowsConfiguration`（第 4 行起）里没有。教训是**只 grep「文件里有没有这个词」不足以判断一个配置项该写在哪，必须看它在哪个 interface 里**。之后改用两个权威判据：静态看 `app-builder-lib/scheme.json` 的键表，动态看运行期实际读的位置（`windowsSignToolManager` 里是 `platformSpecificBuildOptions.signtoolOptions?.certificateSubjectName`）。**报错文本与文档不一致时，以「运行期真的读哪儿」为准。**
+
+**`app-update.yml` 的生成条件不查源码会误判成 bug。** 首次在 `--dir` 产物里断言这个文件，得到 FAIL。查 `PublishManager.js` 才明白：它写在 `onAfterPack` 里，而前面有一道 `isSuitableWindowsTarget` 闸（同文件 391 行），**只认 `nsis` / `nsis-*`（或 appx 且开了 `electronUpdaterAware`）**，`--dir` 用的 `dir` 目标不在此列 —— 所以文件本来就不该存在，FAIL 是假警报。这直接引出下面那条更普遍的判断。
+
+**「验收脚本要能证伪」这条纪律，反过来也要求它不能乱报。** 本任务里「假警报」与「假绿」是同一枚硬币的两面：
+- `--dir` 构建报 `app-update.yml` 缺失 —— **假警报**（该构建本来就不产出它）；
+- `release/` 下的安装包**不会被 `--dir` 那一轮清掉**，于是断言对着**三轮之前**的产物下结论 —— 这是**假判据**，且方向不定（旧的恰好签过就更糟）；
+- 新增的 `verify-signature.ps1` 摘要在「有 1 个产物未签名」时仍打印 `RESULT=OK` —— **假绿**，因为它只判了「有产物且签名主体唯一」。
+
+三处的修法都落在同一条原则上：**断言必须说清自己是针对哪一轮、哪一部分下的结论**。具体做法是用同轮必被重写的 `resources/app.asar` 的 mtime 划出「本轮」，达不到的产物**排除并打印名字**（不能默默忽略，否则「3 项全过」听起来比实际覆盖得多），缺证据时打印「未验证」而不是「通过」。
+
+**「读 PE 头」与「问签名是谁」是两件事，不能互相替代。** PE 的 Certificate Table 只证明「内嵌了签名」；electron-updater 比对的是**发布者身份**。所以另写了 `scripts/verify-signature.ps1` 取 `Get-AuthenticodeSignature` 的 `Subject` / `Thumbprint` / `Status`。这里有个**必须抵抗的诱惑**：把 `Status=Valid` 当判据。自签证书天然 `UnknownError`（链不可信），而「不可信」不是打包缺陷 —— 判据只能是 `!== 'NotSigned'`，并把原始 Status 记进报告。**签名是否存在、谁签的、是否被信任，是三件事。**
+
+**验自己的探针也要怀疑。** 探针里用 `$cert.PrivateKey -ne $null` 判私钥，得到「证书没有私钥」，据此差点判定签名方案不可行；改用 `.HasPrivateKey` 后是 `True` 且 2048 位 RSA 可正常取出（`.PrivateKey` 对 CNG 键返回 `$null`）。同一类错误还有 `EnhancedKeyUsageList` 里 `$_.ObjectId` 已经是字符串、再取 `.Value` 得空串。**结论与预期不符时，先怀疑探针，再怀疑结论。**
+
+**证书在 `TrustedPublisher` 里有一份公开副本，这不是隐患但也值得一提。** 签发脚本会把公开部分导入 `TrustedPublisher`（让本机少弹一次「未知发布者」）。而 electron-builder 取证书靠 `Get-ChildItem -Recurse Cert: -CodeSigningCert` 取第一个命中的 —— 取到那份**没有私钥的副本**就会失败在 signtool「找不到满足条件的证书」并重试 2 次。实测该命令只返回 `CurrentUser\My` 那一条，故不存在这个风险；**但这是「实测如此」而非「设计保证」，所以记下来**。
+
+**验证结果（2026-10-13）**：证书 `CN=Fanhe Work` / thumbprint `0604B2381B8666C99F247DA7B576A4647601A5A3` / 2031-10-13 到期 / `HasPrivateKey=True`；`dist:dir` 约 5 分半、`dist` 5 分 35 秒，均 exit 0；安装包由 116,303,500 → **116,323,480 字节**（签名使包体 +19,980）；两个产物（`梵禾 Work.exe` 与安装包）的 PE 签名表均由 0 变为 **7416 字节**；`app-update.yml` 首次生成并含 `publisherName: [Fanhe Work]`；`latest.yml` 的 sha512 与实际安装包逐字节一致（已入断言）。`verify-pack.mjs` 扩到 **27 项断言 + 4 条反例全过**（本轮后又增 1 条，共 28 项）。四道门禁 **506 项 0 失败**（本次无新增用例）。
+
+⏳ **明确未验的部分（属 T6-03b，不得记成已验）**：`T6-03-UPDATE-CHANNEL.md` §八 的五条反例/断言里，第 1（改 sha512 → updater 拒绝）、2（换签名主体 → updater 拒绝）、4（安装 A → 发布 B → 版本变 B）、5（只传 `.exe` 不传 `.blockmap` → 差分不可用）**都还没验**，因为它们都需要 `electron-updater` 真的跑起来。尤其**第 2 条才是「签名校验生效」的真正判据**，现阶段只做到「数据两侧一致」（`app-update.yml` 的 `publisherName` = 产物签名主体 = `CN=Fanhe Work`），**没有**证明 updater 会拿它去比。另有一条具象风险留待 T6-03b 首先确认：electron-updater 从 `Get-AuthenticodeSignature` 输出里解析 CN 的正则，对**含空格的 CN**（`Fanhe Work`）是否照常工作。
+
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 

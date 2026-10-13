@@ -403,9 +403,58 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./梵禾 Work.exe" --smoke --no-san
 
 ### T6-03c 签名（已决：自签证书进 Windows 证书库）
 - 生成自签代码签名证书并装入 `CurrentUser\My`（§六细则）；**证书与私钥不进版本控制**，工作区内不落 `.pfx`；
-- electron-builder 侧用 `win.certificateSubjectName` 指向该证书；产出的 `app-update.yml` 应含 `publisherName`；
+- electron-builder 侧用 `win.signtoolOptions.certificateSubjectName` 指向该证书（**注意：不是 `win.certificateSubjectName`**，见下方执行结果）；产出的 `app-update.yml` 应含 `publisherName`；
 - 断言：用**错误发布者名**（或未签名）的包会让 updater 拒绝安装（**反例测试**，见 §八）。
 - 注意顺序：**签名要先于发布**，否则线上已发出去的 `latest.yml` 会带着「无签名」这个事实，之后补签要重发一次版本。
+
+#### T6-03c 执行结果（2026-10-13）
+
+**计划里的一处写法是错的，实测才发现。** 本节原先写「用 `win.certificateSubjectName`」，照此配置会得到一个**完全不说人话**的报错：
+
+```
+⨯ Invalid configuration object. electron-builder 26.15.3 has been initialized
+  using a configuration object that does not match the API schema.
+ - configuration.win should be one of these:
+   null
+```
+
+它**不告诉你是哪个键错了**，只让你去翻文档。真因：26.x 把签名选项整体挪进了 `WindowsSigntoolConfiguration` 子对象，而 `WindowsConfiguration` 是 `additionalProperties: false`。正确写法：
+
+```yaml
+win:
+  signtoolOptions:
+    certificateSubjectName: CN=Fanhe Work
+    signingHashAlgorithms: [sha256]
+```
+
+**为什么会误判**：`out/options/winOptions.d.ts` 里确实有 `certificateSubjectName` 这个词（第 96 行），但它属于第 73 行起的 `WindowsSigntoolConfiguration` 接口。**只 grep「文件里有没有这个词」会得出相反结论，要看它在哪个 interface 里。** 权威判据是 `scheme.json` 的 `WindowsSigntoolConfiguration` 键表；运行期读的也是 `platformSpecificBuildOptions.signtoolOptions?.certificateSubjectName`（`windowsSignToolManager.js:50/306`）。
+
+实测数据：
+
+| 项 | 结果 |
+|---|---|
+| 证书 | `CN=Fanhe Work`，thumbprint `0604B2381B8666C99F247DA7B576A4647601A5A3`，2048 位 RSA，`HasPrivateKey=True`，有效期至 2031-10-13 |
+| 证书库 | `CurrentUser\My`（含私钥）**与** `CurrentUser\TrustedPublisher`（公开副本）。签名实际取自 **`store=My user=current user`**（日志原文），**不需要管理员权限** |
+| `dist:dir`（含签名） | exit 0，约 5 分半（未签名时 2 分 5 秒；首次还要下载 `winCodeSign-2.6.0.7z`，且每轮含一次时间戳联网往返） |
+| `dist`（含签名） | exit 0，5 分 35 秒 |
+| 安装包 | `release/fanhe-work-setup-0.1.0.exe` **116,323,480** 字节（未签名时 116,303,500 → 签名使包体 **+19,980** 字节） |
+| PE 签名表 | `梵禾 Work.exe` = **7416 字节** @ `0xeae5000`；安装包 = **7416 字节** @ `0x6eed7a0`（未签名时两者均为 0） |
+| `app-update.yml` | **本轮才首次生成**，内容含 `provider: github` / `owner: dy00001` / `repo: fanhe-work` / `updaterCacheDirName: '@fanhedesktop-updater'` / **`publisherName: [Fanhe Work]`** |
+| `latest.yml` | `version: 0.1.0`、`sha512`（与实际安装包逐字节一致，已在脚本内断言）、`size: 116323480`、`releaseDate` |
+| 安装态冒烟 | 未在签名版上重跑（签名不改变 JS 侧行为）；T6-03a 已 PASS |
+
+**三点值得单独指出：**
+
+1. **`app-update.yml` 只在真正的 nsis 构建里生成**，`--dir` 之后它本来就不存在 —— 对它报 FAIL 是假警报。判据在源码里：`PublishManager.js` 的 `onAfterPack` 有一道 `isSuitableWindowsTarget` 闸（同文件 391 行），只认 `nsis` / `nsis-*`（或 appx 且开了 `electronUpdaterAware`），`dir` 目标不在此列。验收脚本据此改了判据：跟「本轮是否产出安装包」绑定。
+2. **`publisherName` 被写进 `app-update.yml` 是有前置条件的**：`WinPackager.isForceCodeSigningVerification`（`winPackager.js:26`）= `verifyUpdateCodeSignature !== false`。本项目没有把它设成 false 故为真。**哪天有人为了「跳过校验」把它设成 false，`app-update.yml` 里就不会有 `publisherName` 了** —— 这条要跟 §八 第 2 条一起看。
+3. **证书在 `TrustedPublisher` 里也有一份公开副本，但签名不会取错**：electron-builder 用 `Get-ChildItem -Recurse Cert: -CodeSigningCert` 取候选并拿第一个命中的，**实测该命令只返回 `My` 那一条**（`TrustedPublisher` 那份没有被枚举到）。这一点特意验过，因为取到公开副本会因缺私钥而失败在 signtool「找不到满足条件的证书」并重试 2 次。**若哪天枚举顺序变了，症状就是这个。**
+
+**新增 `apps/desktop/scripts/verify-signature.ps1`（`verify:sign`，与 `verify:pack` 合并为 `verify:all`）**：读 PE 头只能证明「有签名」，证明不了「签成了谁」，而 electron-updater 比对的是**发布者身份**。该脚本用 `Get-AuthenticodeSignature` 取出每个产物的 `Subject` / `Thumbprint` / `Status` 写进 `release/signature-report.txt`（**必须落盘**：本沙箱 PowerShell 静默吞掉 stdout），再由 `verify-pack.mjs` 读回并断言。
+
+- **自签证书的 `Status` 是 `UnknownError`（链不可信），不是 `NotSigned`。** 判「签上了」**不能要求 `Status=Valid`**，只能要求 `!== 'NotSigned'`；签名是否可信与是否签上是两件事，不能混。
+- 脚本自己的摘要行也栽过一次：某一版在「有 1 个产物未签名」时仍打印 `RESULT=OK`，因为它的判据只看了「有产物且签名主体唯一」。这正是 §八 反复强调的**「别把没验的说成验过了」**，已修正为 `RESULT=REVIEW reason=<n>-unsigned`。
+
+`verify:pack` 现为 **27 项断言 + 4 条反例**，全过。新增的反例两条：PE 解析器对 HTML 文件必须抛错；签名报告解析器喂无关文本必须解析不出 EXE。
 
 ---
 
@@ -420,6 +469,25 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./梵禾 Work.exe" --smoke --no-san
 另外两条正向断言：
 4. 安装 A → 发布 B → 检查 → 下载 → 安装 → 重启，`app.getVersion() === B`。
 5. 只传 `.exe` 不传 `.blockmap` 时，**断言差分不可用**（把「差分」这件事本身也钉住，否则它可能一直是整包下载而没人发现）。
+
+### 八.1 到 T6-03c 为止的完成状态（**如实标注，未验的绝不写成已验**）
+
+| # | 反例 / 断言 | 状态 | 说明 |
+|---|---|---|---|
+| 3 | 版本号单一来源 | ✅ **T6-03a 已做** | 三向验证，见 §七 T6-03a |
+| — | PE 解析器对非 PE 文件必须抛错 | ✅ **T6-03c 已做** | `verify-pack.mjs` 内置 |
+| — | 签名报告解析器对无关文本必须解析不出 EXE | ✅ **T6-03c 已做** | `verify-pack.mjs` 内置 |
+| — | `latest.yml` 的 sha512 与实际安装包一致 | ✅ **T6-03c 已做** | **这是完整性层的正向断言**（等价于第 1 条的静态形式），加了「sha512 解出必须是 88 字符」防正则匹配错行导致假通过 |
+| 1 | 差分下载（改 sha512 → updater 拒绝） | ⏳ **未验，属 T6-03b** | 需要 `electron-updater` 真的跑起来；静态哈希比对已做，但「updater 真的在校验」这句话**现在还没有证据** |
+| 2 | 发布者校验（换签名主体 → updater 拒绝） | ⏳ **未验，属 T6-03b** | 同上。**这是「签名校验生效」的真正判据**，目前只做到「数据两侧一致」（`app-update.yml` 的 `publisherName` = 产物签名主体 = `CN=Fanhe Work`），**没有**证明 updater 会拿它去比 |
+| 4 | 安装 A → 发布 B → 版本变 B | ⏳ **未验，属 T6-03b** | 需要先发一次 v0 垫脚石 |
+| 5 | 只传 `.exe` 不传 `.blockmap` → 差分不可用 | ⏳ **未验，属 T6-03b** | |
+
+**结论**：T6-03c 结束时，`latest.yml` 三件套齐备且自洽、两个产物都真的带上了 `CN=Fanhe Work` 的签名、`app-update.yml` 声明了同一个发布者 —— 但**「更新器会拒绝异签名包」这句话仍未被证明**，因为它要等 T6-03b 把 `electron-updater` 接上。**不要把上面第 2 条记成已验。**
+
+**T6-03b 接上后要第一时间验的两件事**：
+1. §八 第 2 条那条反例（换签名主体 → 拒绝安装）。
+2. electron-updater 从 `Get-AuthenticodeSignature` 的输出里解析证书 CN 的正则，对**带空格的 CN**（`Fanhe Work`）是否照常工作 —— 本项目的发布者名恰好含空格，这是自签方案里一个尚未验证的具象风险点。
 
 ---
 
