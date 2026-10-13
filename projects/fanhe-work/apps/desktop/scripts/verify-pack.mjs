@@ -358,6 +358,27 @@ function peCertificateTable(file) {
  * 所以这里也按数字比，而不是按 `Status` 那个名字比 —— 名字是给人看的，
  * 数值才是上游真正用的东西。
  */
+/**
+ * 报告列名 → 对象字段。
+ *
+ * 🔴 必须是**显式映射**，不能靠 `kv[1].toLowerCase()` 去猜：`STATUS_VALUE` 的小写是
+ * `status_value`，而字段名是 camelCase 的 `statusValue`，`'status_value' in current`
+ * 为假 → 这一列被**静默丢掉**。症状极具误导性：报告里明明写着 `STATUS_VALUE=0`，
+ * 断言却说「报告里没有这一列」。T6-03b 踩的正是这个 —— 列名从单词改成两词时只改了
+ * 产生端，解析端没跟着改，而丢弃是无声的，直到有人真的按数值 0 去断言才暴露。
+ *
+ * 所以对表里没有的键**直接抛错**：一个被悄悄忽略的列，比一个报错的列危险得多。
+ */
+const REPORT_KEY_TO_FIELD = {
+  PATH: 'path',
+  SIZE: 'size',
+  STATUS: 'status',
+  STATUS_VALUE: 'statusValue',
+  SUBJECT: 'subject',
+  THUMBPRINT: 'thumbprint',
+  ERROR: 'error',
+}
+
 function parseSignatureReport(text) {
   const byName = new Map()
   let count = 0
@@ -366,14 +387,28 @@ function parseSignatureReport(text) {
     const line = rawLine.replace(/^\uFEFF/, '')
     const exe = /^EXE=(.+)$/.exec(line)
     if (exe !== null) {
-      current = { name: exe[1], status: '', statusValue: '', subject: '', thumbprint: '' }
+      current = {
+        name: exe[1],
+        status: '',
+        statusValue: '',
+        subject: '',
+        thumbprint: '',
+        path: '',
+        size: '',
+        error: '',
+      }
       byName.set(current.name, current)
       continue
     }
-    const kv = /^\s+(PATH|SIZE|STATUS|STATUS_VALUE|SUBJECT|THUMBPRINT|ERROR)=([\s\S]*)$/.exec(line)
+    const kv = /^\s+([A-Z][A-Z_]*)=([\s\S]*)$/.exec(line)
     if (kv !== null && current !== null) {
-      const key = kv[1].toLowerCase()
-      if (key in current) current[key] = kv[2].trim()
+      const field = REPORT_KEY_TO_FIELD[kv[1]]
+      if (field === undefined) {
+        throw new Error(
+          `签名报告里出现了未登记的列 ${kv[1]}：请加进 REPORT_KEY_TO_FIELD，不要让它被静默忽略`,
+        )
+      }
+      current[field] = kv[2].trim()
       continue
     }
     const total = /^EXE_COUNT=(\d+)$/.exec(line)
@@ -560,9 +595,19 @@ if (configuredSubject === null) {
     check('签名报告里每个产物都是 Valid（Status 数值为 0）', () => {
       // 按**数值**比，不按名字比：electron-updater 的判断是 `data.Status === 0`，
       // 而 0 就是 Valid。下面这条一旦变红，意味着更新通道会拒绝每一个下载到的版本。
+      // 报告缺 STATUS_VALUE 与「真的不是 Valid」是两件事，必须分开报。
+      // 前者不是签名问题 —— 别去动证书，改的是产生端或解析端。
+      const missingValue = considered.filter(([, v]) => v.statusValue === '').map(([k]) => k)
+      expect(
+        missingValue.length === 0,
+        `签名报告里读不到 STATUS_VALUE 这一列（${missingValue.join(', ')}）。\n` +
+          '        两种可能：报告是旧版 verify-signature.ps1 生成的（重跑 verify:sign 即可），\n' +
+          '        或解析器的列名映射漏了它（改本文件顶部的 REPORT_KEY_TO_FIELD）。\n' +
+          '        ⚠️ 这**不是**签名本身的问题，不要去动证书。',
+      )
       const notValid = considered
         .filter(([, v]) => v.statusValue !== '0')
-        .map(([k, v]) => `${k}(Status=${v.status || '?'} 数值=${v.statusValue || '?'})`)
+        .map(([k, v]) => `${k}(Status=${v.status || '?'} 数值=${v.statusValue})`)
       expect(
         notValid.length === 0,
         `以下产物的签名状态不是 Valid：${notValid.join(', ')}。\n` +
@@ -602,6 +647,29 @@ if (configuredSubject === null) {
         `喂无关文本却解析出 ${garbage.byName.size} 个 EXE —— 那么「每个产物都不是 NotSigned」可能只是恒真`,
       )
       return '如预期为空'
+    })
+
+    // 反例：证明「列名 → 字段」这层映射漏掉一列时是**响亮**的，而不是静默丢弃。
+    // T6-03b 被一次静默丢弃骗过：STATUS_VALUE 明明写在报告里，断言却说「没有这一列」，
+    // 于是先怀疑了报告陈旧、又怀疑了证书，真正的原因只是解析端少了一次改名。
+    // 一个会被悄悄忽略的列，比一个会报错的列危险得多 —— 所以两条都要钉住。
+    check('反例 · 未登记的列必须抛错，且 STATUS_VALUE 必须真的落到字段上', () => {
+      let threw = false
+      try {
+        parseSignatureReport('EXE=a.exe\n  STATUS=Valid\n  WEIRD_COLUMN=x\n')
+      } catch {
+        threw = true
+      }
+      expect(threw, '未登记的列被静默忽略了 —— 那么任何一次列名改动都会退化成「断言看不到这一列」')
+      const parsed = parseSignatureReport(
+        'EXE=a.exe\n  STATUS=Valid\n  STATUS_VALUE=0\n',
+      ).byName.get('a.exe')
+      expect(
+        parsed !== undefined && parsed.statusValue === '0',
+        `STATUS_VALUE 没落到 statusValue（得到 ${JSON.stringify(parsed?.statusValue)}）` +
+          ' —— 报告里有值却读不到，正是 T6-03b 踩过的那个坑',
+      )
+      return '未登记列抛错，且 STATUS_VALUE 确实落到 statusValue'
     })
   }
 }
