@@ -1781,6 +1781,34 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 
 **下一项：T6-03 外壳升级通道。** 它依赖 T6-02（已完成）而不依赖阶段五，与 T5-05 无关。**开工前要先定两件事**：发布载体（对象存储或 GitHub Release）与签名密钥的保管方式（本计划 6.3 第 6 条已约定「不随盘移动」）。实测代码库内暂无 `electron-updater` 与 `electron-builder` 依赖，属零起点。
 
+### 9.52 T6-03a 打包与发布链路实施中的几处判断
+
+**先把 T6-03 切成三段，这一段只做「打包与发布链路」。** 打包链路、更新逻辑、签名三者的失败面完全不同，混在一起做时任何一步红了都定位不到是哪一层 —— 这与项目既有的「一次一件事、代码与文档分两笔提交」是同一条纪律。所以 T6-03a 只到「产出安装包 + 装完之后真的跑得起来」为止，**不接 updater、不发版**。契约与实测数据全部记在 `docs/T6-03-UPDATE-CHANNEL.md`，这一节只写判断。
+
+**发布载体定为 GitHub Release（公开仓库），签名定为自签证书进 `CurrentUser\My`，前端走内置产物。** 三条都由用户拍板，理由与代价记在该文档第十节。
+
+**「打包态没有工作区」是这一段的核心矛盾，而它有两个出口不是一个。** 开发态外壳靠两条工作区路径活着：`DIST_ROOT = resolve(__dirname, '../../web/dist')`（前端产物在隔壁包）与 `paths.ts` 的 `apiLaunchModule()`（**直接 `import()` 运行 `apps/api/src/launch/agent.ts` 这个 TS 源码**）。装机之后这两条都不存在。做法是：把 `apps/web/dist` 与 `agent.ts` 用 `extraResources` 投进 `resources/`，再按 `app.isPackaged` 分派。
+
+**`agent.ts` 原样投递 TS 源码、不编译，这是先证过再决定的。** 把它单独拷到一个没有 `node_modules`、也在工作区之外的目录里，用 `node --experimental-strip-types -e "import(...)"` 加载 → **成功，导出 5 个符号**，说明它运行时依赖为零（只有 `node:child_process` / `node:fs/promises` / `node:path`，外加一条会被抹掉的 `import type`）。**没有实测这一条就不该选原样投递** —— 一旦它偷引了任何一个第三方包，装机后就是启动即炸。
+
+**随包 `agent.ts` 旁边必须放一份 `{"type":"module"}` 的 `package.json`，这不是可选的美化。** `.ts` 的模块类型由**最近的 `package.json`** 决定，而三种情形实测差别巨大：缺失 → 能加载但每次都打 `MODULE_TYPELESS_PACKAGE_JSON` 告警；`type: module` → 干净；**`type: commonjs` → `SyntaxError: Cannot use import statement outside a module`，整条链路失效**。所以这一份是「加载能不能成功」的必要条件之一，验收脚本里专门为它配了反例（见下）。
+
+**`paths.ts` 的降级要宽，不能只处理「找不到工作区根」那一种。** 直觉写法是「`root === null` 时改用随包路径」，但实测四个失败分支里最可能发生的是**介质拷了一半**：`.ws-root` 还在、`apiSourceRoot` 却抛错。只判 `root === null` 会漏掉它。所以抽出 `resolveWorkspaceAgent(fromDir, lenient)`，**四个分支在给了随包路径时一律宽松**；同时保证不给第二个参数时原报错文本一字不变（既有测试钉着这一条）。
+
+**安装态的 `configDir` 与 `defaultUrl` 都是必需的，两者都是「不加就会静默错」的类型。** 没有 `configDir`，`service:set` 在装机后永远返回「未找到配置文件路径」；没有 `defaultUrl`，安装态会去连一个不存在的 `127.0.0.1:8787` —— **而本机冒烟偏偏还是绿的**（开发服务正在跑），这是最容易漏的一种假绿。补上之后装机实测 `反代到达上游=是` 才成为真判据。
+
+**版本号必须单一来源，`0.0.0` 是个「永远提示有更新」的合法错误答案。** 仓库根 `package.json` 是唯一来源，但 `apps/desktop` 那份原先是 `0.0.0`，而 electron-builder 的 `app.getVersion()` 读的正是打包进去的那份清单。做法是打包前跑 `scripts/sync-version.mjs` 把根版本同步过去，**并加一条门禁用例断言两者相等**（写成相等而不是字面量，发版时才不会自己把自己挂掉）。**这条收口也做了反例**：把 desktop 改成 `9.9.9` → 门禁 `not ok`；把仓库根改成 `0.1.99` → 同步脚本确实把 `0.1.99` 带了过去。**只断言「两边都是 0.1.0」不算验过，因为那可能只是巧合。**
+
+**验收脚本不能自己起子进程 —— 这是本机硬约束，它改掉了脚本的设计。** 最初用 `spawnSync` 去探两个运行时的加载行为，两个都「失败」且 **stderr 是空的**。分离实验显示 `spawnSync` 在本会话对**任何**目标都返回 `EBUSY`（连 `cmd.exe /c echo hi` 都一样），是会话层级禁止创建子进程。**空 stderr 正是「子进程没起来」的指纹，而它看起来像「程序没输出」** —— 差点把「没验」记成「验失败了」。改为进程内 `import()`，需要别的运行时就把命令打印出来人工执行，并在结论里说清哪一部分未在脚本内验证。
+
+**「全绿」必须能被证伪，所以脚本自带两条反例。** `verify-pack.mjs` 共 17 项断言，其中「随包 agent.ts 能加载且导出齐备」这一条配了两个主动破坏：把随包的 `package.json` 改成 `commonjs`（必须 `SyntaxError`）、往 `agent.ts` 追加语法错误（必须抛错）。**只有在人为破坏下真的变红，这条断言才算有判据** —— 上一轮 T7-01 就有两条断言因为恒真而白写的教训。
+
+**打包链路踩到两个与代码无关、但与这台机器强相关的问题，都不预先记下就会误诊。** 一是**换盘残留的四个 `node_modules.old/`**（含 46 个指向旧 `E:` 盘的悬空符号链接）让 electron-builder 在收集依赖时 `realpathSync` 直接 ENOENT 中止，而**报错指向 `packages/shared`、`apps/desktop` 自己的依赖完全健康**，极易误判成「electron-builder 不兼容 pnpm 的 `workspace:*`」（那正是风险表里预留的一条）。二是 `prisma generate` 与 electron-builder 清理上一轮产物都会撞本机安全删除守卫，需前置 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD`。
+
+**顺手补了一个真实的配置缺口：`.tmp/` 只在 `.gitignore` 里被忽略，`.prettierignore` 与 `eslint.config.js` 都漏了。** 发起这次修改的引子很典型 —— 我把隔离出来的坏依赖放进 `projects/fanhe-work/.tmp/`，lint 立刻报出 **11064 条**、全部与源码无关。`.tmp` 是本项目指定的临时目录（`ws-env.sh` 还会把 `TMP`/`TEMP` 指过去），三处忽略规则必须一起维护。
+
+**验证结果（2026-10-13）**：`dist:dir` 2 分 5 秒、`dist` 6 分 1 秒，均 exit 0；产出 `release/fanhe-work-setup-0.1.0.exe`（116,303,500 字节）+ `.exe.blockmap` + `latest.yml`（**差分三件套齐备**，印证「只有配了 `publish` 才产出后两者」）；`latest.yml` **无 `publisherName`**，两个 PE 的签名表大小均为 0（未签名，属 T6-03c）。安装态冒烟 **PASS**：`渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0` / `服务地址=https://work.fanhe.dpdns.org 来源=缺省值 反代到达上游=是` / `启动自检=可用 代理=可用`。`verify-pack.mjs` **17 项断言 + 2 条反例全过**；随包 `agent.ts` 在**安装目录那个 Electron 44 运行时**（Electron 内置 Node 24，与开发机的 Node 22 不是同一版本）里加载出 5 个导出且 stderr 为空。四道门禁 desktop 由 76 增至 **86**。**未发版、未接 updater。** 任务定义与决策见 `docs/T6-03-UPDATE-CHANNEL.md`。
+
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 

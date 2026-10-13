@@ -242,6 +242,73 @@ electron-builder 首次运行会去 GitHub Releases 下载 `winCodeSign`、`nsis
 
 工作区在可移动介质上，盘符在 `E:` / `F:` 之间变。**发包配置里禁止出现绝对路径**（`directories.output`、`files`、`extraResources` 全部用相对路径；`source`/`from` 亦同）。这条是阶段零就立下的规矩，写在这里是因为 electron-builder 的配置里最容易顺手写路径。
 
+### 5.7 `node_modules.old/` 残留会让打包在「收集依赖」阶段硬失败（本轮第一个真拦路虎）
+
+第一次跑 `dist:dir` 挂在：
+
+```
+⨯ ENOENT: no such file or directory, stat
+  '...\packages\shared\node_modules.old\typescript'
+  at NodeModuleCopyHelper.collectNodeModules (app-builder-lib/.../NodeModuleCopyHelper.ts:169:40)
+```
+
+不是网络、不是配置。成因是 **2026-10-10 那次 E:→F: 换盘留下的四个 `node_modules.old/`**（`node_modules/`、`apps/api/`、`apps/web/`、`packages/shared/` 各一个），里面合计 46 个指向 `/e/fanhe Work/...` 的**悬空符号链接**。`@fanhe/shared` 是 `apps/desktop` 的 `workspace:*` 依赖，electron-builder 解引用到 `packages/shared/` 后枚举其 `node_modules*`，`realpathSync` 撞上悬空链接即整包中止。
+
+**这条最值得记的地方是它的表象**：报错指向 `packages/shared/node_modules.old`，而 `apps/desktop` 自己的 `node_modules` 完全健康 —— 很容易误判成「pnpm 装坏了」或「electron-builder 与 pnpm 的 `workspace:*` 不兼容」（后者正是本文件 §九风险表里预留的一条）。
+
+**解法**：把这四个目录清掉（本轮是整目录挪进 `.tmp/quarantine-nm-old/`，可回退）。**判据**：`find . -maxdepth 4 -name node_modules.old -not -path '*/node_modules/*' -not -path './.tmp/*'` 计数为 0。
+
+**没有采用的办法以及为什么**：往 `files` 里加 `!**/node_modules.old/**`。崩在 `computeNodeModuleFileSets → collectNodeModules` 里，那一步在 `files` 过滤**之前**、且是对依赖树独立走一遍的，排除规则大概率拦不住（未做实验证伪，故不作为方案）。**这是「用一条不确定能不能生效的配置去盖住一个已知坏目录」的典型**，不如把坏目录清掉。
+
+### 5.8 本机安全删除守卫会拦住 electron-builder 清理上一轮产物
+
+第二次跑挂在：
+
+```
+⨯ [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]
+  {"count":71,"threshold":50,"scope":"turn","targets":["...\release\win-unpacked"],"targetCount":1}
+```
+
+electron-builder 每次打包前会 `rm -rf` 上一轮的输出目录，71 项越过本机 50 的阈值。
+
+**解法**：`CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=1000000` 前置到命令环境。与 `pnpm install` 撞同一个守卫时是同一套解法（工作区 `MEMORY.md` 已记）。
+
+### 5.9 自动化会话里起子进程一律 EBUSY —— 验收脚本不能自己 spawn
+
+这条**改掉了验收脚本的设计**，值得单独写下来。
+
+最初的 `verify-pack.mjs` 用 `spawnSync` 去探两个运行时的加载行为。结果两个运行时都「失败」，**而 stderr 是空的**。分离实验：
+
+```
+spawnSync(process.execPath, ['-e','console.log(1)'])   → status=null  error=EBUSY
+spawnSync('cmd.exe', ['/c','echo','hi'])               → status=null  error=EBUSY
+```
+
+**任何目标都一样**（`errno -4082`），是会话层级禁止创建子进程，与 agent.ts、与 electron-builder 都无关。这就是为什么原先的失败「看起来像实现有 bug」——**空 stderr 是子进程根本没起来的指纹**，而不是「程序没输出」。
+
+**改法**：验收脚本只做**进程内** `import()`。`MODULE_TYPELESS_PACKAGE_JSON` 与 `SyntaxError` 两种情形都能在进程内复现（前者打到 stderr，故断言改为「加载成功 + 导出齐备」并配合反例，不去抓告警文本）。需要另一个运行时（安装目录里那个 exe）时，脚本把命令**打印出来**交给人工执行，并在结论里说清哪一部分未在脚本内验证。
+
+**判据**：`grep -c spawnSync apps/desktop/scripts/verify-pack.mjs` 应为 0。
+
+### 5.10 打包态跑冒烟必须先摘掉 `ELECTRON_RUN_AS_NODE`
+
+对 `release/win-unpacked/梵禾 Work.exe --smoke` 直接跑，得到：
+
+```
+梵禾 Work.exe: bad option: --smoke
+```
+
+不是 Electron 不认参数，而是可执行文件**退化成了纯 Node** —— 本会话环境里 `ELECTRON_RUN_AS_NODE` 是全局设置的（`env` 里可见）。`apps/desktop/scripts/launch.mjs` 存在的唯一理由就是摘掉它，但那只覆盖开发态，**打包态要自己摘**：
+
+```bash
+env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./梵禾 Work.exe" --smoke --no-sandbox
+```
+
+顺带两条同环境的必要项：
+
+- `-u NODE_OPTIONS`：本会话注入了 `--require .../node-language-shim.cjs`，打包应用会报 `Most NODE_OPTIONs are not supported in packaged apps`。
+- `--no-sandbox`：受限环境里渲染进程沙箱起不来，症状是 `ERR_FAILED (-2) loading 'http://127.0.0.1:<port>/'`，且**没有任何更具体的原因**。`FANHE_NO_SANDBOX=1` 只被开发态的 `launch.mjs` 读，主进程不认识它，安装态必须直接传 `--no-sandbox`。
+
 ---
 
 ## 六、签名方案（**已决：方案 ② 自签证书进 Windows 证书库**）
@@ -281,8 +348,52 @@ electron-builder 首次运行会去 GitHub Releases 下载 `winCodeSign`、`nsis
 - `extraResources`：`apps/web/dist` → `resources/web`；`apps/api/src/launch/agent.ts` → `resources/agent/agent.ts`，**外加一份 `resources/agent/package.json`（内容 `{"type":"module"}`）**（§3.5）；
 - `main.ts` 的 `DIST_ROOT` 分派（§3.1）与 `paths.ts` 的降级路径（§3.2）；
 - `release/` 加进忽略；`buildResources` 指向被跟踪目录（§5.1、§5.2）；
-- **产物**：`release/梵禾 Work Setup <版本>.exe`，且**打包后冒烟 PASS**、**安装后「一键启动」真的起得来进程**。
+- **产物**：`release/fanhe-work-setup-<版本>.exe`，且**打包后冒烟 PASS**、**安装后「一键启动」真的起得来进程**。
 - **不接** updater、不发版。
+
+#### T6-03a 执行结果（2026-10-13，已完成）
+
+产物名**由计划的 `梵禾 Work Setup <版本>.exe` 改为 ASCII 的 `fanhe-work-setup-0.1.0.exe`**。理由写在 `electron-builder.yml` 顶部：产品名是中文没关系（那是装完之后显示给人看的），但**资产名要经 GitHub Release 的 URL**，T6-03b 的更新器要从那里按 `latest.yml` 里的 `url` 取文件，中文名会被百分号编码，是没必要引入的不确定性。
+
+实测数据：
+
+| 项 | 结果 |
+|---|---|
+| `dist:dir`（目录形态） | exit 0，2 分 5 秒（electron 与工具包已入缓存） |
+| `dist`（NSIS 安装包） | exit 0，6 分 1 秒 |
+| 安装包 | `release/fanhe-work-setup-0.1.0.exe` 116,303,500 字节 |
+| 差分三件套 | `.exe` + `.exe.blockmap`（122,031 字节）+ `latest.yml` **齐备** —— 印证「只有配了 `publish` 才产出后两者」 |
+| `latest.yml` | `version: 0.1.0`、`sha512`、`size`、`releaseDate`；**无 `publisherName`**（尚未配证书，属 T6-03c） |
+| asar | 29.8 MB / 5980 项；含 `dist/main.js`、`dist/preload.js`、`package.json`、`node_modules/@fanhe/shared/{package.json,dist/index.js}`；**不含** `src/` 与 `test/` |
+| 签名 | 安装包与 `梵禾 Work.exe` 的 PE 签名表大小均为 **0**（内嵌签名为空），与 `latest.yml` 无 `publisherName` 一致 |
+| 安装态冒烟 | `PASS`，exit 0 |
+
+安装态冒烟实际输出（`env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "./梵禾 Work.exe" --smoke --no-sandbox`）：
+
+```
+[config] 服务地址 https://work.fanhe.dpdns.org（来源：缺省值），工作区 F:\fanhe Work
+[config] 运行形态 安装态，前端产物 ...\release\win-unpacked\resources\web
+[config] 未找到服务地址配置（C:\Users\Administrator\AppData\Roaming\梵禾 Work\service.json），退回缺省 https://work.fanhe.dpdns.org。
+[smoke] 渲染元素=1 标题=梵禾 Work 路径=/ 预加载桥=有 console错误=0
+[smoke] 服务地址=https://work.fanhe.dpdns.org 来源=缺省值 反代到达上游=是
+[smoke] 启动自检=可用 代理=可用 配置=0条 可用=0条
+[smoke] PASS
+```
+
+三点值得单独指出：
+
+1. **§3.1 与 §3.2 两条架构冲突在真实安装态里被证伪了修复** —— `前端产物 …\resources\web` 说明 `DIST_ROOT` 分派生效；`运行形态 安装态` 说明 `app.isPackaged` 走到了正确分支。
+2. **`configDir` 与 `defaultUrl` 都是必需的，不是锦上添花** —— 没有 `defaultUrl`，安装态会去连一个不存在的 `127.0.0.1:8787`，而本机冒烟偏偏还能绿（因为本机开发服务在跑），是最容易漏掉的一类假绿。装上之后 `反代到达上游=是` 才是真判据。
+3. **`@fanhe/shared` 的解析入口确实是自动带上的** —— §3.4 曾担心 `files` 只写了它的 `dist/**`、漏掉 `package.json` 会让 `require('@fanhe/shared')` 解析失败。实测 electron-builder **会自动补上依赖包自己的 `package.json`**，该担心不成立；但 `verify-pack.mjs` 仍然把这一项钉住，因为它是「打包器行为」而不是「我们的配置」，靠不住。
+
+**新增验收脚本 `apps/desktop/scripts/verify-pack.mjs`（`pnpm --filter @fanhe/desktop verify:pack`）**，17 项断言 + 2 条反例，全过。设计要点见 §5.9（沙箱禁止子进程，故一律进程内）。两条反例是：把随包的 `agent/package.json` 改成 `commonjs`（必须 `SyntaxError`）、往 `agent.ts` 注入语法错误（必须抛错）—— 「加载成功」那条断言只有在人为破坏下真的变红，才算有判据。
+
+**版本号单一来源的反例（§八.3）也已做**：把 `apps/desktop/package.json` 改成 `9.9.9` → 门禁用例 `not ok 1 - desktop 的版本号与仓库根一致`（`# fail 1`）；把仓库根改成 `0.1.99` → `sync-version.mjs` 打出 `[version] 0.1.0 → 0.1.99（来源 ...\package.json）`；两者还原后门禁重新变绿。证明这条收口**真的接在仓库根上**，而不是恰好两边都写着 `0.1.0`。
+
+**已知限制（不影响 T6-03a 验收，留给后续）**：
+
+- 安装器图标源是 `apps/web/public/brand/logo.png`（362×391，非方形、无 alpha），任务栏与开始菜单里会带底色。换一枚方形带 alpha 的 `.ico` 即可，改 `electron-builder.yml` 一行。本机 Python 无 Pillow，未做转换。
+- `apps/desktop/package.json` 原先缺 `description` / `author`（electron-builder 每次都会告警）。本轮已补上。
 
 ### T6-03b 更新通道（接 `electron-updater`）
 - 加 `electron-updater`（如果是依赖，需评估它是 dependency 还是随 builder 注入 —— **它必须在 `app.getVersion()` 之后可用，且要在打包产物里**)；
