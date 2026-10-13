@@ -4,6 +4,8 @@
 > **数据来源**　`git log` 与 `git ls-remote` 实查、四道门禁与容器状态实测、`docs/WORK-STATUS.md`、`docs/DEVELOPMENT-PLAN.md`、`docs/WORKSPACE-SURVEY-2026-10-13.md`。凡标「实测」的数字为本次跑出，文档旧数字不采信。
 > **定位**　本文是**换机检查点**。换设备后按第七节恢复环境即可接着做。进度主文档仍是 `WORK-STATUS.md`，本文只做阶段性归纳，不替代它。
 > **本文口径**　任务数统计以 `DEVELOPMENT-PLAN.md` 第三章与第七章为准；阶段七不在原计划内，单独列出。
+>
+> 🔄 **补记（2026-10-13 21:xx，T7-02）**　本文件定稿于 19:30。其后又落了 **T7-02**（外壳界面来源固定 **T7-02a** + 客户端更新按钮 **T7-02b**，代码提交 `4c0ac8a`），因此有四处与下文不同：① 四道门禁 **536 → 574 项**（web 97 → 116、desktop 99 → 122）；② `verify:pack` **32 → 35 项**（本轮实测 **34 通过 / 1 FAIL**，FAIL 即签名那一项）；③ **打包验证受阻于本机签名证书已不在**（`dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`），产物为「新 web + 新 asar + 未签名 exe」的中间态，**未发新版**；④ 风险 R3 由「换机须重跑 `signing:cert`」升级为「**本机当前已无证书，且重建等于换签名主体、会让已装 `v0.1.0` / `v0.1.1` 的机器永久收不到更新 —— 待用户裁决**」。另新增一条进度事实：**「更新后设置丢失」的真根因已定位并修复**（界面来源/端口每次启动都变 → localStorage 与 IndexedDB 换分区；修法为端口候选链 + 单实例锁 + 旧来源发现）。详见 `WORK-STATUS.md` §4.1 与 §4.1.14、`DEVELOPMENT-PLAN.md` 9.55。**下文数字除上述四处外仍然有效。**
 
 ---
 
@@ -88,7 +90,7 @@
 
 | 项 | 结果 |
 | -- | -- |
-| `pnpm test` | **536 项 0 失败**（shared 108 + api 232 含 5 项设计性跳过 + web 97 + desktop 99） |
+| `pnpm test` | **574 项 0 失败**（shared 108 + api 232 含 5 项设计性跳过 + web **116** + desktop **122**）—— 补记前为 536（web 97 + desktop 99） |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿（`typecheck` 需抬 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD`） |
 | 浏览器 e2e | **150 项全通过**（UI 落地对齐后重跑的结果） |
 | 外壳冒烟 | PASS |
@@ -163,7 +165,7 @@
 
 | 项 | 值 |
 | -- | -- |
-| HEAD | `6e5ff78 docs(阶段六): 回填 v0.1.1 发布结果与 P0 修复` |
+| HEAD | `6e5ff78 docs(阶段六): 回填 v0.1.1 发布结果与 P0 修复`（**本文件定稿时的 HEAD**；补记后为 `4c0ac8a` + 随后的文档提交） |
 | 分支 | 本地 `main` = `dev` = `origin/main` = `origin/dev` = `6e5ff78`，四 ref 同点 |
 | 分叉 | `origin/main...main` 为 0/0，`origin/dev...dev` 为 0/0 |
 | 标签 | `v0.1.0`（`ba2851a`）与 `v0.1.1`（`8904d74`）均在远端 |
@@ -194,7 +196,7 @@
 ### 6.4 关键路径清单
 
 - **进度主文档**　`projects/fanhe-work/docs/WORK-STATUS.md`
-- **开发计划**　`projects/fanhe-work/docs/DEVELOPMENT-PLAN.md`（第九章 9.1 至 9.54）
+- **开发计划**　`projects/fanhe-work/docs/DEVELOPMENT-PLAN.md`（第九章 9.1 至 9.55）
 - **本阶段文档**　本文、`WORKSPACE-SURVEY-2026-10-13.md`、`PROGRESS-REVIEW-2026-10-13.md`、`T6-03-UPDATE-CHANNEL.md`、`T7-01-ACCOUNT-ADMIN.md`
 - **更新通道代码**　`apps/desktop/src/{update,main,server}.ts`、`apps/desktop/scripts/{verify-pack.mjs,verify-signature.ps1}`、`apps/web/src/lib/{version-check,use-version-check,host}.ts`
 - **工作区机制**　`infra/docs/PORTABLE-WORKSPACE.md`；环境与换机　`.workbuddy-ai/memory/ENVIRONMENT.md`
@@ -211,7 +213,7 @@
 4. **数据库重建**。`docker compose up -d --wait`，填 `apps/api/.env` 的 `JWT_SECRET`，`pnpm db:deploy`，`pnpm db:seed`，`pnpm db:ping`。判据为 `db:ping` 列出 13 张业务表、权限点 12、角色 4。
 5. **产物重建**。`pnpm --filter @fanhe/shared build`，`pnpm db:generate`，跑外壳前先 `pnpm --filter @fanhe/web build`。
 6. **建 owner**。走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… pnpm db:create-owner`。
-7. **门禁确认**。串行跑 `pnpm test`（应为 536 项 0 失败）/ `lint` / `typecheck` / `format:check`。
+7. **门禁确认**。串行跑 `pnpm test`（应为 **574** 项 0 失败）/ `lint` / `typecheck` / `format:check`。
 8. **证书就位（阶段六起）**。`pnpm --filter @fanhe/desktop signing:cert`，它会把自签根装进 `CurrentUser\Root`。缺这一步更新校验会失败，症状隐蔽。
 9. **外壳自检**。`pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`），应输出 `[smoke] PASS`。
 
