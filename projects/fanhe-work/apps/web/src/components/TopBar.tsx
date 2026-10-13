@@ -5,6 +5,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  RefreshCw,
   Settings,
   Star,
   Sun,
@@ -14,6 +15,7 @@ import { Link } from 'react-router'
 
 import { type ThemePreference, isThemePreference } from '../lib/preferences'
 import { useTheme } from '../lib/theme'
+import { useVersionCheck } from '../lib/use-version-check'
 import { buildVersionDetail, buildVersionLine } from '../lib/version'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from './ui/breadcrumb'
@@ -83,9 +85,15 @@ type TopBarProps = {
  * 菜单最底部还有一行**版本号**（`v0.1.0 · 2026-10-12 · a1b2c3d`），不可点，悬停给出
  * 完整说明。取值与更新方式见 `lib/version.ts` 顶部注释 —— 一句话是：改仓库根
  * `package.json` 的 `version` 一处，重新构建即生效，提交号与构建时刻自动跟随。
+ *
+ * 版本号**上面**可能多出一行「有新版」的提示（T6-02）。它不是新增的一级界面，而是
+ * 挂在那一行旁边：版本号回答「我现在跑的是哪一版」，而更新提示回答「那一版已经被
+ * 换掉了」，两者是同一件事的两个时刻，分开放会让用户以为它们无关。判定与降级规则
+ * 见 `lib/version-check.ts`。
  */
 export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
   const { preference, setPreference } = useTheme()
+  const { notice, refresh } = useVersionCheck()
 
   // 中文取首字、英文取首字母，两种都是「一个字」。不用 split 处理多字节，
   // 展开运算符按码点切分，不会把中文截成半个字符。
@@ -104,7 +112,15 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-3">
-        <DropdownMenu>
+        {/* onOpenChange：每次打开菜单都重查一次。Electron 外壳（T6-03）会把应用
+              开一整天，期间服务端可能已经发新版；只在挂载时查一次的话，菜单里的
+              那一行会一直显示旧结论。挂载时那一次仍然保留（`useVersionCheck` 内部
+              做了），因为第一次打开菜单时请求还没回来，用户看到的仍是空值。 */}
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) refresh()
+          }}
+        >
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -191,6 +207,40 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
                 不可点，因此用 div 而不是 DropdownMenuItem —— 后者带悬停底色与
                 键盘焦点，会让一行纯信息看起来像一个能按的按钮。
                 `title` 给出完整说明（含 UTC 标注与提交号），菜单里那一行保持短。 */}
+
+            {/* 更新提示（T6-02）。位置紧贴版本号行的上方，因为它与版本号是同一件事
+                的两个时刻：这一行是「本机是什么」，下面那行是「本机应该是什么」。
+                隔开放会让两者看起来无关，而用户看到「有新版」时最想确认的正是
+                「我现在这版是多少」。
+
+                **可点而不是纯提示。** 「刷新页面即可更新」这句话本身就是一个动作，
+                给一个能按的按钮比让用户自己找刷新键更省事 —— 而它按下去做的事
+                （重载当前页）在语义上恰好等于这句话，不存在「点了会发生别的
+                什么」的落差。
+
+                **只在 `outdated` 时渲染。** `same` / `ahead` / `unknown` 都返回
+                null，理由见 `lib/version-check.ts`：尤其是 `unknown`（拿不到清单）
+                —— 把「查不到」显示成「有更新」会让用户去找一个不存在的更新方式。
+
+                用 DropdownMenuItem 而不是 div：它是一个动作，需要悬停底色与
+                键盘焦点（可点的行不给焦点，键盘用户就够不着）。与上面「收藏」
+                「帮助中心」那种「渲染但不接行为」的做法不同 —— 那是刻意不给行为，
+                这里是有行为的。 */}
+            {notice !== null && (
+              <DropdownMenuItem
+                className="flex-col items-start gap-0.5"
+                title={notice.title}
+                onSelect={() => {
+                  window.location.reload()
+                }}
+              >
+                <span className="flex items-center gap-2">
+                  <RefreshCw className="size-4" />
+                  {notice.text}
+                </span>
+              </DropdownMenuItem>
+            )}
+
             <DropdownMenuSeparator />
             <div
               className="px-2 pt-1.5 pb-0.5 font-mono text-xs text-muted-foreground-weak"
