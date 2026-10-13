@@ -5,7 +5,9 @@
 > **定位**　本文是**换机检查点**。换设备后按第七节恢复环境即可接着做。进度主文档仍是 `WORK-STATUS.md`，本文只做阶段性归纳，不替代它。
 > **本文口径**　任务数统计以 `DEVELOPMENT-PLAN.md` 第三章与第七章为准；阶段七不在原计划内，单独列出。
 >
-> 🔄 **补记（2026-10-13 21:xx，T7-02）**　本文件定稿于 19:30。其后又落了 **T7-02**（外壳界面来源固定 **T7-02a** + 客户端更新按钮 **T7-02b**，代码提交 `4c0ac8a`），因此有四处与下文不同：① 四道门禁 **536 → 578 项**（web 97 → 116、desktop 99 → 122）；② `verify:pack` **32 → 35 项**（本轮实测 **34 通过 / 1 FAIL**，FAIL 即签名那一项）；③ **打包验证受阻于本机签名证书已不在**（`dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`），产物为「新 web + 新 asar + 未签名 exe」的中间态，**未发新版**；④ 风险 R3 由「换机须重跑 `signing:cert`」升级为「**本机当前已无证书，且重建等于换签名主体、会让已装 `v0.1.0` / `v0.1.1` 的机器永久收不到更新 —— 待用户裁决**」。另新增一条进度事实：**「更新后设置丢失」的真根因已定位并修复**（界面来源/端口每次启动都变 → localStorage 与 IndexedDB 换分区；修法为端口候选链 + 单实例锁 + 旧来源发现）。详见 `WORK-STATUS.md` §4.1 与 §4.1.14、`DEVELOPMENT-PLAN.md` 9.55。**下文数字除上述四处外仍然有效。**
+> 🔄 **补记（2026-10-13 21:xx，T7-02）**　本文件定稿于 19:30。其后又落了 **T7-02**（外壳界面来源固定 **T7-02a** + 客户端更新按钮 **T7-02b**，代码提交 `4c0ac8a`），因此有四处与下文不同：① 四道门禁 **536 → 578 项**（web 97 → 116、desktop 99 → 122）；② `verify:pack` **32 → 35 项**（本轮实测 **34 通过 / 1 FAIL**，FAIL 即签名那一项）；③ **打包验证受阻于本机签名证书已不在**（`dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`），产物为「新 web + 新 asar + 未签名 exe」的中间态，**未发新版**；④ 风险 R3 由「换机须重跑 `signing:cert`」升级为「**本机当前已无证书，且重建会让已装 `v0.1.0` / `v0.1.1` 的机器永久收不到更新 —— 待用户裁决**」（机制是**信任根逐机**，**不是**「换了签名主体」，见下条补记）。另新增一条进度事实：**「更新后设置丢失」的真根因已定位并修复**（界面来源/端口每次启动都变 → localStorage 与 IndexedDB 换分区；修法为端口候选链 + 单实例锁 + 旧来源发现）。详见 `WORK-STATUS.md` §4.1 与 §4.1.14、`DEVELOPMENT-PLAN.md` 9.55。**下文数字除上述四处外仍然有效。**
+>
+> 🔄 **补记（2026-10-13 22:xx，T6-03d）**　本文件定稿于 19:30，其后又落了 **T6-03d**（证书工具链 v1 → v2：签名身份档案 + 轮换闸 + 导入/导出 + `-CheckOnly` + `-AdoptFromArtifact`，代码提交 `6b05ca2`），因此再补五处：① 四道门禁 **578 → 598 项**（desktop 122 → **142**，新增 20 项签名身份档案单测）；② 🔴 **R3 的裁决题面已收窄** —— 原始签名身份**从已发布产物的内嵌签名里找了回来**（`CN=Fanhe Work` / `0604B2381B8666C99F247DA7B576A4647601A5A3`，v0.1.0 与 v0.1.1 同身份），本机身份档案已用 `signing:adopt` 补齐、**轮换闸已 armed**，题面只剩一句「有没有这张证书的 `.pfx` 备份」；③ **R3 的表述本身要更正**：换证书致命的原因**不是** `publisherName` 变了（它由证书 Subject DN 推出，同 CN 就同字符串），而是**信任根逐机** —— 换证书等于换信任根，已装机器上 `Status` 不再是 `Valid`，electron-updater 会跳过整段比对并拒绝更新；④ `verify:pack` **35 → 40 项**（新增第六节 5 项：身份档案比对 + 两条反例）；⑤ **上一轮探针的清理漏了 `CA` 库**（只清了 `My` / `TrustedPublisher` / `Root`），`CN=Fanhe Guard Probe` 一直留在 `CurrentUser\CA`，本轮已清并复查 `GUARD_LEFT=0`。详见 `WORK-STATUS.md` §4.1.15、`DEVELOPMENT-PLAN.md` 9.56、`T6-03-UPDATE-CHANNEL.md` §十一。**下文数字除上述五处外仍然有效。**
 
 ---
 
@@ -90,7 +92,7 @@
 
 | 项 | 结果 |
 | -- | -- |
-| `pnpm test` | **578 项 0 失败**（shared 108 + api 232 含 5 项设计性跳过 + web **116** + desktop **122**）—— 补记前为 536（web 97 + desktop 99） |
+| `pnpm test` | **598 项 0 失败**（shared 108 + api 232 含 5 项设计性跳过 + web 116 + desktop **142**）—— T6-03d 补记前为 578（desktop 122），再前为 536（web 97 + desktop 99） |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿（`typecheck` 需抬 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD`） |
 | 浏览器 e2e | **150 项全通过**（UI 落地对齐后重跑的结果） |
 | 外壳冒烟 | PASS |
@@ -147,7 +149,7 @@
 
 **R2 环境耦合（中）**。门禁依赖数据库容器在跑；数据库逐机，换机须靠备份重建；推送链路依赖凭据与代理配置，全局 `.gitconfig` 里存在 URL 级代理项，会压过 `http.proxy` 与环境变量。
 
-**R3 签名证书与信任根逐机（中）**。自签证书在 `CurrentUser\My`，信任根在 `CurrentUser\Root`，两者均随机器不随盘。换机必须重跑 `signing:cert`，否则打包报找不到证书、更新校验失败。证书更换等于更换签名主体，已装旧版的机器更新会失败。
+**R3 签名证书与信任根逐机（中，2026-10-13 22:xx 已收窄并更正表述）**。自签证书在 `CurrentUser\My`，信任根在 `CurrentUser\Root`，两者均随机器不随盘。换机必须重跑 `signing:cert`，否则打包报找不到证书、更新校验失败。⚠️ **「证书更换等于更换签名主体」这句是错的，已更正**：`publisherName` 由证书的 Subject DN 推出来（`app-builder-lib` 的 `computePublisherName`），**同 CN 就同字符串**，换证书不会让它变样；真正断掉的是**信任根** —— 换证书等于换根，已装机器上 `Status` 不再是 `Valid`(0)，electron-updater 会跳过整段发布者比对并拒绝更新。**结论（已装机器收不到更新）不变，要补的是信任根。** T6-03d 起有 `signing:check` 只读自检与轮换闸（`-AllowRotate`）挡住「静默换身份」，原始身份也已从产物里找回并写进本机档案，题面只剩「有没有 `.pfx` 备份」，见 `WORK-STATUS.md` §4.1 与 §4.1.15。
 
 **R4 数据隔离语义（低，属设计）**。子账号之间看不到对方数据，notes / events / launch_profiles 均按 `user_id` 隔离，权限点只管功能开关。主账号汇总查看需要额外的数据层授权。
 
@@ -165,7 +167,7 @@
 
 | 项 | 值 |
 | -- | -- |
-| HEAD | `6e5ff78 docs(阶段六): 回填 v0.1.1 发布结果与 P0 修复`（**本文件定稿时的 HEAD**；补记后为 `4c0ac8a` + 随后的文档提交） |
+| HEAD | `6e5ff78 docs(阶段六): 回填 v0.1.1 发布结果与 P0 修复`（**本文件定稿时的 HEAD**；T7-02 补记后为 `4c0ac8a`，T6-03d 补记后为 `6b05ca2` + 随后的文档提交） |
 | 分支 | 本地 `main` = `dev` = `origin/main` = `origin/dev` = `6e5ff78`，四 ref 同点 |
 | 分叉 | `origin/main...main` 为 0/0，`origin/dev...dev` 为 0/0 |
 | 标签 | `v0.1.0`（`ba2851a`）与 `v0.1.1`（`8904d74`）均在远端 |
@@ -213,8 +215,8 @@
 4. **数据库重建**。`docker compose up -d --wait`，填 `apps/api/.env` 的 `JWT_SECRET`，`pnpm db:deploy`，`pnpm db:seed`，`pnpm db:ping`。判据为 `db:ping` 列出 13 张业务表、权限点 12、角色 4。
 5. **产物重建**。`pnpm --filter @fanhe/shared build`，`pnpm db:generate`，跑外壳前先 `pnpm --filter @fanhe/web build`。
 6. **建 owner**。走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… pnpm db:create-owner`。
-7. **门禁确认**。串行跑 `pnpm test`（应为 **578** 项 0 失败）/ `lint` / `typecheck` / `format:check`。
-8. **证书就位（阶段六起）**。`pnpm --filter @fanhe/desktop signing:cert`，它会把自签根装进 `CurrentUser\Root`。缺这一步更新校验会失败，症状隐蔽。
+7. **门禁确认**。串行跑 `pnpm test`（应为 **598** 项 0 失败）/ `lint` / `typecheck` / `format:check`。
+8. **证书就位（阶段六起，2026-10-13 22:xx 起多两步）**。先跑 `pnpm --filter @fanhe/desktop signing:check`（**只读**）看现状：档案里记的身份与 `CurrentUser\My` 里的证书是否一致。**只有在 `RESULT=MISSING` 且确认没有 `.pfx` 备份时**才跑 `signing:cert`，它会把自签根装进 `CurrentUser\Root`。🔴 **T6-03d 起 `signing:cert` 带轮换闸**：若本机有身份档案而没有证书，它会**拒绝执行**并告诉你原因，要换身份必须显式加 `-AllowRotate` —— 这是有意的，别当成故障去绕过。缺证书或根都会让更新校验失败，症状隐蔽。
 9. **外壳自检**。`pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`），应输出 `[smoke] PASS`。
 
 **换机后不复存在、必须重建的东西**　`.tmp/owner-credentials.txt`、`apps/api/.env`、`.env.compose` 的 Tunnel Token、数据库容器与命名卷、四处 `node_modules/` 与 pnpm store、`corepack enable pnpm`、GCM 凭据、git 的 `safe.directory` 与提交身份、签名证书与信任根。

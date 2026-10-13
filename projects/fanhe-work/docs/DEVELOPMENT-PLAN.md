@@ -1902,7 +1902,52 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 
 **验证结果（2026-10-13 21:xx）**：四道门禁 **578 项 0 失败**（desktop 99 → 122、web 97 → 116）。端口稳定性实测：dev 外壳连跑两次，第二次 `[shell] 界面来源 http://127.0.0.1:57352（沿用上次；候选 57352 → 49901 → 41873 → … → 0）`，偏好文件为 `{"port": 57352}` —— **首次落进既有来源之一**。离线复刻（用真实 `%APPDATA%` 数据）得 `候选链 = 49901 → 57352 → 41873 → … → 0`、`新版本首次启动会用端口： 49901`、`换分区告警会触发吗： 不会（好）`；`netstat` 显示已装的 `梵禾 Work.exe` 正 LISTENING 在 `49901`，与候选链首选一致。
 
-⚠️ **明确未完成的部分（不得记成已完成）**：`dist:dir` **因证书不在本机而中止**（`⨯ Cannot find certificate CN=Fanhe Work`），产物是「新 web + 新 asar + 未签名 exe」的中间态，`verify:pack` 如实报 1 FAIL。**未执行 `signing:cert`** —— 证书是唯一签名身份，重新生成等于换签名主体，已装 `v0.1.0` / `v0.1.1` 的机器持有旧根、将永久无法更新，影响面覆盖已发布版本，**须由用户裁决**。因此未发新版，§八 第 4 条的正向更新验证仍待真人操作。
+⚠️ **明确未完成的部分（不得记成已完成）**：`dist:dir` **因证书不在本机而中止**（`⨯ Cannot find certificate CN=Fanhe Work`），产物是「新 web + 新 asar + 未签名 exe」的中间态，`verify:pack` 如实报 1 FAIL。**未执行 `signing:cert`** —— 证书是唯一签名身份，重新生成会让已装 `v0.1.0` / `v0.1.1` 的机器持有旧根、将永久无法更新（机制见 9.56，**不是**「换了签名主体」），影响面覆盖已发布版本，**须由用户裁决**。因此未发新版，§八 第 4 条的正向更新验证仍待真人操作。
+
+
+### 9.56 T6-03d 签名身份档案（v1 → v2 的工具链升级）
+
+**任务来源是「找到证书相关代码/配置的现有实现，定位其原始定义与依赖关系，在其基础上做版本迭代升级，保持向下兼容」。** 盘点结果先说清楚，因为「升级」得升级在对的地方。提交 `6b05ca2`。
+
+**现有实现只有一处入口。** `apps/desktop/scripts/create-signing-cert.ps1`（v1，165 行），参数 `-Subject` / `-ValidYears` / `-ReportPath`，报告键 `SUBJECT` / `THUMBPRINT` / `NOT_AFTER` / `HAS_PRIVATE_KEY` / `EKU` / `RESULT`。依赖链是单向的一条：`electron-builder.yml` 的 `win.signtoolOptions.certificateSubjectName` → 脚本入参 → `Cert:\CurrentUser\My` → `signtool` → `app-update.yml` 的 `publisherName` → electron-updater 的字符串比对。证书**刻意不在工作区**（`DEVELOPMENT-PLAN.md` 6.3 第 6 条：私钥不跟可移动介质走）。
+
+**盘出来的缺口不是「证书存哪儿」，而是「证书库记不住拿哪一张签的哪一次发布」。** 2026-10-13 实测：`CurrentUser\My` 被清空，`dist:dir` 直接报 `Cannot find certificate CN=Fanhe Work`，而**当时没有任何地方记录过发布用的身份**。于是唯一看得见的补救动作（重跑 `signing:cert`）会静默造出一张新证书 —— 这正是要防的事。
+
+🔴 **「换了证书为什么致命」这一条我第一版写错了，必须留档。** 直觉答案是「因为 `publisherName` 变了」，**错**。查 `app-builder-lib/out/publish/PublishManager.js:202` → `windowsSignToolManager.js` 的 `computePublisherName`：`publisherName` 由证书的 **Subject DN** 推出来，同 CN 就同字符串，产物里实测写的就是 `publisherName: [Fanhe Work]`，换一张同 CN 的证书**不会让它变样**。真正断掉的是**上一层**：`electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56` 只在 `data.Status === 0`（Valid）时才进入发布者名比对，而 `Status` 要求证书链走到一张**本机受信任**的根；自签根是**逐机**导入的，所以 **换证书 = 换信任根 = 已装机器上没有它 → `Status` 变 `UnknownError`(1) → 整段比对被跳过 → 更新被拒**（与 T6-03b 在本机撞到的是同一个闸）。**结论（已装机器收不到更新）不变，原因不同**：要补的是信任根。按错的因果去修会去改一个本来就没问题的配置项，所以 `signing-identity.mjs`、`create-signing-cert.ps1`、单测三处都写进了这条纠正，并加了一条 `assert.doesNotMatch(text, /换签名主体/)` 把错说法钉住。
+
+**升级内容（v1 → v2，`TOOLING_VERSION=2` / `SCHEMA_VERSION=1`）。**
+
+| 改动 | 位置 | 作用 |
+| -- | -- | -- |
+| 身份档案 `signing-identity.json` | `%LOCALAPPDATA%\FanheWork\signing\`（**证书库之外、同样不随盘走**） | 记下当前身份 + 历史身份，回答「上次发布用的是哪一张」 |
+| 轮换闸 | 脚本第 2 步 | 有档案而无证书时**拒绝静默新建**；要换必须显式 `-AllowRotate` |
+| `-ImportPath` / `-ExportPath` | 脚本第 1 / 5 步 | 找回原证书；导出时**拒绝写进工作区**（`-AllowWorkspaceExport` 才放行），口令只从环境变量取（argv 在进程表里对同机其他进程可见） |
+| `-CheckOnly` | 脚本分支 | 只读自检，`RESULT=MISSING` / `DRIFT` / `EXPIRING` / `OK`；**刻意不给 `--force` 逃生口** |
+| `-AdoptFromArtifact` | 脚本分支 | 证书丢了但产物还在时，从**产物内嵌的签名证书**把身份认回来；不碰证书库、不创建任何东西，`HAS_PRIVATE_KEY` 恒为 `False` |
+| `-Subject` 默认改为 `''` | 脚本第 0 步 | 从 `electron-builder.yml` 读，读不到才回落 `CN=Fanhe Work` —— **消除两份会各自漂移的常量** |
+| 纯逻辑模块 | `scripts/signing-identity.mjs`（新，约 300 行） | 解析 / 归一 / 比对 / 描述漂移；不读文件、不碰证书库、不起子进程，**故可被单测直接喂坏输入** |
+| 打包验收断言 | `scripts/verify-pack.mjs` 第六节（新，5 项） | 档案存在时比对产物实际指纹与档案；缺失时**明说未验证**；损坏时 FAIL |
+
+**为什么档案不放进 `src/`。** `src/` 是 tsc 的输入、`dist/**` 又整目录进 asar（`electron-builder.yml` 的 `files` 只含 `dist/**`、`package.json`、`node_modules/@fanhe/shared/dist/**`），放进去等于把构建期工具打进用户安装包。故用 `.mjs` 放在 `scripts/`。
+
+**向下兼容是硬约束，逐条对照。** 脚本名、`-Subject` / `-ValidYears` / `-ReportPath` 三个参数、报告里原有六个键（`SUBJECT` / `THUMBPRINT` / `NOT_AFTER` / `HAS_PRIVATE_KEY` / `EKU` / `RESULT`）**一字未改**；新增参数全部可选；**没有档案的机器行为与 v1 完全一致**（`IDENTITY_RECORD=absent`，闸不触发，正常新建）。`-Subject` 的默认值从「脚本内常量」变成「读 `electron-builder.yml`」，但**生效值相同**，属「消除重复常量」而非行为变更。
+
+**踩到的两个 PowerShell 5.1 硬约束（都是实测，不是防御性编程）。** ① 无 BOM 的 `.ps1` 按系统 ANSI（GBK）解码，所以脚本必须**纯 ASCII**；② `Set-Content -Encoding UTF8` 会写 BOM，而 `JSON.parse('\uFEFF{...}')` 直接抛 —— 写档案一律用 `[System.IO.File]::WriteAllText` + `UTF8Encoding($false)`。另有两个反直觉点：`ConvertTo-Json` **保留单元素数组**（`"one": [ {...} ]`，历史数组不会退化）；**`@($null)` 的长度是 1**，聚合历史必须先判 `$null -ne`。
+
+**本轮最重要的副产品：原始签名身份从产物里找了回来。** 我上一轮报的是「本机没有任何地方记录过发布用的身份」，**这话说重了，得说准**：`WORK-STATUS.md` 4.1.12 与本文 9.53 其实**都写着** `CN=Fanhe Work` / `0604B2381B8666C99F247DA7B576A4647601A5A3` —— 只是它是散文里的一串字符，**机器读不到、闸用不上**，而当时盘点的我又没把它连起来。真正的缺口因此精确定义为：**缺一份机器可读、且能被构建前检查真正执行的记录**，不是「没人记得」。这一点值得留档，因为「文档里写过」与「流程会拦住你」是两件事 —— 前者靠人想起来去翻，后者不靠。
+
+**而产物自己也是证据。** 重跑 `verify-signature.ps1` 后看到：`release\fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` **都带内嵌签名**，主体 `CN=Fanhe Work`、指纹 **`0604B2381B8666C99F247DA7B576A4647601A5A3`**（与文档一致，互为印证）、`NotBefore 2026-10-13T05:30:38Z`、`NotAfter 2031-10-13T05:40:37Z`、RSA 2048 / sha256。两个版本指纹一致 ⇒ **v0.1.0 与 v0.1.1 是同一身份签的**。这条发现直接改变了裁决题面：`-AdoptFromArtifact` 就是为它加的，并且已用它把本机档案补上（`ACTION=adopted`，`HAS_PRIVATE_KEY=False`）——**闸从此 armed**，下次跑 `signing:cert` 会先拒绝而不是静默造新证书。
+
+**顺带更正一条更早的记录。** 我上一轮报的是「`CurrentUser\My` 为空、`Root` 41 条、`TrustedPublisher` 2 条，没有任何地方记录过身份」；现在补两点：① 那两个**已发布安装包在本机当前也是 `UnknownError`(1)**，因为原始根同样已从 `Root` 里消失 —— 即「本机现在连旧包都验不过」，不只是「新包签不了」；② 上一轮探针的清理**漏了 `CA` 库**（只清了 `My` / `TrustedPublisher` / `Root`），`CN=Fanhe Guard Probe`（`4FA2766A…`）一直留在 `CurrentUser\CA`，本轮已清掉并复查 `GUARD_LEFT=0`。**探针的清理清单必须写死「它进过的每一个库」，而不是「我以为它会进的库」。**
+
+**实测（2026-10-13 21:5x ~ 22:0x）。** `-CheckOnly` 报 `SUBJECT_SOURCE=electron-builder.yml`；轮换闸在「有档案无证书」时拒绝且**未创建任何证书**；`-AllowRotate` 后成功创建、进 `TrustedPublisher` 与 `Root`、档案 `history` 记下被替换的旧指纹；`-AdoptFromArtifact` 三条路径（正常 / 未签名产物必须报错 / 档案冲突需 `-AllowRotate`）全部符合设计；`verify-pack` 第六节的「一致」与「漂移」两个分支用合成报告分别跑到。**探针全程用 `CN=Fanhe Guard Probe` 主体 + 独立档案路径，`real_subject_in_My` 始终为 0**，事后四个库（含 `CA`）全部清零。
+
+**未完成 / 待裁决。** `signing:import` 需要一份真实 `.pfx`，本机没有，**未实测**；`-ExportPath` 的工作区守卫同样因无证书**未走到**。**`CN=Fanhe Work` 证书在本机仍不存在**（私钥不在，`HAS_PRIVATE_KEY=False`），本轮刻意未创建。裁决题面因此收窄成一句话：**有没有 `0604B238…` 这张证书的 `.pfx` 备份？**
+- **有** → `signing:import` 配合 `-ImportPath <pfx>` 导入，身份与档案吻合，闸放行，可直接发版；
+- **没有** → 私钥不可从产物反推，**轮换不可避免**。那就必须 `-AllowRotate` 新建，并**在每一台已装机器上补装新根**（`signing:cert` 第 3 步只装当前机器）；做不到这一点，那台机器就永久收不到更新，只能手工重装。
+⚠️ v1 脚本**没有导出能力**（`-ExportPath` 是本轮新加的），且 6.3 第 6 条要求私钥不落在工作区 —— 所以「备份」只可能在工作区之外的某个地方，**若当初没手工导出过，那就是没有**。
+
+**验证结果（2026-10-13 22:xx）**：四道门禁 **598 项 0 失败**（desktop 122 → **142**，新增 20 项身份档案单测），`lint` / `typecheck` / `format:check` 全绿。
 
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。

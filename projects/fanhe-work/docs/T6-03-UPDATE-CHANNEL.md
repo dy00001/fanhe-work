@@ -657,3 +657,78 @@ win:
 **开工顺序**：按 §七 从 **T6-03a** 开始（打包与发布链路，不接 updater、不发版）。三段各自独立提交，出问题单独 `git revert`。
 
 > 三项决策之间没有新的互相依赖，可以按 a → b → c 顺序一路做下去。
+
+---
+
+## 十一、T6-03d 签名身份档案（证书工具链 v1 → v2，2026-10-13 22:xx）
+
+三段做完之后留下的最后一个洞，不是「证书存哪儿」，而是 **「证书库记不住拿哪一张签的哪一次发布」**。§六 把私钥放进 `CurrentUser\My` 是对的（随机器不随盘），但它只存证书、存不下历史。本节记的是补上这个洞的做法与**其中一处被纠正的因果**。
+
+### 11.1 缺口是实测出来的，不是推演的
+
+2026-10-13 实测：`Cert:\CurrentUser\My` 为空 → `dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`。此时唯一看得见的补救动作是重跑 `signing:cert`，而它会**静默**造出一张新证书。更糟的是本机**连已发布的旧包都验不过**（两个安装包的 `Status` 都是 `UnknownError`(1)），因为原始根也已从 `Root` 消失。
+
+要说明的是「没人记得」这句话**说重了**：`WORK-STATUS.md` 4.1.12 与 `DEVELOPMENT-PLAN.md` 9.53 **都写着**那个指纹。但它是散文里的一串字符 —— **机器读不到、构建前检查用不上**。所以缺口精确地是：**缺一份机器可读、且能被流程真正执行的记录**。「文档里写过」与「流程会拦住你」是两件事：前者靠人想起来去翻，后者不靠。
+
+### 11.2 🔴 「换了证书为什么致命」—— 上一轮写错了因果，这里纠正
+
+直觉答案是「因为 `publisherName` 变了」。**错。** 查源码：
+
+```
+app-builder-lib/out/publish/PublishManager.js:202
+  → windowsSignToolManager.js 的 computePublisherName
+  → publisherName || certInfo.bloodyMicrosoftSubjectDn
+```
+
+`publisherName` 由证书的 **Subject DN** 推出来（`CN=ms` 那个回落只走 AppX 无证书分支）。**同 CN 就同字符串**，产物里实测写的就是 `publisherName: [Fanhe Work]`，**换一张同 CN 的证书不会让它变样**。
+
+真正断掉的是**上面那一层**：
+
+```
+electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56
+  if (data.Status === 0) { ...比对 publisherNames... }
+```
+
+`Status` 要求证书链走到一张**本机受信任**的根；自签根是**逐机**导入的（`create-signing-cert.ps1` 第 3 步只装当前用户）。所以：
+
+> **换证书 = 换信任根 = 已装机器上没有它 → `Status` 变 `UnknownError`(1) → 整段比对被跳过 → 更新被拒。**
+
+这与 T6-03b 在本机撞到的是**同一个闸**，只是换机之后重现一次。**结论（已装机器收不到更新）不变，原因不同** —— 要补的是**信任根**，不是 `publisherName`。按错的因果去修，会去改一个本来就没问题的配置项。故 `signing-identity.mjs` / `create-signing-cert.ps1` / 单测三处一并纠正，单测里加了 `assert.doesNotMatch(text, /换签名主体/)` 把错说法钉住。
+
+### 11.3 做法：一份档案 + 一条闸
+
+档案落在 `%LOCALAPPDATA%\FanheWork\signing\signing-identity.json`（`schemaVersion 1` / `toolingVersion 2`），与证书同机、同样不随盘走。两个版本号是两件事：**`schemaVersion` 说「文件长什么样」，`toolingVersion` 说「哪一版脚本写的它」** —— 加字段不改前者，改字段含义才改。
+
+| 能力 | 开关 | 说明 |
+| -- | -- | -- |
+| 记录身份 | 每次运行自动写 | 当前身份 + `history`（被替换掉的旧身份，含 `replacedAt` 与 `reason`） |
+| **轮换闸** | `-AllowRotate` | 有档案而无证书时**拒绝静默新建**；要换必须显式放行 |
+| 找回原证书 | `-ImportPath` + `FANHE_SIGNING_PFX_PASSWORD` | 口令**只从环境变量取** —— argv 在进程表里对同机其他进程可见 |
+| 导出备份 | `-ExportPath` | **拒绝写进工作区**（6.3 第 6 条），要 `-AllowWorkspaceExport` 才放行 |
+| 只读自检 | `-CheckOnly` | `RESULT=MISSING` / `DRIFT` / `EXPIRING` / `OK`；**刻意不给 `--force` 逃生口** —— 强行新建正是这条闸要挡的事 |
+| 认回身份 | `-AdoptFromArtifact` | 从**已签名产物的内嵌证书**读回身份；不碰证书库、不创建任何东西，`HAS_PRIVATE_KEY` 恒 `False` |
+
+`-Subject` 的默认值由「脚本内常量」改为「读 `electron-builder.yml` 的 `certificateSubjectName`」，读不到才回落 `CN=Fanhe Work` —— **消除两份会各自漂移、且都不会抱怨的常量**（与 `sync-version.mjs`、`host.ts` 是同一类）。
+
+纯逻辑抽在 `scripts/signing-identity.mjs`：解析、指纹归一、身份比对、漂移描述。**不读文件、不碰证书库、不起子进程**，因此可以被单测直接喂坏输入 —— 这是 T6-01 / T3-11 一路下来的同一条纪律。它放 `scripts/` 而不是 `src/`：`src/` 是 tsc 输入、`dist/**` 又整目录进 asar，放进去等于把构建期工具打进用户安装包。
+
+### 11.4 打包验收新增第六节
+
+`verify-pack.mjs` 现在会在打包后比对**产物实际用的证书指纹**与档案：
+
+- 档案在且指纹一致 → `ok`；
+- 档案在但指纹不同 → **FAIL**，并说清「已装机器上没有这张新证书的根」以及两条出路；
+- 档案不存在 → **未验证**（不是失败：从没跑过 v2 的机器本来就没有它，那正是 v1 兼容路径）；
+- 档案损坏 → **FAIL**，并**警告不要删掉重建** —— 重建出来的档案会把下一张证书认成「当前身份」，等于把这次漂移洗成正常。
+
+两条反例：① 指纹不同必须判为漂移，且**原因必须落在信任根上**；② **两侧都读不到指纹时不许判成「一致」**（「都读不到」是最容易把断言变成恒真的输入）。
+
+### 11.5 实测与遗留
+
+**实测**：`-CheckOnly` 报 `SUBJECT_SOURCE=electron-builder.yml`；轮换闸在「有档案无证书」时拒绝且**未创建任何证书**；`-AllowRotate` 后创建成功、进 `TrustedPublisher` 与 `Root`、`history` 记下被替换的旧指纹；`-AdoptFromArtifact` 三条路径（正常 / 未签名产物必须报错 / 档案冲突需 `-AllowRotate`）全部符合设计；第六节的「一致」与「漂移」两个分支用合成报告分别跑到；三个新脚本在**缺参数时快速失败而非挂起**。**探针全程用 `CN=Fanhe Guard Probe` 主体 + 独立档案路径，`real_subject_in_My` 始终为 0**，事后四个库全部清零。
+
+⚠️ **上一轮探针的清理漏了 `CA` 库**（只清了 `My` / `TrustedPublisher` / `Root`），`4FA2766A…` 一直留在 `CurrentUser\CA`，本轮已清。**探针的清理清单必须写死「它进过的每一个库」，而不是「我以为它会进的库」。**
+
+**遗留**：`signing:import` 需要一份真实 `.pfx`，本机没有，**未实测**；`-ExportPath` 的工作区守卫同样**未走到**。`CN=Fanhe Work` 的私钥在本机仍不存在，本轮刻意未创建 —— 裁决题面见 `WORK-STATUS.md` 4.1。
+
+**向下兼容**：脚本名、`-Subject` / `-ValidYears` / `-ReportPath` 三个参数、报告里原有六个键（`SUBJECT` / `THUMBPRINT` / `NOT_AFTER` / `HAS_PRIVATE_KEY` / `EKU` / `RESULT`）**一字未改**；新增参数全部可选；**没有档案的机器行为与 v1 完全一致**。四道门禁 **598 项 0 失败**。提交 `6b05ca2`。
