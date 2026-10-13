@@ -228,7 +228,14 @@ describe('权限守卫', { skip: reachable ? false : '数据库不可达，跳�
     // 用真实密钥签一个 sub 指向 viewer、role 却写成 owner 的令牌。这是在服务端
     // 可控范围内「篡改令牌里的角色」这一攻击的最强形式，密钥没有泄露就签不出来，
     // 因此这条断言同时验证了「即使签得出来也不起作用」。
-    const forged = await signAccessToken({ sub: userId, role: ROLE_CODES.OWNER })
+    const forged = await signAccessToken({
+      sub: userId,
+      role: ROLE_CODES.OWNER,
+      // 该账号此时从未改过密，因此快照为 null。带上它是为了让这个令牌能通过
+      // 守卫的「改密失效」检查 —— 否则这条用例会因为一个与攻击模型无关的原因
+      // （令牌缺字段而被判无效）变成通过，测的就不是「篡改角色无效」了。
+      pwd: null,
+    })
 
     const response = await app.inject({
       method: 'GET',

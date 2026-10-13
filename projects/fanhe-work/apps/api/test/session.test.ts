@@ -144,9 +144,13 @@ describe('刷新令牌轮换与撤销', { skip: reachable ? false : '数据库�
     assert.equal(rotated.data.expiresIn, env.jwt.accessTtlSeconds)
 
     // 新访问令牌必须可用，且载荷指向同一个账号。
+    // `pwd: null` 是这个账号此时的改密时间快照（从未改过密）。它必须在断言里
+    // 出现 —— 深比较是全等的，少写一个字段就会因为「多了个 pwd」而失败，
+    // 而那种失败的修法不该是把字段从断言里删掉。
     assert.deepEqual(await verifyAccessToken(rotated.data.accessToken), {
       sub: user.id,
       role: 'member',
+      pwd: null,
     })
 
     const replay = await rotateRefreshToken(session.refreshToken)
@@ -378,5 +382,43 @@ describe('刷新令牌轮换与撤销', { skip: reachable ? false : '数据库�
     if (stored === null) return
     assert.ok(stored.revokedAt !== null)
     assert.equal(stored.revokedReason, 'user_unavailable')
+  })
+
+  test('改密之后，此前签发的访问令牌被守卫判为无效', async () => {
+    // 这一条走真实的守卫路径（buildApp + inject），而不只是比对时间戳：
+    // tokens.ts 里的判据单测只证明「这个函数说得对」，证明不了「守卫真的调用了它」。
+    // 中间少接一行的症状是判据齐全但接口仍放行 —— 那正是修复前的样子。
+    const { buildApp } = await import('../src/app.js')
+    const user = await createUser()
+    const session = await signIn(user)
+
+    const app = buildApp({ logger: false })
+    const call = async (accessToken: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/api/auth/me',
+        headers: { authorization: `Bearer ${accessToken}` },
+      })
+
+    // 改密前：放行。这条是**对照**，没有它的话，「一律返回 401」也能让后面那条绿。
+    const before = await call(session.accessToken)
+    assert.equal(before.statusCode, 200)
+
+    // 改密。与账号管理页走的是同一个字段，口令本身在守卫这里不参与判断 ——
+    // 判断依据只有这一个时间戳，这正是要验的点。
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordChangedAt: new Date() },
+    })
+
+    const after = await call(session.accessToken)
+    assert.equal(after.statusCode, 401)
+
+    // 重新登录拿到的令牌能用 —— 否则这条修复会变成「改密之后谁都登不进去」。
+    const fresh = await signIn(user)
+    const afterRelogin = await call(fresh.accessToken)
+    assert.equal(afterRelogin.statusCode, 200)
+
+    await app.close()
   })
 })

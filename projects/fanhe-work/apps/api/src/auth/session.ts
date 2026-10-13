@@ -99,7 +99,13 @@ type ReuseAudit = {
 }
 
 type RotationOutcome =
-  | { ok: true; userId: string; roleCode: string; refreshToken: string }
+  | {
+      ok: true
+      userId: string
+      roleCode: string
+      passwordChangedAt: Date | null
+      refreshToken: string
+    }
   | { ok: false; reason: RotateFailureReason; reuse?: ReuseAudit }
 
 /**
@@ -199,6 +205,10 @@ export async function rotateRefreshToken(
       ok: true,
       userId: stored.userId,
       roleCode: stored.user.role.code,
+      // 换发出来的访问令牌要带改密时间的快照，判据见 tokens.ts 的
+      // isStaleByPasswordChange。上面那次查询是 `include: { user: ... }`，
+      // 整行用户字段都在，因此这里不需要额外查库。
+      passwordChangedAt: stored.user.passwordChangedAt,
       refreshToken: nextToken,
     }
   })
@@ -226,7 +236,11 @@ export async function rotateRefreshToken(
 
   // 签发放在事务之外：它是纯计算，放进事务只会延长持锁时间，让并发的第二个
   // 请求多等一次签名。
-  const accessToken = await signAccessToken({ sub: outcome.userId, role: outcome.roleCode })
+  const accessToken = await signAccessToken({
+    sub: outcome.userId,
+    role: outcome.roleCode,
+    pwd: outcome.passwordChangedAt === null ? null : outcome.passwordChangedAt.getTime(),
+  })
   return {
     ok: true,
     data: {

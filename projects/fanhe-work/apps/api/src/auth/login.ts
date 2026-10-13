@@ -211,7 +211,14 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   }
 
   const refreshToken = generateRefreshToken()
-  const accessToken = await signAccessToken({ sub: user.id, role: user.role.code })
+  // 带上 `passwordChangedAt` 的毫秒快照：改密之后此前签发的令牌据此失效，判据见
+  // tokens.ts 的 isStaleByPasswordChange。这里读的是本行上方已查出的 user，
+  // 不额外查库。
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    role: user.role.code,
+    pwd: user.passwordChangedAt === null ? null : user.passwordChangedAt.getTime(),
+  })
 
   // 写令牌与更新登录状态放进一个事务：只写成一半的话，要么用户拿到一个库里没有
   // 对应记录的刷新令牌，要么登录成功却没有更新 lastLoginAt 与失败计数。

@@ -8,7 +8,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify'
 
 import { prisma } from '../db/prisma.js'
-import { verifyAccessToken } from './tokens.js'
+import { isStaleByPasswordChange, verifyAccessToken } from './tokens.js'
 
 /**
  * 服务端的认证与授权守卫。
@@ -151,6 +151,9 @@ async function resolveAuthContext(request: FastifyRequest): Promise<AuthContext 
       displayName: true,
       status: true,
       deletedAt: true,
+      // 用来判断这个令牌是不是改密之前签发的。**加这一列不新增查库** ——
+      // 这一行查询本来就在，守卫每个请求都要读用户，只是多取一个字段。
+      passwordChangedAt: true,
       role: {
         select: {
           code: true,
@@ -165,6 +168,18 @@ async function resolveAuthContext(request: FastifyRequest): Promise<AuthContext 
   })
 
   if (user === null || user.deletedAt !== null || user.status !== 'active') {
+    return null
+  }
+
+  // 改密之后，此前签发的访问令牌一律失效。
+  //
+  // **为什么不靠撤销刷新令牌来实现：** 撤销只能让「下一次刷新」拿不到新令牌，
+  // 而手里那张访问令牌还能继续用到它自然过期（默认 15 分钟）。用户在另一台设备
+  // 上改密，本机这一台仍然畅通无补 —— 那正是改密要解决的情形。
+  //
+  // **为什么不直接只比时间戳：** 见 isStaleByPasswordChange 的注释，`null`
+  // 与「有值」之间的比较规则不能简化成相等。
+  if (isStaleByPasswordChange(claims, user.passwordChangedAt)) {
     return null
   }
 
