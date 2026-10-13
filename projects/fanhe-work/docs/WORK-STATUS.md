@@ -8,7 +8,7 @@
 > | 生成时间 | 2026-10-11 17:55（2026-10-11 至 10-12 随 T3-09 ~ T3-12、UI 集成、N-01、T4-01 ~ T4-04、T5-01 ~ T5-04、T6-01 逐项回填，阶段三 / 四收口，阶段五开工，阶段六开工；2026-10-13 11:3x 随 **T6-02 / 阶段七 T7-01 / UI 落地对齐** 回填；2026-10-13 13:3x 随 **T6-03a 打包与发布链路**、2026-10-13 14:0x 随 **T6-03c 安装包签名**、2026-10-13 15:3x 随 **T6-03b 更新通道（阶段六收口）**、2026-10-13 16:1x 随 **首次发布 v0.1.0** 回填至本版） |
 > | 对应提交 | 代码基线 `5fd7f84`（**UI 落地对齐**；**T6-03b 为 `3a9294f`**，**T6-03c 为 `415219b`**，**T6-03a 为 `4ded6b1`**，阶段七 T7-01 为 `ab96a58` / `49c4f85` / `5dc0c90`，T6-02 为 `d179e81`，T6-01 为 `ac342e7`，T5-04 为 `7cf5af3`，T5-03 为 `3b3dc07`，T5-02 为 `16f73e8`，T5-01 为 `ace70bd`，阶段四基线 `760b92f`，阶段三为 `a5370b0`）；用 `git log -1 -- docs/WORK-STATUS.md` 查本文档最近一次提交 |
 > | 当前阶段 | **阶段零至四已完成（42/50）；阶段五 4/5（T5-05 由用户决定暂缓）；阶段六 3/3 全部完成 —— T6-01 版本清单接口、T6-02 客户端版本检查与更新提示、**T6-03 外壳升级通道（T6-03a 打包与发布链路 / T6-03b 更新通道 / T6-03c 安装包签名）** 均已完成：产得出安装包、装完真的跑得起来、两个产物带 `CN=Fanhe Work` 签名、`app-update.yml` 含 `publisherName`，且 **updater 的发布者校验与 sha512 校验都已实测能拒绝异签名 / 被篡改的包**。**✅ 已发版**：2026-10-13 首个发布版 **`v0.1.0`**（GitHub Release，三个资产齐备，线上元数据与安装包逐字节核对一致）；阶段七（计划外新开）T7-01 账号与权限管理已完成。** 下一项：**在装着 v0.1.0 的机器上点更新，确认版本变v0.1.1（§八 第 4 条的正向验证，差分下载的首次正验）；T5-05 访问策略**用户 2026-10-13 17:1x 决定维持现状继续对外开放**，该风险已知并接受 |
-> | 最后验证 | 四道门禁全绿（**536 项**，2026-10-13 17:0x 实跑：shared 108 + **api 232** + web 97 + desktop 99，含 5 项设计性跳过；api 由 226增至 232 是 P0 的改密失效修复，浏览器 e2e 由 149 增至 **150** 项并已重跑全通过。上一版数字：；T7-01 后 `permissions` 为 **12**；T6-03a 把 desktop 由 76 增至 86，T6-03b 再使 web 86 → 97、desktop 86 → 99。⚠️ `typecheck` 那一道需抬 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD` 才能过 —— `prisma generate` 清 `apps/api/src/generated/prisma` 会撞安全删除守卫，报 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`，**看起来像代码报错，其实是环境**）；**T6-03a 打包链路实测**：`dist:dir` 2 分 5 秒 / `dist` 6 分 1 秒均 exit 0，产出 `fanhe-work-setup-0.1.0.exe`（116,303,500 字节）+ `.blockmap` + `latest.yml`（差分三件套齐备），安装态冒烟 **PASS**（渲染元素=1 / 预加载桥=有 / 反代到达上游=是）；**T6-03c 签名实测**：安装包 116,303,500 → **116,323,480** 字节（+19,980），两个产物（`梵禾 Work.exe` 与安装包）PE 签名表由 0 → **7416 字节**，`app-update.yml` 首次生成并含 `publisherName: [Fanhe Work]`，`latest.yml` 的 sha512 与实际安装包逐字节一致，`verify-pack.mjs` 已扩至 **28 项断言 + 4 条反例全过**（T6-03a 时为 17 + 2）；**`GET /api/version` 容器内与公网实测均返回 `0.1.0`**（不设门禁，T6-02 要在登录前拿到）；**空卷验收 30 项 0 失败**（全新卷 → 一条命令 → 迁移自动应用 + 种子自动写入 + 建 owner 后登录可用，见 4.1.1）；**Tunnel 验收 17 项 0 失败**（公网根路径/深链/反代到 api/未授权 401 四项 + 三层判据证源站无入站暴露，见 4.1.1）；**备份/恢复实测通过**（真恢复演练 + 带 `--force` 恢复后内容回来，不只行数）；浏览器 e2e **149 项**全通过（UI 集成后实跑，UI 落地对齐后未重跑）；外壳冒烟 **PASS**；**T6-03b 更新通道实测**：离线验收台（`provider: generic` + 本地静态目录冒充更新源，`http://127.0.0.1:8799/`）—— 反例① 改 `latest.yml` 的 sha512 → `sha512 checksum mismatch` → `阶段=error`、`是否可安装=否`；反例② **同一个包、逐字节不变、只把自签根移出 `CurrentUser\Root`** → `Status` 由 `0`(Valid) 变 `1`(UnknownError) → `Sign verification failed, installer signed with incorrect certificate` → `阶段=error`，把根加回后**同一个包** `阶段=downloaded`（**因变量只有信任根，结果翻转**，这才是「签名校验生效」的证据）；第 5 条 缺 blockmap → `Cannot download differentially, fallback to full download ... status 404`。**含空格 CN 的具象风险解除**（`parseDn` 保留空格，实测 `Signature validated using only CN Fanhe Work`）。**✅ 首次发布（2026-10-13 16:0x）**：重跑 `pnpm --filter @fanhe/desktop dist`（6 分 14 秒，exit 0）产出**含更新通道**的 0.1.0 安装包 **112,209,040 字节**（旧的 116,323,480 那份不含 T6-03b，已弃）；`verify:all` **32 项断言全过**（比 28 项多 4 项，因为这次是真 nsis 构建，`安装包已签名` / `app-update.yml 含 publisherName` / `publisherName 与配置一致` / `latest.yml 的 sha512 与 size` 这几组**从「未验证」变成真的验了**）；打包态冒烟 **PASS**；asar 断言确认 `/node_modules/electron-updater/{package.json,out/main.js}` 都在包里。打 `v0.1.0` 注解 tag 并推送；用 electron-builder 内置 GitHub publish 传三个资产（`-f` 必须显式给文件列表，否则报 `Missing required argument: files`）；⚠️ **它建出来的是草稿**（`draft: true`、`published_at: null`，**未认证访问 by-tag 接口返回 404**，要带认证列 releases 才看得见），需再 `PATCH .../releases/<id>` 把 `draft` 置 false 才真正公开。**发布后核对**：未认证 GET by-tag **200**；下载线上 `latest.yml` 与本地**逐字节一致**，其 `sha512` 与 `size` 与实际安装包**全部 MATCH**。**仍未验**：§八 第 4 条「安装 A → 发布 B → 版本变 B」—— v0.1.0 只是**垫脚石**，A→B 那条要等有第二个版本（B）才能验 |
+> | 最后验证 | 四道门禁全绿（**536 项**，2026-10-13 17:0x 实跑：shared 108 + **api 232** + web 97 + desktop 99，含 5 项设计性跳过；api 由 226增至 232 是 P0 的改密失效修复，浏览器 e2e 由 149 增至 **150** 项并已重跑全通过。上一版数字：；T7-01 后 `permissions` 为 **12**；T6-03a 把 desktop 由 76 增至 86，T6-03b 再使 web 86 → 97、desktop 86 → 99。⚠️ `typecheck` 那一道需抬 `CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD` 才能过 —— `prisma generate` 清 `apps/api/src/generated/prisma` 会撞安全删除守卫，报 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`，**看起来像代码报错，其实是环境**）；**T6-03a 打包链路实测**：`dist:dir` 2 分 5 秒 / `dist` 6 分 1 秒均 exit 0，产出 `fanhe-work-setup-0.1.0.exe`（116,303,500 字节）+ `.blockmap` + `latest.yml`（差分三件套齐备），安装态冒烟 **PASS**（渲染元素=1 / 预加载桥=有 / 反代到达上游=是）；**T6-03c 签名实测**：安装包 116,303,500 → **116,323,480** 字节（+19,980），两个产物（`梵禾 Work.exe` 与安装包）PE 签名表由 0 → **7416 字节**，`app-update.yml` 首次生成并含 `publisherName: [Fanhe Work]`，`latest.yml` 的 sha512 与实际安装包逐字节一致，`verify-pack.mjs` 已扩至 **28 项断言 + 4 条反例全过**（T6-03a 时为 17 + 2）；**`GET /api/version` 容器内与公网实测均返回 `0.1.0`**（不设门禁，T6-02 要在登录前拿到）；**空卷验收 30 项 0 失败**（全新卷 → 一条命令 → 迁移自动应用 + 种子自动写入 + 建 owner 后登录可用，见 4.1.1）；**Tunnel 验收 17 项 0 失败**（公网根路径/深链/反代到 api/未授权 401 四项 + 三层判据证源站无入站暴露，见 4.1.1）；**备份/恢复实测通过**（真恢复演练 + 带 `--force` 恢复后内容回来，不只行数）；浏览器 e2e **149 项**全通过（UI 集成后实跑；**已于 UI 落地对齐后重跑并增至 150 项，见本行开头**）；外壳冒烟 **PASS**；**T6-03b 更新通道实测**：离线验收台（`provider: generic` + 本地静态目录冒充更新源，`http://127.0.0.1:8799/`）—— 反例① 改 `latest.yml` 的 sha512 → `sha512 checksum mismatch` → `阶段=error`、`是否可安装=否`；反例② **同一个包、逐字节不变、只把自签根移出 `CurrentUser\Root`** → `Status` 由 `0`(Valid) 变 `1`(UnknownError) → `Sign verification failed, installer signed with incorrect certificate` → `阶段=error`，把根加回后**同一个包** `阶段=downloaded`（**因变量只有信任根，结果翻转**，这才是「签名校验生效」的证据）；第 5 条 缺 blockmap → `Cannot download differentially, fallback to full download ... status 404`。**含空格 CN 的具象风险解除**（`parseDn` 保留空格，实测 `Signature validated using only CN Fanhe Work`）。**✅ 首次发布（2026-10-13 16:0x）**：重跑 `pnpm --filter @fanhe/desktop dist`（6 分 14 秒，exit 0）产出**含更新通道**的 0.1.0 安装包 **112,209,040 字节**（旧的 116,323,480 那份不含 T6-03b，已弃）；`verify:all` **32 项断言全过**（比 28 项多 4 项，因为这次是真 nsis 构建，`安装包已签名` / `app-update.yml 含 publisherName` / `publisherName 与配置一致` / `latest.yml 的 sha512 与 size` 这几组**从「未验证」变成真的验了**）；打包态冒烟 **PASS**；asar 断言确认 `/node_modules/electron-updater/{package.json,out/main.js}` 都在包里。打 `v0.1.0` 注解 tag 并推送；用 electron-builder 内置 GitHub publish 传三个资产（`-f` 必须显式给文件列表，否则报 `Missing required argument: files`）；⚠️ **它建出来的是草稿**（`draft: true`、`published_at: null`，**未认证访问 by-tag 接口返回 404**，要带认证列 releases 才看得见），需再 `PATCH .../releases/<id>` 把 `draft` 置 false 才真正公开。**发布后核对**：未认证 GET by-tag **200**；下载线上 `latest.yml` 与本地**逐字节一致**，其 `sha512` 与 `size` 与实际安装包**全部 MATCH**。**仍未验**：§八 第 4 条「安装 A → 发布 B → 版本变 B」—— v0.1.0 只是**垫脚石**，A→B 那条要等有第二个版本（B）才能验 |
 >
 > ⚠️ **换机必读**：`cloudflared` 的 Tunnel Token 在 `.env.compose` 的 `FANHE_TUNNEL_TOKEN`（该文件已被 gitignore，**不随仓库走**）。域名 `work.fanhe.dpdns.org` → Tunnel `fanhe-work`（ID `e71629a6-6a53-4731-a2d9-0f1ffbdfb726`），**这套配置在 Cloudflare 侧，换机器不需要重建**，只要新机上 `.env.compose` 里有那行 Token 即可。
 >
@@ -146,7 +146,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | 阶段三 | 个人工作台三板块（T3-01 ~ T3-12） | ✅ 完成（验收 6 项全勾）：**纪要链收口**、**事件链收口**（T3-09 模型接口 → T3-10 列表 → T3-11 勾选切换 → T3-12 详情面板） |
 | 阶段四 | Electron 外壳（T4-01 ~ T4-04） | ✅ **已完成（4/4）**：T4-01 外壳脚手架、T4-02 服务地址切换、T4-03 本机代理内置、T4-04 启动自检。出口条件已达成（见第七章） |
 | 阶段五 | 服务端化（T5-01 ~ T5-05） | 🔄 进行中：**T5-01 ~ T5-04 已完成（4/5）**：容器编排、数据库连接串与迁移执行者、种子自动执行与备份恢复、**Cloudflare Tunnel 出站接入（公网可达且源站无入站暴露）**；**T5-05 访问策略由用户决定暂缓（2026-10-12 17:00），已知风险见头部** |
-| 阶段六 | 更新通道（T6-01 ~ T6-03） | ✅ **已完成（3/3）**：T6-01 版本清单接口、T6-02 客户端版本检查与更新提示、**T6-03 外壳升级通道**（T6-03a 打包与发布链路 / **T6-03b 更新通道接 `electron-updater`，发布者校验与 sha512 校验均已实测能拒绝异签名 / 被篡改包** / T6-03c 安装包签名）。**✅ 已发版**（2026-10-13，首个发布版 `v0.1.0`，三个资产齐备且线上元数据与安装包核对一致）。实施记录见 4.1.1 / 4.1.9 / 4.1.11 / 4.1.12 / 4.1.13 与 `T6-03-UPDATE-CHANNEL.md` |
+| 阶段六 | 更新通道（T6-01 ~ T6-03） | ✅ **已完成（3/3）**：T6-01 版本清单接口、T6-02 客户端版本检查与更新提示、**T6-03 外壳升级通道**（T6-03a 打包与发布链路 / **T6-03b 更新通道接 `electron-updater`，发布者校验与 sha512 校验均已实测能拒绝异签名 / 被篡改包** / T6-03c 安装包签名）。**✅ 已发版**（2026-10-13，`v0.1.0` 16:0x 与 `v0.1.1` 17:4x 两次发布，三个资产齐备且线上元数据与安装包核对一致）。实施记录见 4.1.1 / 4.1.9 / 4.1.11 / 4.1.12 / 4.1.13 与 `T6-03-UPDATE-CHANNEL.md` |
 | 阶段七 | 账号与权限管理（计划外新开，T7-01） | ✅ **T7-01 已完成**：`系统设置` 页由占位换成真实账号管理页（九个接口、账号级授予与拒绝、owner 短路、层级判定、软删除、口令重置），见 `T7-01-ACCOUNT-ADMIN.md` 与 4.1.10；后续范围尚未登记进计划文档，见 4.1.0 |
 
 > 阶段三的分母口径（12 项）见 `PROGRESS-REVIEW-2026-10-11.md` 第 28 行。
@@ -166,7 +166,24 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 提交 | 说明 |
 | -- | -- |
-| `5fd7f84` | fix(UI集成): 按设计稿对齐字体栈、悬停规则与滚动指示器（**当前 HEAD**：`FH Sans SC` 合成家族、移除 10 处 `transition-colors`、单元卡四层材质、自绘滚动条） |
+| `6e5ff78` | docs(阶段六): 回填 v0.1.1 发布结果与 P0 修复（**当前 HEAD**） |
+| `8162c33` | chore(版本): 提到 0.1.1（为闭合更新通道正向验证而发的 B 端；版本号只改仓库根一处，`apps/desktop/package.json` 由 `sync-version.mjs` 打包时同步） |
+| `f361bff` | docs: 给进度类文档加勘误，并把「快照读前先看 git log」写成明规则 |
+| `12b553b` | fix(测试): e2e 的占位页断言改用综合看板，并补系统设置的落地断言（e2e 149 → **150**） |
+| `84ba093` | fix(账号): 改密之后此前签发的访问令牌立即失效（`passwordChangedAt` 毫秒快照进令牌载荷并比对；api 226 → **232**） |
+| `f364f84` | docs(阶段六): 回填首次发布 v0.1.0 的结果与两个发布坑 |
+| `917d50e` | docs(阶段六): 回填 T6-03b 执行结果与阶段六收口 |
+| `1a3ceee` | fix(阶段六): 签名报告解析器静默丢弃列，STATUS_VALUE 读不到 |
+| `3a9294f` | feat(阶段六): T6-03b 接上 electron-updater 更新通道（**阶段六代码基线**） |
+| `a91db02` | docs(阶段六): T6-03c 安装包签名的实施记录与决策回填 |
+| `415219b` | feat(阶段六): T6-03c 安装包代码签名（自签证书进 `CurrentUser\My`） |
+| `8bbffec` | docs(阶段六): T6-03a 打包与发布链路的实施记录与决策 |
+| `4ded6b1` | feat(阶段六): T6-03a 打包与发布链路（electron-builder + 打包态分派 + 验收脚本） |
+| `c0b6142` | docs(阶段六): 记录 T6-03 三项决策，方案转为可开工 |
+| `da2dc51` | docs(阶段六): T6-03 外壳升级通道施工方案（发布载体定 GitHub，签名方案待决） |
+| `5fee842` | feat(UI集成): 落地一键启动主卡的媒体层、压暗层与发丝高光 |
+| `f5d0f3e` | docs(进度): 回填 T6-02 / T7-01 / UI 对齐，并把阶段七登记进计划文档 |
+| `5fd7f84` | fix(UI集成): 按设计稿对齐字体栈、悬停规则与滚动指示器（`FH Sans SC` 合成家族、移除 10 处 `transition-colors`、单元卡四层材质、自绘滚动条） |
 | `5dc0c90` | docs(阶段七): 回填 T7-01 实施判断与验证结果 |
 | `49c4f85` | feat(阶段七): 主账号口令重置通道 `db:reset-password`（密码从 stdin 读，不进 shell 历史与进程环境表） |
 | `ab96a58` | feat(阶段七): T7-01 账号与权限管理（**阶段七代码基线**：第七个迁移 `user_permissions`、`users.department`、权限点 `system.user.delete`、api 九接口、web 账号管理页；api 22 项） |
@@ -206,12 +223,12 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 | 项 | 基线 | 说明 |
 | -- | -- | -- |
-| `pnpm test` | **530 项，0 失败** | `packages/shared` **108** + `apps/api` **226**（**221 通过 / 5 跳过**）+ `apps/web` **97** + **`apps/desktop` 99**。T6-01 之后基线为 457（shared 107 + api 204），T6-02 与 T7-01 再增至 496，T6-03a 增至 506，**T6-03b 增至 530**。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（+ 代理形态复核 17 + 跨包路径 7）→ T4-04 **76**（+ 自检 24）→ **T6-03a 86**（+ 打包态降级路径 6 + 安装态配置 3 + 版本号单一来源 1）→ **T6-03b 99**（+ 新增 `update.test.mjs` 13 项：与 electron 解耦的更新状态机，含 2 条反例）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项），**T6-02 → 86**（新增 `version-check.test.mjs` 16 项），**T6-03b → 97**（新增 `host.test.mjs` 6 项 + `version-check.test.mjs` 扩 5 项）；shared 由 69 → **83**（UI 集成：导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写）→ **108**（T6-01 版本比较 24 项、T7-01 权限合并与 `system.user.delete`） |
+| `pnpm test` | **536 项，0 失败** | `packages/shared` **108** + `apps/api` **232**（**227 通过 / 5 跳过**）+ `apps/web` **97** + **`apps/desktop` 99**。T6-01 之后基线为 457（shared 107 + api 204），T6-02 与 T7-01 再增至 496，T6-03a 增至 506，**T6-03b 增至 530**，**P0 的改密失效修复（`84ba093`）再增至 536**（api 226 → 232）。desktop 的增量轨迹：T4-01 起 10（内置静态服务的 SPA 回退 / 404 / 越界 / 反代 / 502）→ T4-02 **28**（配置读写 18 + 服务端 10）→ T4-03 **52**（+ 代理形态复核 17 + 跨包路径 7）→ T4-04 **76**（+ 自检 24）→ **T6-03a 86**（+ 打包态降级路径 6 + 安装态配置 3 + 版本号单一来源 1）→ **T6-03b 99**（+ 新增 `update.test.mjs` 13 项：与 electron 解耦的更新状态机，含 2 条反例）。web 的增量轨迹：T3-10 起由 23 → 40，T3-11 → 45，T3-12 → 62（详情展示规则），**UI 集成 → 70**（新增 `version.test.mjs` 8 项），**T6-02 → 86**（新增 `version-check.test.mjs` 16 项），**T6-03b → 97**（新增 `host.test.mjs` 6 项 + `version-check.test.mjs` 扩 5 项）；shared 由 69 → **83**（UI 集成：导航 18 项 / 层级路径 / `navCodeFromPath` 断言扩写）→ **108**（T6-01 版本比较 24 项、T7-01 权限合并与 `system.user.delete`） |
 | 打包链路（T6-03a） | **28 项断言 + 4 条反例全过** | `pnpm --filter @fanhe/desktop verify:pack`（`apps/desktop/scripts/verify-pack.mjs`）：asar 内容与版本、extraResources 与源**逐字节一致**、随包 `agent.ts` 可加载且导出齐备；**第三节为 T6-03c 的代码签名**（两个产物 PE 签名表非空、`app-update.yml` 含 `publisherName` 且与配置一致、`latest.yml` 的 sha512/size 与实际安装包一致、签名身份报告覆盖本轮全部产物），**所有断言按「本轮」划分**（以 `app.asar` 的 mtime 为界，陈旧产物排除并打印名字）。反例是「改成 commonjs 必须 SyntaxError」「注入语法错误必须抛错」「PE 解析器对非 PE 文件必须抛错」「报告解析器对无关文本必须解析不出 EXE」。**脚本不起子进程**（本机 `spawnSync` 一律 EBUSY），需要安装目录那个运行时探一次的命令由脚本打印、人工执行 |
 | 签名身份（T6-03c，判据在 T6-03b 修正） | `RESULT=OK`（3 个 exe 均为 `CN=Fanhe Work`，`Status=Valid`、`STATUS_VALUE=0`） | `pnpm --filter @fanhe/desktop verify:sign`（`apps/desktop/scripts/verify-signature.ps1`）：取 Authenticode 的 `Subject` / `Thumbprint` / `Status` / `STATUS_VALUE` 写进 `release/signature-report.txt`，再由 `verify-pack.mjs` 读回断言。**判据是 `Status == Valid`（数值 0），不是 `!== 'NotSigned'`** —— 🔴 原先那条松判据在 T6-03b 被证伪：electron-updater 只在 `Status === 0` 时才比对发布者，自签链不可信得到的 `UnknownError`(1) 会让**每一次更新都被拒绝**。修法是把自签根也装进 `CurrentUser\Root`（`certutil -user -addstore -f Root`；`Import-Certificate` 在非交互会话装不进 Root）。`RESULT=REVIEW` 时脚本**退出非零**（原先恒退 0，`verify:all` 的 `&&` 链等于不是闸） |
 | 其中 5 项跳过 | **设计行为，不是失效** | `apps/api/test/setup.test.ts` 的首次初始化用例，前置条件是「库里没有 owner」；owner 建成后自然跳过 |
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
-| 浏览器 e2e | **149 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。**这是 UI 集成后的结果**（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号），**一次跑通**。T4-01 无界面改动，未重跑。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
+| 浏览器 e2e | **150 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。UI 集成后为 149（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号）。**UI 落地对齐后于 2026-10-13 重跑**：首轮抓到 3 项失败，根因是断言停留在 T7-01 之前（占位页断言仍指向已落地的「系统设置」），改用「综合看板」并补系统设置的落地断言后 **150 项全通过**（`12b553b`）。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
 | 外壳冒烟 | **PASS** | `pnpm --filter @fanhe/desktop smoke`：隐藏窗口加载产物 → 探 DOM → 打印一行结论并按成败设退出码。判据是 `#root` 里有元素 + console 零错误（见 8.5）。**受限环境需 `FANHE_NO_SANDBOX=1`** |
 | 数据库 | **7 个迁移**、**13 张业务表**、权限点 **12** / 角色 **4** | e2e 之后的干净基线是 `users` 1（owner `fanhe`）、其余业务表 0 行。T7-01 新增第七个迁移 `20261012094234_user_permissions` 与权限点 `system.user.delete`，权限点由 11 增至 **12**。**注意**：日常开发库里有使用者自己建的账号与数据（实测 `users` 3、`notes` 2，含 `fanhe-01` / `guoyao`），清理残留前先按命名前缀与创建时间确认是不是自己的数据，测试残留的命名前缀是 `zz_test_*` |
 
@@ -345,21 +362,23 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 
 ## 四、待办事项
 
-### 4.1 下一项：用 v0.1.0 作垫脚石验「安装 A → 发布 B」（P1）
+### 4.1 下一项：在装 v0.1.0 的机器上点更新，确认落到 v0.1.1（P1，B 端已发，只差真人操作）
 
-> **T5-05 访问策略由用户决定暂缓（2026-10-12 17:00）；阶段六（T6-01 ~ T6-03）已全部完成并已发版 v0.1.0。** T6-03 任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 224 行，阶段验收见第七章；三段的拆分理由与已落地的部分见 `docs/T6-03-UPDATE-CHANNEL.md`。
+> **T5-05 访问策略：用户 2026-10-13 17:1x 决定维持现状继续对外开放**（不加 Cloudflare Access、不停 Tunnel），该风险已知并接受；**阶段六（T6-01 ~ T6-03）已全部完成，并已发版 `v0.1.0`（2026-10-13 16:0x）与 `v0.1.1`（同日 17:4x）。** T6-03 任务定义见 `DEVELOPMENT-PLAN.md` 第三章第 224 行，阶段验收见第七章；三段的拆分理由与已落地的部分见 `docs/T6-03-UPDATE-CHANNEL.md`。
 
 - ⚠️ **先读头部那条已知风险**：公网上的 `work.fanhe.dpdns.org` **没有 Cloudflare Access 防护**（T5-05 暂缓）。T6-02 的「有可用更新」提示已经在这一层公开可见，而版本号与提交号本来就在客户端产物里明文可见，故不增加信息量。若后续要显示更细的内容（「落后几个版本」「当前在线设备数」），需要重新评估。
 - **`T6-03a` / `T6-03b` / `T6-03c` 三段均已完成**（打包与发布链路、更新通道、安装包签名），实施记录见 4.1.11 / 4.1.12 / 4.1.13。**阶段六收口。**
 - ✅ **§八 第 1、2、5 条反例都已实测通过**（改 sha512 → 拒绝；**只改信任根 → 同一个包在拒绝与通过之间翻转**；缺 blockmap → 差分回退整包）。**「更新器会拒绝异签名包」这句话现在有证据了**，而反例②的因变量只有信任根，是一个干净的对照。含空格 CN 的具象风险也**已解除**（`parseDn` 保留空格，实测 `Signature validated using only CN Fanhe Work`）。
 - 🔴 **接手时先注意一条被 T6-03c 漏掉的真拦路虎（本轮已修）**：electron-updater 只在 `data.Status === 0`（即 `Valid`）时才比对发布者，自签链不可信得到的 `UnknownError`(1) 会让**每一次更新都被拒绝**。所以判据是 `Status == Valid`（**不是** `!== 'NotSigned'`），前提是把自签根也装进 `CurrentUser\Root`。**换机器时这两处都要做。**
-- ⏭️ **下一项：用 v0.1.0 当垫脚石验 §八 第 4 条** —— 「安装 A → 发布 B → 检查 → 下载 → 安装 → 重启，`app.getVersion() === B`」。**v0.1.0 已发布（2026-10-13），但它只是 A**，要跑完这条需要再发一个 B（如 v0.1.1）：把版本号提到 0.1.1 → 重跑 `dist` → 发 Release → 在装着 v0.1.0 的机器上点更新 → 确认落到 0.1.1。**这也是差分下载的正验**（此时 `0.1.0.exe.blockmap` 已发布，差分才真的可用）。**这一步做完 T6-03b 才算收尾。**
+- ⏭️ **下一项：在装 v0.1.0 的机器上点更新，验 §八 第 4 条** —— 「安装 A → 发布 B → 检查 → 下载 → 安装 → 重启，`app.getVersion() === B`」。**B 端已就位**：`v0.1.1` 已于 2026-10-13 17:4x 发布（Release `411517975`，安装包 112,209,032 字节，线上 `latest.yml` 与本地逐字节一致），`v0.1.0` 是垫脚石 A。**剩下的这一步自动化替代不了**：要在装着 v0.1.0 的机器上点一次更新、确认版本变成 0.1.1。**这也是差分下载的正验**（`0.1.0.exe.blockmap` 已发布，差分才真的可用）。**这一步做完 T6-03b 才算收尾。**
 - **签名密钥的保管方式**：`DEVELOPMENT-PLAN.md` 6.3 第 6 条已约定「更新签名密钥与工作空间分开保管，**不随盘移动**」。已按自签证书进 Windows 证书库落地：`CurrentUser\My` 天生随机器不随盘，**证书与私钥不进版本控制、工作区内不落 `.pfx`**。🔴 **换机器必须先在目标机跑一次 `pnpm --filter @fanhe/desktop signing:cert`**，否则打包会报找不到证书；**它现在还会把自签根装进 `CurrentUser\Root`（T6-03b 补上的一步）** —— 少了这一步 `Status` 会是 `UnknownError` 而不是 `Valid`，**所有更新都会被拒绝**（症状极隐蔽：签名看着好好的）。另外证书换了等于换了签名主体，已装旧版的机器更新校验会失败。
 - **它只依赖 T4-01 外壳，与阶段五无关**，所以 T5-05 是否推进不影响它。
 
-### 4.1.0 阶段七的范围尚未登记（待用户确认）
+### 4.1.0 阶段七的登记状态（**已登记**，2026-10-13 更新）
 
-T7-01 有提交、有独立文档（`docs/T7-01-ACCOUNT-ADMIN.md`），但阶段七未进入 `DEVELOPMENT-PLAN.md` 的任务表、依赖图与验收清单。若后续还有 T7-02 及以后，需要先补齐这三件套，否则无法排期，也无法判定阶段七是否收口。
+T7-01 有提交、有独立文档（`docs/T7-01-ACCOUNT-ADMIN.md`）。**阶段七已于 2026-10-13 登记进 `DEVELOPMENT-PLAN.md`**（提交 `f5d0f3e`）：第三章有任务表（第 228 行起）、第四章有依赖图（第 249 / 252 / 262 行）、第七章有验收清单（第 400 行起）。**后续范围仍待用户确认**：目前只有 T7-01 一项有定义，若还有 T7-02 及以后，按同样三件套补登记即可。
+
+> 注：`DEVELOPMENT-PLAN.md` 第 1760 行（9.51 节）仍写着「尚未进入本计划第三章的任务表、第四章的依赖图与第七章的验收清单」，那是登记之前的判断原文，未逐字改写。
 
 ### 4.1.11 T6-03a 打包与发布链路的实施记录（已完成，供对照）
 
@@ -588,8 +607,8 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 
 - **阶段四 Electron 外壳（T4-01 ~ T4-04）**：已完成 4/4，见 3.5。四项分别是外壳脚手架、本机与远程服务地址切换、把 `launch/agent.ts` 搬进外壳主进程、启动自检。
 - **阶段五 服务端化（T5-01 ~ T5-05）**：4/5。容器编排、数据库连接串与迁移执行者、种子自动执行与备份恢复、Cloudflare Tunnel 出站接入均已完成，见 3.6；**T5-05 访问策略由用户决定暂缓**，已知风险见头部。
-- **阶段六 更新通道（T6-01 ~ T6-03）✅ 已完成收口**：T6-01 与 T6-02 见 4.1.1、4.1.9；**T6-03 三段（T6-03a 打包与发布链路 / T6-03b 更新通道 / T6-03c 安装包签名）均已做完**，见 4.1.11 / 4.1.12 / 4.1.13。**只剩「首次发布」这个动作**（发版本身不属于阶段六的任务定义，但它同时是 §八 第 4 条与差分正验的前提），见 4.1。
-- **阶段七 账号与权限管理（计划外新开，T7-01）**：T7-01 已完成，见 4.1.10；**后续范围尚未登记进 `DEVELOPMENT-PLAN.md`**，见 4.1.0。
+- **阶段六 更新通道（T6-01 ~ T6-03）✅ 已完成收口并已发版**：T6-01 与 T6-02 见 4.1.1、4.1.9；**T6-03 三段（T6-03a 打包与发布链路 / T6-03b 更新通道 / T6-03c 安装包签名）均已做完**，见 4.1.11 / 4.1.12 / 4.1.13。**「首次发布」已完成**：`v0.1.0`（2026-10-13 16:0x）与 `v0.1.1`（同日 17:4x）两次 GitHub Release 均已发布、资产齐备。**只剩 §八 第 4 条的正向验证**（在装 v0.1.0 的机器上点更新、确认落到 v0.1.1，须真人操作），见 4.1。
+- **阶段七 账号与权限管理（计划外新开，T7-01）**：T7-01 已完成，见 4.1.10；**已登记进 `DEVELOPMENT-PLAN.md`**（任务表 / 依赖图 / 验收清单），后续范围待用户确认，见 4.1.0。
 
 ### 4.4 长期遗留（跨阶段，待排期）
 
@@ -828,8 +847,8 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 | 6 | **数据库重建** | `docker compose up -d --wait` → `cp apps/api/.env.example apps/api/.env` 并填 `JWT_SECRET` → `pnpm db:deploy` → `pnpm db:seed` → `pnpm db:ping` | `db:ping` 列出 **13 张业务表**；权限点 **12** / 角色 4；`docker ps` 里 `fanhe-work-db` 是 `healthy` |
 | 7 | **构建共享包** | 经入口 `pnpm --filter @fanhe/shared build`；再 `pnpm db:generate` | `packages/shared/dist` 有产物；`apps/api/src/generated/prisma` 有产物 |
 | 8 | **建 owner** | 走首次初始化引导，或 `OWNER_USERNAME=… OWNER_PASSWORD=… OWNER_DISPLAY_NAME=… pnpm db:create-owner` | 用该账号能登录（`POST /api/auth/login` 返回 200） |
-| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **496 项、0 失败**（shared 108 + api 226 含 5 跳过 + web 86 + desktop 76）；其余三条全绿 |
-| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **149 项全通过**（UI 集成后的结果；改界面就要重跑） |
+| 9 | **门禁确认** | 逐条串行跑 `pnpm test` / `lint` / `typecheck` / `format:check` | test 为 **536 项、0 失败**（shared 108 + api 232 含 5 跳过 + web 97 + desktop 99）；其余三条全绿 |
+| 10 | **浏览器级验证（可选，代价大）** | 见 8.2 | e2e **150 项全通过**（2026-10-13 UI 落地对齐后重跑的结果；改界面就要重跑） |
 | 11 | **外壳（阶段四起）** | 经入口 `pnpm --filter @fanhe/web build` 重建产物 → `pnpm --filter @fanhe/desktop smoke`（受限环境加 `FANHE_NO_SANDBOX=1`） | 输出 `[smoke] PASS`，且 `console错误=0`；详见 8.5 |
 
 **换机后不复存在、必须重建的东西**（都是刻意不随盘走的）：
