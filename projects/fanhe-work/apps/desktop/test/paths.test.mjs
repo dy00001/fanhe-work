@@ -25,20 +25,12 @@ import {
 } from '../src/paths.ts'
 
 /**
- * 干净暂存根。**不能用 `os.tmpdir()`** —— 经 `ws-run.cmd` 跑时它被指向工作区的
- * `.tmp`，而那就在 `.ws-root` 底下，于是「向上找不到标记」这条用例会因为测试自己
- * 造的工作区在标记之下而永远失败。固定落系统盘，与 `config.test.mjs` 同理。
+ * 干净暂存根。落点与理由见 `test/scratch.mjs` 的文件头 —— 一句话是：**不能用
+ * `os.tmpdir()`**（入口下它指向工作区的 `.tmp`，而那在 `.ws-root` 底下，于是
+ * 「向上找不到标记」这条用例会因为测试自己造的工作区在标记之下而永远失败），
+ * 也不能写死某个账户名。
  */
-const SYSTEM_SCRATCH = join(
-  process.env['SystemDrive'] ?? 'C:',
-  'Users',
-  'Administrator',
-  'AppData',
-  'Local',
-  'Temp',
-  'fanhe-desktop-test',
-)
-await mkdir(SYSTEM_SCRATCH, { recursive: true })
+import { SYSTEM_SCRATCH } from './scratch.mjs'
 
 /** 造一个带 `.ws-root` 的假工作区，返回根目录。 */
 async function makeWorkspace() {

@@ -14,26 +14,17 @@
  * TS 源码），因此不需要先构建。
  */
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
 /**
- * 测试用的干净暂存根。
- *
- * 固定在系统盘的 temp 下，而不是 `os.tmpdir()` —— 后者经 `ws-run.cmd` 会被指到
- * 工作区的 `.tmp`，那样任何派生目录向上找都会命中 `.ws-root`，「找不到工作区根」
- * 那两条用例就没法验了。理由见 `makeWorkspace` 的注释。
+ * 干净暂存根。落点与理由见 `test/scratch.mjs` 的文件头 —— 一句话是：
+ * **既不能用 `os.tmpdir()`**（入口下它指向工作区的 `.tmp`，而那在 `.ws-root` 底下，
+ * 会让「找不到工作区根」那两条用例自相矛盾），**也不能写死某个账户名**
+ * （换台机器就是整个文件加载失败）。
  */
-const SYSTEM_SCRATCH = join(
-  process.env['SystemDrive'] ?? 'C:',
-  'Users',
-  'Administrator',
-  'AppData',
-  'Local',
-  'Temp',
-  'fanhe-desktop-test',
-)
+import { SYSTEM_SCRATCH } from './scratch.mjs'
 
 import {
   configPathFor,
@@ -45,19 +36,9 @@ import {
   saveServiceConfig,
 } from '../src/config.ts'
 
-/**
- * 造一个「有工作区根」的临时目录。
- *
- * **刻意不复用 `tmpdir()`**：经 `infra/portable/ws-run.cmd` 跑时，`TMP` / `TEMP`
- * 都被重定向到工作区的 `.tmp`，而 `.tmp` 就在工作区根底下 —— 于是任何从
- * `tmpdir()` 派生的目录，向上找必然命中工作区的 `.ws-root`。这会让「找不到
- * `.ws-root` 时返回 null」这条用例变成自相矛盾的断言（它断言的东西被运行环境
- * 本身否掉了）。这里显式落到系统盘，才有一片真正干净的目录树可用来验这条路径。
- */
+/** 造一个「有工作区根」的临时目录。 */
 async function makeWorkspace() {
-  const base = SYSTEM_SCRATCH
-  await mkdir(base, { recursive: true })
-  const root = await mkdtemp(join(base, 'fanhe-ws-'))
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-ws-'))
   await writeFile(join(root, '.ws-root'), '{"schema":1,"id":"test"}', 'utf8')
   return root
 }

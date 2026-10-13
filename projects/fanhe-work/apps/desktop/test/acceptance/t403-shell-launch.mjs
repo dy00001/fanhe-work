@@ -24,7 +24,7 @@
  *
  * 注意它会真的启动进程（跑的是 node 与一段临时脚本），几秒内自己退出。
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 
@@ -33,19 +33,11 @@ import { configPathFor, loadServiceConfig, saveServiceConfig } from '../../src/c
 import { apiLaunchModule } from '../../src/paths.ts'
 
 /**
- * 干净暂存根。与 t402 同理：**不能用 `os.tmpdir()`** —— 经 ws-run.cmd 跑时它被指向
- * 工作区的 .tmp（就在 .ws-root 底下），而本脚本要验的正是「工作区完整时能加载代理」。
+ * 干净暂存根。落点与理由见 `../scratch.mjs` 的文件头 —— 一句话是：
+ * **不能用 `os.tmpdir()`**（入口下它指向工作区的 `.tmp`，而那在 `.ws-root` 底下，
+ * 会让「配置/产物落在工作区外」这类断言失去意义），也不能写死某个账户名。
  */
-const SYSTEM_SCRATCH = join(
-  process.env['SystemDrive'] ?? 'C:',
-  'Users',
-  'Administrator',
-  'AppData',
-  'Local',
-  'Temp',
-  'fanhe-desktop-test',
-)
-await mkdir(SYSTEM_SCRATCH, { recursive: true })
+import { SYSTEM_SCRATCH } from '../scratch.mjs'
 
 let failures = 0
 

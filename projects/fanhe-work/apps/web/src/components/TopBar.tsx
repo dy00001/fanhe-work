@@ -14,6 +14,7 @@ import {
 import { Link } from 'react-router'
 
 import { type ThemePreference, isThemePreference } from '../lib/preferences'
+import { parseDesktopUpdateStatus } from '../lib/desktop-update'
 import { useTheme } from '../lib/theme'
 import { useVersionCheck } from '../lib/use-version-check'
 import { buildVersionDetail, buildVersionLine } from '../lib/version'
@@ -33,6 +34,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
+import { UpdateNotice as UpdateNoticeBar } from './UpdateNotice'
 
 /**
  * 主题档位对应的图标。
@@ -94,10 +96,15 @@ type TopBarProps = {
  *
  * 那一行**点下去的后果按宿主不同**（T6-03b）：浏览器刷新页面，桌面外壳交给本机更新
  * 通道装完重启。见 `runUpdateNoticeAction`。
+ *
+ * 另外，**头像左边**还有一条独立的更新提示与更新按钮（T7-02b）。它与菜单里那一行
+ * 不是重复：菜单里那行说的是「服务端已经有新版了」（提示），而这一条说的是「本机已经
+ * 把它下好了、现在可以装」（动作）—— 只有后者需要用户做一个决定，所以它必须一直在
+ * 视野里，不能藏在菜单后面。见 `UpdateNotice.tsx`。
  */
 
 /**
- * 执行更新提示那一行的动作（T6-03b）。
+ * 执行更新提示那一行的动作（T6-03b，T7-02b 补了「还没下载好」这一支）。
  *
  * 两个宿主做的是不同的事，**这不是美化而是事实**：
  *
@@ -105,10 +112,15 @@ type TopBarProps = {
  * - 桌面态：界面来自安装目录里的内置产物，刷新不会变。要交给外壳的更新通道 ——
  *   它把已下载的新版装上，然后应用自己退出重启。
  *
- * **`installUpdate` 返回失败时不静默。** 最常见的失败是「开发态外壳」：那里通道
- * 不可用（没有 `app-update.yml`），点下去什么都不会发生。此时退回到刷新并打一行
- * 警告，让人至少知道刚才那一下没有生效 —— 一个点了没反应、也没有任何痕迹的按钮，
- * 会让人以为整个更新功能坏了。
+ * **`installUpdate` 被拒时不静默，也不再直接放弃。** 最常见的两种拒绝是：
+ *
+ * - 开发态外壳：那里通道不可用（没有 `app-update.yml`），点什么都不会发生；
+ * - 真实但更常见的一种：**新版还没下载完**。菜单里那一行说的是「服务端已经有新版了」，
+ *   而更新通道那边可能还在查、还在下，甚至刚失败过一次。
+ *
+ * 第二种情况下什么都不做，等于给用户一个点了没反应的按钮 —— 而他要做的事（把新版
+ * 下下来）其实是被支持的，只是需要先踢一脚。所以这里退回一步去 `checkForUpdates()`，
+ * 让下载跑起来；进度由顶栏那条提示显示（`UpdateNotice.tsx`）。
  */
 async function runUpdateNoticeAction(notice: UpdateNotice): Promise<void> {
   const bridge = window.fanheDesktop
@@ -121,7 +133,21 @@ async function runUpdateNoticeAction(notice: UpdateNotice): Promise<void> {
 
   try {
     const result = await bridge.installUpdate()
-    if (!result.ok) console.warn(`[update] 未执行安装（${result.reason}）：${result.detail}`)
+    if (result.ok) return
+
+    // 还没就绪。见上面那段：把下载踢起来，而不是报一句「没准备好」。
+    if (typeof bridge.checkForUpdates !== 'function') {
+      console.warn(`[update] 未执行安装（${result.reason}）：${result.detail}`)
+      return
+    }
+    const checked = parseDesktopUpdateStatus(await bridge.checkForUpdates())
+    // 检查完仍然什么都没发生（开发态、冒烟态、或网络不通）时留下痕迹。这不是
+    // 错误路径上的失败 —— 但那一下点击确实没有生效，日志里要看得出来。
+    if (checked === null || checked.phase === 'unsupported' || checked.phase === 'error') {
+      console.warn(
+        `[update] 更新通道未生效（阶段 ${checked?.phase ?? '未知'}）：${checked?.detail ?? result.detail}`,
+      )
+    }
   } catch (error) {
     console.warn(
       `[update] 安装通道调用失败：${error instanceof Error ? error.message : String(error)}`,
@@ -150,6 +176,15 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-3">
+        {/* 更新提示与更新按钮（T7-02b）。放在头像左边、与它同一行：**只有真有可做的
+            事时才出现**，所以它出现本身就是一个信号。
+
+            为什么不放账号菜单里：菜单得先被打开才看得见，而「有新版本」是用户不会
+            主动去找的事 —— 桌面工具会被开一整天，没人会为了看看有没有更新去点自己
+            的头像。菜单里那一行仍然保留，它回答的是另一个问题（「本机该是什么版本」），
+            但**动作**只有这里这一个。判定与轮询见 `lib/use-desktop-update.ts`。 */}
+        <UpdateNoticeBar />
+
         {/* onOpenChange：每次打开菜单都重查一次。Electron 外壳（T6-03）会把应用
               开一整天，期间服务端可能已经发新版；只在挂载时查一次的话，菜单里的
               那一行会一直显示旧结论。挂载时那一次仍然保留（`useVersionCheck` 内部

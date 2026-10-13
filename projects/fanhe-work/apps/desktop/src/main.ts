@@ -39,10 +39,21 @@
  * `--smoke` 用于自动化验证：窗口隐藏、加载完成后在渲染进程里探一次 DOM，把结果
  * 打到标准输出并按成败设置退出码。它让「外壳能渲染界面」这条验收可以被脚本断言，
  * 而不是只能靠人眼。**它不改变正常启动的任何行为。**
+ *
+ * ## 界面来源（端口）必须稳定 —— 这就是「更新后设置不丢」
+ *
+ * 界面托管在 `http://127.0.0.1:<端口>` 上，而 localStorage 与 IndexedDB 都是按
+ * origin 分区的，origin 里含端口。端口一变，存储分区就变，用户看到的是「设置丢了」。
+ * 所以端口由 `startShellServer` 定下来、记进 `userData/shell-origin.json`，并且
+ * **优先试回「已经有数据的那一个」**；候选顺序的完整推导见 `shell-origin.ts` 文件头。
+ *
+ * 配合单实例锁（第二个实例会抢不到同一个端口、顺延到一个新分区）。这两件事合起来
+ * 才是「更新之后设置与本地数据都还在」的完整实现 —— 改动前先读那两个位置。
  */
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   describeSource,
@@ -55,6 +66,15 @@ import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from 
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
+import {
+  SHELL_ORIGIN_FILE,
+  isFreshOrigin,
+  orderLegacyPorts,
+  parseOriginDirName,
+  parseOriginPortsInText,
+  parseStoredPort,
+  shellPortCandidates,
+} from './shell-origin.js'
 import {
   applyUpdateEvent,
   describeUpdateStatus,
@@ -123,6 +143,40 @@ let currentService: LoadResult | null = null
  * 代理，直接关掉最省事。
  */
 app.commandLine.appendSwitch('no-proxy-server')
+
+/**
+ * 单实例。
+ *
+ * ## 为什么必须有
+ *
+ * 第二个实例抢不到同一个端口（第一个还占着），会按 `shell-origin.ts` 的候选链
+ * 顺延到**另一个端口** —— 也就是另一个存储分区。用户在第二个窗口里看不到自己
+ * 的设置，改完之后两边互相覆盖，看起来就是「设置自己会丢」。所以第二个实例
+ * **直接退出**，并把已有的那个窗口顶到前面。
+ *
+ * ## 为什么冒烟与探针模式不加锁
+ *
+ * 那两个是自动化验收模式（`pnpm --filter @fanhe/desktop smoke`、`--update-probe`），
+ * 验收脚本可能在应用已经开着的时候跑。加锁会让它们静默退出，症状是「冒烟没有任何
+ * 输出」—— 一条与被验功能无关的失败。它们本来就只读、只跑一小会儿。
+ *
+ * 顺带说：开发态与安装态的 `userData` 是**两个目录**（实测分别是
+ * `%APPDATA%\@fanhe\desktop` 与 `%APPDATA%\梵禾 Work`），所以这条锁不会把
+ * 「开着安装版再跑开发态外壳」挡掉。
+ */
+const isPrimaryInstance = IS_SMOKE || IS_UPDATE_PROBE ? true : app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
+  console.log('[shell] 已有实例在运行，本次启动退出。')
+  app.quit()
+}
+
+app.on('second-instance', () => {
+  const [existing] = BrowserWindow.getAllWindows()
+  if (existing === undefined) return
+  if (existing.isMinimized()) existing.restore()
+  existing.show()
+  existing.focus()
+})
 
 let staticServer: StaticServerHandle | null = null
 let shellOrigin = ''
@@ -509,7 +563,152 @@ async function runUpdateProbe(): Promise<void> {
   app.exit(ok ? 0 : 1)
 }
 
+/** 扫来源时单个文件最多读多大。超过就当它不可能只是键值库，跳过。 */
+const ORIGIN_SCAN_MAX_BYTES = 8 * 1024 * 1024
+
+/** 列一个目录，带上每项的修改时刻。目录不存在或读不动时返回空数组。 */
+async function listDir(
+  path: string,
+): Promise<{ name: string; isFile: boolean; mtimeMs: number }[]> {
+  try {
+    const dirents = await readdir(path, { withFileTypes: true })
+    return await Promise.all(
+      dirents.map(async (dirent) => {
+        const info = await stat(join(path, dirent.name)).catch(() => null)
+        return { name: dirent.name, isFile: dirent.isFile(), mtimeMs: info?.mtimeMs ?? 0 }
+      }),
+    )
+  } catch {
+    return []
+  }
+}
+
+/** 读一个 JSON 文件。不存在、读不动、不是合法 JSON 一律返回 `null`（按「没有偏好」处理）。 */
+async function readJsonIfExists(path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as unknown
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 找出「已经存过数据的那些来源」用过的端口，按最近使用倒序。
+ *
+ * ## 为什么要找它们
+ *
+ * 首次升级到本版本时，用户的数据躺在**上一版随机分配的那个端口**的分区里。若直接
+ * 启用一段全新的固定端口，那些数据不会被删，但**再也访问不到** —— 在用户看来与
+ * 「丢了」没有区别。所以候选链里要优先试回这些端口（见 `shell-origin.ts`）。
+ *
+ * ## 两条来源，精确的那条优先
+ *
+ * ① `IndexedDB/<来源>.indexeddb.leveldb` —— Chromium 给每个来源建一个目录，目录名
+ *    里带端口，**目录 mtime 就是这个来源最后一次被写的时刻**。这是精确信号。
+ * ② `Local Storage/leveldb/*.log|*.ldb` —— localStorage 是**单库**，来源名写在键里
+ *    （`_http://127.0.0.1:49901\0\1<键名>`），只能扫内容。它补的是「只用过
+ *    localStorage、没用过 IndexedDB」的来源。
+ *
+ * 🔴 **② 不许覆盖 ① 已经记下的时刻。** 同一个 leveldb 文件里装着所有来源的键，它的
+ * mtime 对所有来源都是同一个值；拿它去 `remember` 会让每个来源都拿到相同的时间戳，
+ * 于是排序退化成目录枚举顺序。实测（本机）：49901 的 IndexedDB 比 57352 晚 4 分钟，
+ * 但两者都出现在同一个日志文件里 —— 那个文件的时间把差别抹平之后，外壳挑中了**较旧**
+ * 的那一个。所以 ② 只补 ① 没见过的端口。
+ *
+ * 排障提示：这一层扫不到东西时**不报错**，只是候选链少一段。新机器本来就该扫不到。
+ */
+async function collectLegacyPorts(userDataDir: string): Promise<number[]> {
+  const lastSeen = new Map<number, number>()
+  const remember = (port: number, at: number): void => {
+    lastSeen.set(port, Math.max(lastSeen.get(port) ?? 0, at))
+  }
+
+  for (const entry of await listDir(join(userDataDir, 'IndexedDB'))) {
+    const port = parseOriginDirName(entry.name)
+    if (port !== null) remember(port, entry.mtimeMs)
+  }
+
+  const leveldbDir = join(userDataDir, 'Local Storage', 'leveldb')
+  for (const entry of await listDir(leveldbDir)) {
+    if (!entry.isFile || !/\.(log|ldb)$/i.test(entry.name)) continue
+    const filePath = join(leveldbDir, entry.name)
+    const size = await stat(filePath)
+      .then((info) => info.size)
+      .catch(() => 0)
+    if (size === 0 || size > ORIGIN_SCAN_MAX_BYTES) continue
+    // 用 `latin1` 读：文件是二进制的，而 latin1 把每个字节映成一个字符，其中的
+    // ASCII 片段（来源名就是 ASCII）被原样保留。`utf8` 遇到非法字节序列会替换掉
+    // 它们，反而更容易把要找的那串切坏。
+    const text = await readFile(filePath, 'latin1').catch(() => '')
+    for (const port of parseOriginPortsInText(text)) {
+      // 见上面 ② 的注释：这里**只补未知的**。
+      if (lastSeen.has(port)) continue
+      remember(port, entry.mtimeMs)
+    }
+  }
+
+  return orderLegacyPorts(lastSeen)
+}
+
+/**
+ * 起内置服务，并把选中的端口记进 `userData/shell-origin.json`。
+ *
+ * ## 这一个函数就是「更新后设置不丢」的全部实现
+ *
+ * 端口 → origin → localStorage / IndexedDB 的分区。把端口钉住，分区就不变，
+ * 于是主题、侧栏折叠、纪要草稿、记住的账号、设备标识在**重启与更新之后都还在**。
+ * 而更新本身不会碰 `userData`（NSIS 的 `deleteAppDataOnUninstall` 默认为假，
+ * 本项目也没有打开它），所以这条链上没有任何一环会丢东西。
+ *
+ * ## 三个细节是刻意的
+ *
+ * - **无论落在哪个端口都记下来**，包括兜底的系统分配值。记下来它才稳定；
+ *   不记的话下一次又从头挑，等于把这个缺陷重新引入一遍。
+ * - **写失败只警告不中断**：偏好写不进去（磁盘满、权限）时外壳仍应能开，
+ *   代价是下次端口可能变。
+ * - **换分区时打醒目警告**。这是唯一会让人以为「数据丢了」的情况，必须让日志
+ *   说清楚「没删，只是这个进程访问不到」—— 否则下一个人会去查数据库。
+ */
+async function startShellServer(root: string, apiBaseUrl: string): Promise<StaticServerHandle> {
+  const userDataDir = app.getPath('userData')
+  const preferencePath = join(userDataDir, SHELL_ORIGIN_FILE)
+  const stored = parseStoredPort(await readJsonIfExists(preferencePath))
+  const legacy = await collectLegacyPorts(userDataDir)
+  const candidates = shellPortCandidates(stored, legacy)
+
+  const server = await startStaticServer({ root, apiBaseUrl, preferredPorts: candidates })
+
+  console.log(
+    `[shell] 界面来源 http://127.0.0.1:${server.port}` +
+      `（${stored === server.port ? '沿用上次' : '本次新定'}；候选 ${candidates.join(' → ')}）`,
+  )
+  if (isFreshOrigin(server.port, legacy)) {
+    console.warn(
+      `[shell] ⚠️ 本次端口不在任何已有存储的端口里（已有：${legacy.join('、')}）—— ` +
+        '界面上将看不到上次的设置与登录状态。数据没有被删除，只是这个进程访问不到；' +
+        '通常是那些端口被别的进程占了，关掉占用者再重启即可恢复。',
+    )
+  }
+
+  if (stored !== server.port) {
+    try {
+      await writeFile(preferencePath, `${JSON.stringify({ port: server.port }, null, 2)}\n`, 'utf8')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      console.warn(
+        `[shell] 端口偏好写入失败（${preferencePath}）：${detail}。下次启动端口可能变化。`,
+      )
+    }
+  }
+
+  return server
+}
+
 async function bootstrap(): Promise<void> {
+  // 非首个实例在模块顶层就 `app.quit()` 了，这里再挡一道 —— `whenReady` 仍会
+  // 兑现，不挡的话它会继续把内置服务与窗口都建起来，等于锁白加了。
+  if (!isPrimaryInstance) return
+
   // 探针模式先于一切：它只关心更新通道，不需要前端产物，也不需要内置服务。
   // 放在最前面是为了让 `dist:dir` 产物能单独被验，而不必先构建 web。
   if (IS_UPDATE_PROBE) {
@@ -552,7 +751,7 @@ async function bootstrap(): Promise<void> {
   // 「挂载时查一次」），晚注册会让那一次拿到「通道不存在」。
   registerUpdateIpc()
 
-  staticServer = await startStaticServer({ root: DIST_ROOT, apiBaseUrl: serviceUrl })
+  staticServer = await startShellServer(DIST_ROOT, serviceUrl)
   shellOrigin = `http://127.0.0.1:${staticServer.port}`
 
   if (IS_SMOKE) {

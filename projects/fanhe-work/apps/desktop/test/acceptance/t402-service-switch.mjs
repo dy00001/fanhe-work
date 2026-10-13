@@ -18,7 +18,7 @@
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { configPathFor, loadServiceConfig, saveServiceConfig } from '../../src/config.ts'
@@ -59,20 +59,11 @@ async function fetchJson(url) {
 }
 
 /**
- * 干净暂存根。与 config.test.mjs 同理：**不能用 os.tmpdir()** ——
- * 经 ws-run.cmd 跑时它被指向工作区的 .tmp，而那就在 .ws-root 底下，
- * 会让「配置落在工作区外」的断言失去意义。固定落系统盘。
+ * 干净暂存根。落点与理由见 `../scratch.mjs` 的文件头 —— 一句话是：
+ * **不能用 `os.tmpdir()`**（入口下它指向工作区的 `.tmp`，而那在 `.ws-root` 底下，
+ * 会让「配置/产物落在工作区外」这类断言失去意义），也不能写死某个账户名。
  */
-const SYSTEM_SCRATCH = join(
-  process.env['SystemDrive'] ?? 'C:',
-  'Users',
-  'Administrator',
-  'AppData',
-  'Local',
-  'Temp',
-  'fanhe-desktop-test',
-)
-await mkdir(SYSTEM_SCRATCH, { recursive: true })
+import { SYSTEM_SCRATCH } from '../scratch.mjs'
 
 const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-t402-'))
 const dist = await makeDist()

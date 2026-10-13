@@ -160,3 +160,87 @@ test('上游不可达时回以 502，而不是让渲染进程一直等', async (
     await orphan.close()
   }
 })
+
+// ── 端口选择（T7-02a） ───────────────────────────────────────────────────
+//
+// 这一组钉的是「**端口稳定**」这件事，而它是「更新后设置与本地数据不丢」的全部实现：
+// 端口属于 origin，localStorage 与 IndexedDB 按 origin 分区，端口一变存储分区就变。
+// 完整推导见 `src/shell-origin.ts` 的文件头。
+//
+// 判据必须落在**实际监听的端口**上（`handle.port`），而不是「调用没抛错」——
+// 后者在「悄悄退到随机端口」时同样成立，而那正是要拦的坏法。
+
+/** 找一个此刻空闲的端口。用完就释放，所以它随后大概率仍然空闲。 */
+async function freePort() {
+  const probe = createServer()
+  await new Promise((resolveReady) => probe.listen(0, '127.0.0.1', resolveReady))
+  const address = probe.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  await new Promise((resolveClosed) => probe.close(resolveClosed))
+  return port
+}
+
+/** 占住一个端口，直到调用方把它关掉。 */
+async function occupyPort() {
+  const blocker = createServer()
+  await new Promise((resolveReady) => blocker.listen(0, '127.0.0.1', resolveReady))
+  const address = blocker.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  return {
+    port,
+    release: () => new Promise((resolveClosed) => blocker.close(resolveClosed)),
+  }
+}
+
+const options = { root: productRoot, apiBaseUrl: `http://127.0.0.1:${upstreamPort}` }
+
+test('首选端口空闲时就用它（这就是「端口稳定」）', async () => {
+  const port = await freePort()
+  const handle = await startStaticServer({ ...options, preferredPorts: [port, 0] })
+  try {
+    assert.equal(handle.port, port, '首选端口空闲却没被采用 —— 每次启动都会换存储分区')
+  } finally {
+    await handle.close()
+  }
+})
+
+test('首选端口被占时顺延到下一个候选，而不是失败', async () => {
+  const busy = await occupyPort()
+  const spare = await freePort()
+  try {
+    const handle = await startStaticServer({ ...options, preferredPorts: [busy.port, spare, 0] })
+    try {
+      assert.equal(handle.port, spare)
+    } finally {
+      await handle.close()
+    }
+  } finally {
+    await busy.release()
+  }
+})
+
+test('候选全被占时退到系统分配，而不是起不来', async () => {
+  // 「设置看不到」比「打不开」轻得多，所以末尾那个 `0` 是必需的兜底。
+  // 这里刻意不传 `0`：本函数应当自己补上。
+  const busy = await occupyPort()
+  try {
+    const handle = await startStaticServer({ ...options, preferredPorts: [busy.port] })
+    try {
+      assert.notEqual(handle.port, busy.port)
+      assert.ok(handle.port > 0)
+    } finally {
+      await handle.close()
+    }
+  } finally {
+    await busy.release()
+  }
+})
+
+test('与「端口被占」无关的错误直接抛出，不顺延', async () => {
+  // 顺延只对 EADDRINUSE / EACCES 成立。其余错误（这里用非法端口号触发）换一个号
+  // 解决不了，顺延只会把真正的错误掩盖成一串没有意义的尝试。
+  await assert.rejects(
+    () => startStaticServer({ ...options, preferredPorts: [-1, 0] }),
+    (error) => error instanceof RangeError || error.code === 'ERR_SOCKET_BAD_PORT',
+  )
+})

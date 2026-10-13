@@ -259,6 +259,125 @@ check('resources/web/index.html 引用了 assets（不是空壳）', () => {
   )
 })
 
+// ── 二·补：产物内容与源码一致（T7-02 加的回归闸） ────────────────────────
+//
+// 上面那条「index.html 逐字节一致」只能挡住「整体拷旧」。它挡不住的是**半新半旧**：
+// `index.html` 是这一轮的、`assets/` 还是上一轮的（或反过来）。而那个状态比整体陈旧
+// 更糟 —— 入口会去要一个不存在的脚本，界面直接白屏，且白屏的原因看起来与打包无关。
+//
+// 下面第二条闸来自一次真实事故（2026-10-13）：T6-03b 的宿主分派（`3a9294f`）已经
+// 提交，而客户端加载的产物构建于它之前 —— 于是「点此重启更新」这一支**在已发布的
+// 客户端里根本不存在**，点更新永远只走「刷新页面」那条路。四道门禁全绿（源码没问题），
+// 问题只在产物。所以这里按**内容**断言，而不只是按文件在不在。
+
+/** 列出目录下所有文件的相对路径（用 `/` 分隔），排序后返回。 */
+function listTree(dir) {
+  const files = []
+  const walk = (current, prefix) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isDirectory()) walk(join(current, entry.name), relative)
+      else files.push(relative)
+    }
+  }
+  walk(dir, '')
+  return files.sort()
+}
+
+check('resources/web 与 apps/web/dist 逐文件一致（不只是 index.html）', () => {
+  expect(existsSync(sourceWebDist), `源目录 ${sourceWebDist} 不存在，先构建 web`)
+  const packedRoot = join(resourcesDir, 'web')
+
+  const source = listTree(sourceWebDist)
+  const packed = listTree(packedRoot)
+  const missing = source.filter((name) => !packed.includes(name))
+  const extra = packed.filter((name) => !source.includes(name))
+  expect(
+    missing.length === 0 && extra.length === 0,
+    `文件清单不一致 —— 缺：${missing.slice(0, 5).join(', ') || '无'}；多：${extra.slice(0, 5).join(', ') || '无'}`,
+  )
+
+  const differing = source.filter(
+    (name) => sha256(join(sourceWebDist, name)) !== sha256(join(packedRoot, name)),
+  )
+  expect(
+    differing.length === 0,
+    `有 ${differing.length} 个文件与源不一致：${differing.slice(0, 5).join(', ')} —— 拷的是上一轮的产物`,
+  )
+  return `${source.length} 个文件逐一比对通过`
+})
+
+/**
+ * 读出打包产物里那份前端 JS 的全部文本。
+ *
+ * **按 `index.html` 引用的文件名去读，而不是 glob `assets/*.js`**：后者会把上一轮
+ * 留下、已经没有任何入口引用的旧 chunk 也算进来，于是「产物里有某段代码」可能只是
+ * 因为它躺在某个死文件里，而界面根本不会执行到它。
+ */
+function readPackedBundle() {
+  const webRoot = join(resourcesDir, 'web')
+  const html = readFileSync(join(webRoot, 'index.html'), 'utf8')
+  const names = [...html.matchAll(/assets\/([^"']+\.js)/g)].map((m) => m[1])
+  expect(names.length > 0, 'index.html 里没有引用任何 assets/*.js')
+  return names.map((name) => readFileSync(join(webRoot, 'assets', name), 'utf8')).join('\n')
+}
+
+/**
+ * 在产物里找一段文本，**字面量与转义形态都认**。
+ *
+ * 打包器可能把非 ASCII 写成 `\uXXXX`（取决于 esbuild 的 `charset`），那是同一段
+ * 代码的另一种写法，不是「没有这段代码」。只认字面量的话，这条断言会在换一次打包
+ * 配置之后突然变红，而代码一行没改 —— 那种红比不红更糟。
+ */
+function includesText(haystack, text) {
+  if (haystack.includes(text)) return true
+  const escaped = [...text]
+    .map((char) => `\\u${char.codePointAt(0).toString(16).padStart(4, '0')}`)
+    .join('')
+  return haystack.includes(escaped)
+}
+
+let packedBundle = ''
+check('能读出产物里被入口引用的脚本', () => {
+  packedBundle = readPackedBundle()
+  expect(packedBundle.length > 1000, `读出来的脚本只有 ${packedBundle.length} 字节，不像完整产物`)
+  return `${packedBundle.length} 字节`
+})
+
+// 三串标记各自守着更新链路上的一段，缺任何一串都说明这份产物不是当前源码构建的。
+// 选它们而不是选一个笼统的字符串，是为了让失败信息直接指向缺的是哪一段。
+const UPDATE_MARKERS = [
+  ['fanheDesktop', '宿主判定的桥标识（lib/host.ts）'],
+  ['重启更新到', '桌面态更新按钮的文案（lib/desktop-update.ts）'],
+  ['正在下载', '下载进度的文案（lib/desktop-update.ts）'],
+]
+
+for (const [marker, what] of UPDATE_MARKERS) {
+  check(`产物里含「${marker}」（${what}）`, () => {
+    expect(
+      includesText(packedBundle, marker),
+      `产物里找不到「${marker}」—— 这份前端不是当前源码构建的。` +
+        '先跑 `pnpm --filter @fanhe/web build`，再重新打包（dist:dir / dist）',
+    )
+  })
+}
+
+// 反例：证明上面那三条不是恒真。一条「怎么喂都通过」的断言比没有断言更危险 ——
+// 它会让人以为产物被验过了。
+check('反例 · 标记检查能证伪（随便编一段文本必须找不到）', () => {
+  expect(
+    !includesText(packedBundle, '这段文字不可能出现在产物里的任何地方'),
+    '随便编的文本也被判定为「找到了」—— 那么上面三条标记断言不可信',
+  )
+  return '如预期找不到'
+})
+
+check('反例 · 转义形态也要认得（否则换一次打包配置就会假红）', () => {
+  const escaped = [...'重启'].map((c) => `\\u${c.codePointAt(0).toString(16)}`).join('')
+  expect(includesText(escaped, '重启'), `转义形态 ${escaped} 没被认出`)
+  return escaped
+})
+
 check('resources/agent/agent.ts 存在且与源码逐字节一致', () => {
   const target = join(resourcesDir, 'agent', 'agent.ts')
   expect(
@@ -560,13 +679,30 @@ if (configuredSubject === null) {
     return '如预期抛错'
   })
 
-  // ⑤ 签名身份 —— 只在有报告时才验，缺报告时**明说未验证**，不当成通过。
+  // ⑤ 签名身份 —— 只在有**本轮**报告时才验，缺报告或报告陈旧时**明说未验证**，
+  // 不当成通过。
   const reportPath = join(releaseDir, 'signature-report.txt')
+  // 🔴 报告必须**比本轮产物新**。
+  //
+  // 只按文件名匹配是不够的：`梵禾 Work.exe` 每一轮都叫这个名字，于是上一轮留下的
+  // 报告照样「覆盖了本轮全部产物」，并给出一个看起来很权威的 `Status=Valid` ——
+  // 而本轮那个 exe 可能根本没签上。2026-10-13 实测到过这个假绿：报告说 Valid，
+  // 同一个 exe 的 PE 签名表却是空的（证书已从本机证书库里消失）。
+  // 一条会给出「已验证」的假象的断言，比没有断言危险得多。
+  const reportIsFresh = existsSync(reportPath) && statSync(reportPath).mtimeMs >= roundStart
+
   if (!existsSync(reportPath)) {
     console.log(
       '  未验证 签名身份报告不存在，本节目前只证明了「签上了」、**没有**证明「签成了谁」。\n' +
         '         先跑 `pnpm --filter @fanhe/desktop verify:sign` 生成报告（沙箱里 PowerShell 的\n' +
         '         stdout 会被吞掉，只有落盘这一条路），再重跑本脚本。',
+    )
+  } else if (!reportIsFresh) {
+    console.log(
+      '  未验证 签名身份报告比本轮产物旧（是上一轮留下的），已忽略。\n' +
+        '         重跑 `pnpm --filter @fanhe/desktop verify:sign` 生成本轮报告。\n' +
+        '         ⚠️ **不要**把「旧报告里写着 Valid」当成本轮签上了 —— 报告按文件名对应，\n' +
+        '         而应用本体每轮同名，旧报告会给出一个假的 Valid。',
     )
   } else {
     const report = parseSignatureReport(readFileSync(reportPath, 'utf8'))
