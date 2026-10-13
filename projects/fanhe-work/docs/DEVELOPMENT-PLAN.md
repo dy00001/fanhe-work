@@ -1944,10 +1944,43 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 
 **未完成 / 待裁决。** `signing:import` 需要一份真实 `.pfx`，本机没有，**未实测**；`-ExportPath` 的工作区守卫同样因无证书**未走到**。**`CN=Fanhe Work` 证书在本机仍不存在**（私钥不在，`HAS_PRIVATE_KEY=False`），本轮刻意未创建。裁决题面因此收窄成一句话：**有没有 `0604B238…` 这张证书的 `.pfx` 备份？**
 - **有** → `signing:import` 配合 `-ImportPath <pfx>` 导入，身份与档案吻合，闸放行，可直接发版；
-- **没有** → 私钥不可从产物反推，**轮换不可避免**。那就必须 `-AllowRotate` 新建，并**在每一台已装机器上补装新根**（`signing:cert` 第 3 步只装当前机器）；做不到这一点，那台机器就永久收不到更新，只能手工重装。
+- **没有** → 私钥不可从产物反推，**轮换不可避免**。那就必须 `-AllowRotate` 新建，并**在每一台已装机器上补装新根**（把 `scripts/fanhe-work-signing-public.cer` 拷过去跑 `signing:trust`，只装根、不建证书；`signing:cert` 第 4 步只装当前机器）；做不到这一点，那台机器就永久收不到更新，只能手工重装。
 ⚠️ v1 脚本**没有导出能力**（`-ExportPath` 是本轮新加的），且 6.3 第 6 条要求私钥不落在工作区 —— 所以「备份」只可能在工作区之外的某个地方，**若当初没手工导出过，那就是没有**。
 
 **验证结果（2026-10-13 22:xx）**：四道门禁 **598 项 0 失败**（desktop 122 → **142**，新增 20 项身份档案单测），`lint` / `typecheck` / `format:check` 全绿。`verify:pack` 实跑 **39 项（35 通过 / 4 失败）** —— 4 条失败**同源于一件事**（证书不在本机）：`梵禾 Work.exe` 未签名 → 报告里 `Status=NotSigned`、无主体、无指纹 → 「有内嵌签名」「每个产物都是 Valid」「主体与配置一致」「产物与档案一致」四条一起红。**这是正确的行为**：同一根因的四个面各报一条，比只报一条更容易定位；而新增那条在拿不到指纹时说的是「先解决上面那条」，不把人引去翻身份档案。
+
+
+### 9.57 T6-03e 目标机装根脚本化（`signing:trust` / `signing:trust-check`）
+
+**需求只有一句话：把「给目标机装根」做成脚本能力。** 提交 `c19d3e3`。选它的理由很实际 —— T6-03d 发现的文档错误（`electron-builder.yml` 写着「换机器必须先在目标机跑 `signing:cert`」）**能存活那么久，恰恰因为正确的手工步骤（`certutil -user -addstore -f Root`）没有脚本化对应物**。当初有 `signing:cert` 一个命令，错误指令与命令名对得上、看着就像有依据；而正确的路径只是散在文档里的几行 shell 命令，没有名字、无法被 `pnpm scripts` 查到自己是不是写错了。**让正确路径也有名字，它才有机会在没有被想起的地方拦住错误路径。**
+
+**新增能力（`create-signing-cert.ps1` v2，`TOOLING_VERSION` 仍为 2，属同版内扩能力而非新行为）。**
+
+| 改动 | 位置 | 作用 |
+| -- | -- | -- |
+| `-InstallTrustRoot` | 新分支 | **目标机专用**：读一个 `.cer`，装进 `TrustedPublisher` + `Root`，**不创建证书、不写身份档案、不涉及私钥** |
+| `-CheckTrustRoot` | 新分支 | 上面那步的只读版，退出码 0 = 这台机器能收到用该证书签的更新 |
+| `Get-PublicCertPath` | 新函数 | 公钥证书的**唯一**定位函数，默认落在 `scripts/fanhe-work-signing-public.cer`（版本控制内） |
+| `Install-TrustForCert` | 新函数 | 把「两个库、两种作用」的安装逻辑从第 4 步抽出来，与 `-InstallTrustRoot` **共用同一份实现** |
+| `Read-PublicCert` | 新函数 | 读 `.cer` 并在文件缺失时响亮报错（而不是拿个空对象继续走） |
+| `scripts/fanhe-work-signing-public.cer` | **入库**（766 B，SHA256 `550a4853…`，指纹 `0604B238…`，`HasPrivateKey=False`） | 原始身份**唯一剩下的凭据**，此前只有 `release/`（gitignored 构建输出目录）里的一份 |
+| npm 脚本 | `package.json` | `signing:trust`、`signing:trust-check` |
+| 头注「两种机器」 | 脚本头部 USAGE + `electron-builder.yml` `signtoolOptions` | 打包机（有私钥）跑 `signing:cert`；目标机（只有公钥）跑 `signing:trust`，**反过来做会永久断掉那台机器的更新** |
+
+**为什么公钥证书默认落在版本控制里，而不是 `release/`。** 那是构建输出目录，被 gitignore、每轮构建都会重写，于是它**只有一份且不在版本控制里**。而它恰好是整个事故中唯一活下来的文件 —— 2026-10-13 私钥丢了、档案丢了，两个已发布安装包的内嵌签名是唯一的线索。把它移进 `scripts/` 还有两个附带好处：换机器时 `git checkout` 就有，不用去打包机上拷；以及**身份一变它就会在 `git diff` 里显形** —— 对「静默换身份」这件整个 T6-03d 都在防的事，这是一道免费绊线。公钥没有泄露风险，与 6.3 第 6 条（私钥不进工作区）不冲突。
+
+**`-CheckTrustRoot` 的判据是「在不在 `Root` 里」，不是「链能不能建起来」。** 因为已记录下来的失效形态就是 `Root=False` → `Status=UnknownError`(1)。`X509Chain.Build` 的结果也报（`CHAIN_BUILDS=`），但**只作补充信号**：它是另一条代码路径（`X509Chain` 而非 `WinVerifyTrust`），不允许让它与实测结论不一致。本轮实测两种情况它都吻合（未装时 `False`、装上后 `True`），所以保留它、但不把判据押在它身上。
+
+**实测（2026-10-13 22:5x ~ 23:1x）。** ① 初始：`.cer` 在、`Root` 与 `TrustedPublisher` 均为 0 条 → `TRUST_ROOT=False`、`RESULT=NOT_TRUSTED`、退出码 1；② `-InstallTrustRoot` → `TRUST_PUBLISHER=added`、`TRUST_ROOT_CERTUTIL_EXIT=0 VERIFIED=True`、`RESULT=OK`；③ 复查 → `TRUST_ROOT=True`、`TRUST_PUBLISHER=True`、`CHAIN_BUILDS=True`、`TRUST_CERT_MATCHES_RECORD=True`、`RESULT=OK`；④ 重跑一次 → 两个库都报 `already-present`（幂等）；⑤ `-PublicCertPath` 指向不存在文件 → `RESULT=MISSING` + 指向版本控制内那份的提示，而不是把 override 路径说成「tracked copy」。
+
+**本机现状被这一步改变了。** 装根之后 `fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` 双双从 `UnknownError`(1) 回到 **`STATUS=Valid VALUE=0`**。**但这只修好「验」的那一半，没修「签」的那一半**：私钥仍不在本机，`dist:dir` 依旧报 `Cannot find certificate CN=Fanhe Work`，发版仍阻塞在 9.56 末尾那句裁决上。两件事必须分开记，否则下一次读状态的人会以为证书问题已经解决了。
+
+**顺手修掉三处会致害的内容（都在同一条链上，改完才发现它们互相掩护）。**
+- `electron-builder.yml` 原注「🔴 换机器必须先在目标机跑一次 `signing:cert`…… 证书换了等于换了签名主体」：**两句都错**。前半句会让目标机造出错误的根；后半句是 9.56 已纠正过的因果错误。已改为「两种机器」对照 + 指到 `signing:trust` / `signing:trust-check`。
+- `verify-pack.mjs` 里「Status 不是 Valid 最常见的原因…… 跑一次 `signing:cert`」：**照这条修会加剧问题**（新建证书 = 换身份）。已改为指向 `signing:trust`，并显式写明不要用 `signing:cert` 修它。
+- 五处「第 3 步」引用（`create-signing-cert.ps1` / `signing-identity.mjs` / `verify-pack.mjs` ×2 / `verify-signature.ps1`）是 v1 遗留：**信任那一步现在是第 4 步**（v2 在其前面插了档案与闸）。步号漂移单看无害，但它正指向「装根」这一处，而这一处的指令错一次就不可逆 —— 故一并校准。
+
+**验证结果（2026-10-13 23:1x）**：四道门禁 **598 项 0 失败**（desktop 142，本轮无新增单测 —— PowerShell 分支无法被 Node 单测触及，改用上面五组实测代替，并把关键判据写进了脚本注释），`lint` / `typecheck` / `format:check` 全绿。`verify:pack` 实跑 39 项（35 通过 / 4 失败），**4 条与基线逐字同因**，且失败提示已换成 `signing:trust` 的正确指向。
 
 
 本计划与实施方案配合使用。实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。

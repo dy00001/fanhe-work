@@ -456,7 +456,7 @@ check('resources/agent/package.json 内容为 {"type":"module"}', () => {
  *
  * 实测（本机，修复前后）：`STATUS=UnknownError VALUE=1` → 把自签证书加进
  * `CurrentUser\\Root` → `STATUS=Valid VALUE=0`。加根的动作在
- * `scripts/create-signing-cert.ps1` 第 3 步里，见那里的注释。
+ * `scripts/create-signing-cert.ps1` 第 4 步里，见那里的注释。
  */
 function peCertificateTable(file) {
   const buf = Buffer.alloc(4096)
@@ -776,7 +776,11 @@ if (configuredSubject === null) {
         notValid.length === 0,
         `以下产物的签名状态不是 Valid：${notValid.join(', ')}。\n` +
           '        更新器只在 Status=Valid 时校验发布者，其余一律拒绝安装。\n' +
-          '        最常见的原因是自签证书不在受信任根里 —— 跑一次 `pnpm --filter @fanhe/desktop signing:cert`。',
+          '        最常见的原因是自签证书不在本机受信任根里 —— 跑\n' +
+          '        `pnpm --filter @fanhe/desktop signing:trust`（**只装根、不建证书**），\n' +
+          '        先用 `signing:trust-check` 看一眼也行。\n' +
+          '        ⚠️ **不要**用 signing:cert 修这一条：它会新建一张证书、换掉签名身份，\n' +
+          '        已装机器反而永久收不到更新。断的是证书链的**信任根**，不是签名主体。',
       )
       const statuses = [...new Set(considered.map(([, v]) => v.status))]
       return `${considered.length} 个 exe，状态 ${statuses.join('/')}`
@@ -858,7 +862,7 @@ if (configuredSubject === null) {
   //   （`electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56`），
   //   而 `Status` 要求证书链走到一张**本机受信任**的根。
   //
-  // 自签根是**逐机**导入的（`create-signing-cert.ps1` 第 3 步只装当前用户），所以
+  // 自签根是**逐机**导入的（`create-signing-cert.ps1` 第 4 步只装当前用户），所以
   // **换证书 = 换信任根 = 已装机器上没有它 → Status 变 UnknownError(1) → 整段比对被
   // 跳过 → 更新被拒**。与 T6-03b 在本机撞到的是同一个闸，只是换机之后重现一次。
   //
@@ -924,8 +928,10 @@ if (configuredSubject === null) {
               '        ⇒ 已装机器上**没有**这张新证书的信任根，electron-updater 会因 Status≠Valid\n' +
               '          拒绝每一个下载到的版本，且不报错、只静默失败。两条出路：\n' +
               '          ① 把原证书找回来（`signing:import` 配合 -ImportPath <pfx>）—— 推荐；\n' +
-              '          ② 明确接受后果，在**每一台**已装机器上补装新根（`signing:cert` 第 3 步\n' +
-              '             只装当前机器，其余机器要各自导一次）。',
+              '          ② 明确接受后果，在**每一台**已装机器上补装新根：把\n' +
+              '             `scripts/fanhe-work-signing-public.cer`（已入版本控制）拷过去，在那台\n' +
+              '             机器上跑 `signing:trust`（只装根、不建证书）。打包机的 `signing:cert`\n' +
+              '             第 4 步只装当前机器，其余机器必须各自装一次。',
           )
           return `${thumbs.join(', ')}（与档案一致）`
         })

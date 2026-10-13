@@ -31,7 +31,7 @@
  *   （`electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56`）。
  *   而 `Status` 要求证书链能走到一张**本机受信任**的根。
  *
- * 自签证书的根是**逐机**导入的（`create-signing-cert.ps1` 第 3 步只装当前用户），
+ * 自签证书的根是**逐机**导入的（`create-signing-cert.ps1` 第 4 步只装当前用户，
  * 所以：**换证书 = 换信任根 = 已装机器上没有它 → `Status` 变 `UnknownError`(1)
  * → 整段比对被跳过 → 更新被拒**。与 T6-03b 在本机撞到的是同一个闸，只是换机后重现。
  *

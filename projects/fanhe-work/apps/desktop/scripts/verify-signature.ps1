@@ -30,7 +30,7 @@
 #   bar for a self-signed setup; it is a bar that cannot pass electron-updater.
 #
 # Measured here before the fix: STATUS=UnknownError VALUE=1, Root=False.
-# After `certutil -user -addstore -f Root` (see create-signing-cert.ps1 step 3):
+# After `certutil -user -addstore -f Root` (see create-signing-cert.ps1 step 4):
 # STATUS=Valid VALUE=0, Root=True. The numeric value is recorded below so the
 # comparison against electron-updater's `=== 0` is checkable by eye.
 #

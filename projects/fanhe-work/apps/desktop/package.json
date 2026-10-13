@@ -23,7 +23,9 @@
     "signing:check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -CheckOnly",
     "signing:adopt": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -AdoptFromArtifact -ArtifactPath",
     "signing:export": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -ExportPath",
-    "signing:import": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -ImportPath"
+    "signing:import": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -ImportPath",
+    "signing:trust": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -InstallTrustRoot",
+    "signing:trust-check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/create-signing-cert.ps1 -CheckTrustRoot"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*",

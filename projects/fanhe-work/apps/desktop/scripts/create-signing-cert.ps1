@@ -1,6 +1,7 @@
 # Create (or reuse, import, export) the self-signed code signing certificate used to
-# sign the Windows installer, put its public part into the user's Trusted Publishers,
-# and keep a record of the signing IDENTITY so it can be found again later.
+# sign the Windows installer, put its public part into the user's Trusted Publishers
+# AND Root stores, install that trust on another machine, and keep a record of the
+# signing IDENTITY so it can be found again later.
 #
 # WHY THIS FILE IS PURE ASCII
 #   PowerShell 5.1 decodes a .ps1 without a UTF-8 BOM as the system ANSI code page
@@ -44,7 +45,7 @@
 #   publisher comparison when `data.Status === 0` (Valid)
 #   (electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56), and
 #   Status requires the chain to reach a root TRUSTED ON THAT MACHINE. A
-#   self-signed root is imported per machine -- step 3 below only touches the
+#   self-signed root is imported per machine -- step 4 below only touches the
 #   current user -- so a new certificate means a new root that already-installed
 #   machines do not have: Status becomes UnknownError(1), the whole comparison is
 #   skipped, and the update is refused. Same gate T6-03b hit locally, recurring
@@ -74,12 +75,30 @@
 #   powershell -ExecutionPolicy Bypass -File apps/desktop/scripts/create-signing-cert.ps1 -ExportPath D:\keys\fanhe.pfx
 #   powershell -ExecutionPolicy Bypass -File apps/desktop/scripts/create-signing-cert.ps1 -ImportPath D:\keys\fanhe.pfx
 #   powershell -ExecutionPolicy Bypass -File apps/desktop/scripts/create-signing-cert.ps1 -AdoptFromArtifact -ArtifactPath release\fanhe-work-setup-0.1.1.exe
+#   powershell -ExecutionPolicy Bypass -File apps/desktop/scripts/create-signing-cert.ps1 -InstallTrustRoot
+#   powershell -ExecutionPolicy Bypass -File apps/desktop/scripts/create-signing-cert.ps1 -CheckTrustRoot -ReportPath <file>
 #
 #   -AdoptFromArtifact rebuilds the identity record from the signer certificate
 #   embedded in an already-signed artifact. It is the recovery path when the key is
 #   gone but a published build survives: it touches no certificate store, creates
 #   nothing, and only writes the record. HAS_PRIVATE_KEY is reported as False --
 #   knowing the identity does not make signing possible again.
+#
+#   -InstallTrustRoot / -CheckTrustRoot are for the OTHER kind of machine. There are
+#   two, and they need opposite things:
+#
+#     packaging machine -- holds the private key. Runs this script with no switches:
+#                          it exports the public .cer next to this script and trusts it.
+#     receiving machine -- holds only the public .cer (the tracked
+#                          scripts\fanhe-work-signing-public.cer, or a copy of it).
+#                          Runs -InstallTrustRoot, which adds it to Root and
+#                          TrustedPublisher and creates NO certificate.
+#
+#   Getting this backwards is not harmless: running the normal path on a receiving
+#   machine mints a new identity, and the published releases were signed by the old
+#   one, so that machine would reject every update. -CheckTrustRoot is the read-only
+#   form: exit 0 means this machine will accept updates signed by that certificate,
+#   exit 1 names the link that is missing.
 #
 #   -ReportPath writes a machine readable summary to a file. Use it from automation:
 #   this sandbox swallows PowerShell stdout, so the file is the only reliable channel.
@@ -101,7 +120,10 @@ param(
   [switch]$AllowRotate,
   [switch]$AllowWorkspaceExport,
   [switch]$AdoptFromArtifact,
-  [string]$ArtifactPath = ''
+  [string]$ArtifactPath = '',
+  [string]$PublicCertPath = '',
+  [switch]$InstallTrustRoot,
+  [switch]$CheckTrustRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,6 +136,7 @@ $TOOLING_VERSION = 2
 $FALLBACK_SUBJECT = 'CN=Fanhe Work'
 $ROTATE_WITHIN_DAYS = 30
 $IDENTITY_FILE_NAME = 'signing-identity.json'
+$PUBLIC_CERT_FILE_NAME = 'fanhe-work-signing-public.cer'
 
 $report = New-Object System.Collections.Generic.List[string]
 
@@ -231,6 +254,75 @@ function Test-PathInside([string]$Child, [string]$Parent) {
   return $c.StartsWith($p + '\', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+# Where the public half of the signing certificate lives.
+#
+# It defaults to a path INSIDE THE REPOSITORY (next to this script), on purpose. This
+# is the only part of the signing identity that may be copied to other machines, and
+# it is also the only part that is safe to version. Keeping it in `release/` -- where
+# it was produced until T6-03e -- gives it exactly one copy in a gitignored directory
+# that builds rewrite. Measured 2026-10-13: the private key was gone and nothing on the
+# machine remembered the identity; this .cer turned out to be the last surviving trace
+# of it, recoverable only because the installers happened to still carry the signature.
+# A tracked file also means a changed identity shows up as a git diff -- a free
+# tripwire for the one event that silently breaks every installed copy.
+function Get-PublicCertPath([string]$DesktopDir, [string]$Override) {
+  if (-not [string]::IsNullOrEmpty($Override)) { return Resolve-FullPath $Override }
+  return Join-Path (Join-Path $DesktopDir 'scripts') $PUBLIC_CERT_FILE_NAME
+}
+
+# Put a certificate into the two stores that matter on THIS machine. They do different
+# jobs and both are needed:
+#
+#   TrustedPublisher  suppresses the "unknown publisher" prompt.
+#   Root              makes the chain trusted. Without it Get-AuthenticodeSignature
+#                     reports UnknownError, NOT Valid, and electron-updater refuses
+#                     every update (see step 4 in the normal path).
+#
+# Shared by the normal signing path and by -InstallTrustRoot, so there is exactly one
+# implementation of "make this machine trust this certificate".
+function Install-TrustForCert([string]$CerPath, [string]$Thumbprint) {
+  $inPublisher = @(Get-ChildItem Cert:\CurrentUser\TrustedPublisher -ErrorAction SilentlyContinue |
+    Where-Object { $_.Thumbprint -eq $Thumbprint })
+  if ($inPublisher.Count -gt 0) {
+    Add-Report 'TRUST_PUBLISHER=already-present'
+  } else {
+    Import-Certificate -FilePath $CerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
+    Add-Report 'TRUST_PUBLISHER=added'
+  }
+
+  $inRoot = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+    Where-Object { $_.Thumbprint -eq $Thumbprint })
+  if ($inRoot.Count -gt 0) {
+    Add-Report 'TRUST_ROOT=already-present'
+    return
+  }
+
+  # certutil, not Import-Certificate: adding to Root through the cmdlet fails in a
+  # non-interactive session with "This operation does not allow the use of UI" -- it
+  # wants the root-certificate confirmation dialog. `certutil -user -addstore` writes
+  # HKCU and does not prompt (measured: exit 0).
+  $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+  $out = & $certutil '-user' '-addstore' '-f' 'Root' $CerPath 2>&1 | Out-String
+  $code = $LASTEXITCODE
+  $ok = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+    Where-Object { $_.Thumbprint -eq $Thumbprint }).Count -gt 0
+  Add-Report "TRUST_ROOT_CERTUTIL_EXIT=$code VERIFIED=$ok"
+  if (-not $ok) {
+    $oneLine = ($out -replace "`r?`n", ' | ').Trim()
+    Add-Report "TRUST_ROOT_FAILED out=$oneLine"
+    throw "could not add the certificate to CurrentUser\Root; electron-updater would refuse every update"
+  }
+}
+
+# Read a .cer and report what it is. Fails loudly on a missing file rather than
+# continuing with an empty object.
+function Read-PublicCert([string]$CerPath) {
+  if (-not (Test-Path -LiteralPath $CerPath)) {
+    throw "public certificate not found: $CerPath (pass -PublicCertPath <file>)"
+  }
+  return Get-PfxCertificate -FilePath $CerPath
+}
+
 $exitCode = 0
 
 try {
@@ -295,6 +387,112 @@ try {
       } elseif ($daysLeft -lt $ROTATE_WITHIN_DAYS) {
         Add-Report 'RESULT=EXPIRING reason=less-than-rotate-window'
         $exitCode = 1
+      } else {
+        Add-Report 'RESULT=OK'
+      }
+    }
+  } elseif ($InstallTrustRoot) {
+    # --- Install trust on THIS machine for an EXISTING certificate ---------------
+    # This is the RECEIVING machine -- the one that downloads updates -- not the
+    # packaging machine. It needs only the PUBLIC half, because a verifier only ever
+    # uses the public half. It must NOT create a certificate: a new certificate has a
+    # new root, and the published releases were signed by the recorded one.
+    #
+    # Measured 2026-10-13: the wrong instruction ("just run signing:cert on the target
+    # machine") survived in the docs for a while precisely because the correct manual
+    # step -- certutil -user -addstore Root -- had no scripted equivalent to contradict
+    # it. This branch is that equivalent.
+    #
+    # Nothing is created, no identity record is written, no private key is involved.
+    # The only side effect is two entries in CurrentUser stores.
+    $cerPath = Get-PublicCertPath $desktopDir $PublicCertPath
+    $cert = Read-PublicCert $cerPath
+    Add-Report 'MODE=install-trust-root'
+    Add-Report "PUBLIC_CERT=$cerPath"
+    Add-Report "CERT_SUBJECT=$($cert.Subject)"
+    Add-Report "CERT_THUMBPRINT=$($cert.Thumbprint)"
+    Add-Report "CERT_NOT_AFTER=$($cert.NotAfter)"
+    Add-Report "CERT_HAS_PRIVATE_KEY=$($cert.HasPrivateKey)"
+    if ($cert.HasPrivateKey) {
+      # A .pfx would carry the private key onto a machine that must never need it.
+      Add-Report 'WARN_CERT_CARRIES_PRIVATE_KEY=this file is not public-only; prefer a .cer'
+    }
+    if ($identity.State -eq 'ok') {
+      # The record is written by the packaging machine, so its presence here is
+      # incidental -- but if it IS here, a mismatch means this machine is being told
+      # to trust something other than what the record says published the releases.
+      $matchesRecord = ([string]$identity.Record.thumbprint) -eq ([string]$cert.Thumbprint)
+      Add-Report "TRUST_CERT_MATCHES_RECORD=$matchesRecord"
+      if (-not $matchesRecord) {
+        Add-Report "WARN_RECORD_MISMATCH=record=$($identity.Record.thumbprint) cert=$($cert.Thumbprint)"
+      }
+    }
+    Install-TrustForCert -CerPath $cerPath -Thumbprint $cert.Thumbprint
+    Add-Report 'RESULT=OK'
+  } elseif ($CheckTrustRoot) {
+    # --- Check trust on THIS machine, change nothing -----------------------------
+    # The read-only counterpart of -InstallTrustRoot, and deliberately the same shape
+    # as -CheckOnly: exit 0 means "this machine will accept updates signed by this
+    # certificate", exit 1 means "it will not", and the reason names the missing link.
+    #
+    # The verdict is store membership, not the chain build. The documented failure is
+    # `Root=False` -> Status=UnknownError(1) -> electron-updater skips its publisher
+    # comparison entirely; presence in CurrentUser\Root is exactly the condition that
+    # was measured to flip Status to Valid. The chain build is reported as a secondary
+    # signal because it is a different code path (X509Chain, not WinVerifyTrust) and
+    # must not be allowed to contradict the measurement.
+    $cerPath = Get-PublicCertPath $desktopDir $PublicCertPath
+    $trackedCerPath = Get-PublicCertPath $desktopDir ''
+    Add-Report 'MODE=check-trust-root'
+    Add-Report "PUBLIC_CERT=$cerPath"
+    Add-Report "TRACKED_PUBLIC_CERT=$trackedCerPath"
+    if (-not (Test-Path -LiteralPath $cerPath)) {
+      Add-Report 'RESULT=MISSING reason=no-public-certificate'
+      # Do not claim an override path is "the tracked copy" -- that advice is only
+      # true when no override was given, and sending someone to restore a file that
+      # was never supposed to be there is its own small wild goose chase.
+      if ($cerPath -eq $trackedCerPath) {
+        Add-Report "HINT=the tracked public certificate is missing; restore it from version control (git checkout -- apps/desktop/scripts/$PUBLIC_CERT_FILE_NAME)"
+      } else {
+        Add-Report "HINT=pass -PublicCertPath <file> pointing at an existing file, or omit it to use the tracked copy at $trackedCerPath"
+      }
+      $exitCode = 1
+    } else {
+      $cert = Get-PfxCertificate -FilePath $cerPath
+      $thumb = [string]$cert.Thumbprint
+      Add-Report "CERT_SUBJECT=$($cert.Subject)"
+      Add-Report "CERT_THUMBPRINT=$thumb"
+      Add-Report "CERT_NOT_AFTER=$($cert.NotAfter)"
+
+      $inRoot = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $thumb }).Count -gt 0
+      $inPublisher = @(Get-ChildItem Cert:\CurrentUser\TrustedPublisher -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $thumb }).Count -gt 0
+      Add-Report "TRUST_ROOT=$inRoot"
+      Add-Report "TRUST_PUBLISHER=$inPublisher"
+
+      $chainBuilds = $false
+      try {
+        $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $chainBuilds = $chain.Build($cert)
+      } catch {
+        $chainBuilds = $false
+      }
+      Add-Report "CHAIN_BUILDS=$chainBuilds"
+
+      if ($identity.State -eq 'ok') {
+        Add-Report "TRUST_CERT_MATCHES_RECORD=$(([string]$identity.Record.thumbprint) -eq $thumb)"
+      }
+
+      if (-not $inRoot) {
+        Add-Report 'RESULT=NOT_TRUSTED reason=certificate-is-not-in-CurrentUser-Root'
+        Add-Report 'HINT=run this script with -InstallTrustRoot to fix it; without the root Status is not Valid and electron-updater refuses every update'
+        $exitCode = 1
+      } elseif (-not $inPublisher) {
+        # The chain is fine, so updates verify. Only the prompt suppression is missing.
+        Add-Report 'RESULT=OK_WITH_WARNING reason=certificate-is-not-in-CurrentUser-TrustedPublisher'
+        Add-Report 'HINT=updates will still verify, but Windows may show an unknown-publisher prompt; -InstallTrustRoot also covers this store'
       } else {
         Add-Report 'RESULT=OK'
       }
@@ -511,44 +709,17 @@ try {
     # STATUS=UnknownError VALUE=1, Root=False; after: STATUS=Valid VALUE=0, Root=True.
     #
     # Only the public certificate is exported; the private key never leaves the store.
-    $cerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("fanhe-codesign-" + $cert.Thumbprint + '.cer')
-    try {
-      Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT -Force | Out-Null
-
-      $thumbprint = $cert.Thumbprint
-      $inPublisher = @(Get-ChildItem Cert:\CurrentUser\TrustedPublisher -ErrorAction SilentlyContinue |
-        Where-Object { $_.Thumbprint -eq $thumbprint })
-      if ($inPublisher.Count -gt 0) {
-        Add-Report 'TRUST_PUBLISHER=already-present'
-      } else {
-        Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
-        Add-Report 'TRUST_PUBLISHER=added'
-      }
-
-      $inRoot = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
-        Where-Object { $_.Thumbprint -eq $thumbprint })
-      if ($inRoot.Count -gt 0) {
-        Add-Report 'TRUST_ROOT=already-present'
-      } else {
-        # certutil, not Import-Certificate: adding to Root through the cmdlet fails in a
-        # non-interactive session with "This operation does not allow the use of UI" --
-        # it wants the root-certificate confirmation dialog. `certutil -user -addstore`
-        # writes HKCU and does not prompt (measured: exit 0).
-        $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
-        $out = & $certutil '-user' '-addstore' '-f' 'Root' $cerPath 2>&1 | Out-String
-        $code = $LASTEXITCODE
-        $ok = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
-          Where-Object { $_.Thumbprint -eq $thumbprint }).Count -gt 0
-        Add-Report "TRUST_ROOT_CERTUTIL_EXIT=$code VERIFIED=$ok"
-        if (-not $ok) {
-          $oneLine = ($out -replace "`r?`n", ' | ').Trim()
-          Add-Report "TRUST_ROOT_FAILED out=$oneLine"
-          throw "could not add the signing certificate to CurrentUser\Root; electron-updater would refuse every update"
-        }
-      }
-    } finally {
-      if (Test-Path $cerPath) { Remove-Item $cerPath -Force }
+    # The export goes to the TRACKED repository path (see Get-PublicCertPath), not to a
+    # temp file: this file is how another machine learns to trust this identity, so it
+    # has to outlive this run and this machine.
+    $cerPath = Get-PublicCertPath $desktopDir $PublicCertPath
+    $cerDir = Split-Path -Parent $cerPath
+    if (-not [string]::IsNullOrEmpty($cerDir) -and -not (Test-Path -LiteralPath $cerDir)) {
+      New-Item -ItemType Directory -Path $cerDir -Force | Out-Null
     }
+    Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT -Force | Out-Null
+    Add-Report "PUBLIC_CERT=$cerPath"
+    Install-TrustForCert -CerPath $cerPath -Thumbprint $cert.Thumbprint
 
     # --- 5. Export the identity so another machine can reproduce it --------------
     if (-not [string]::IsNullOrEmpty($ExportPath)) {

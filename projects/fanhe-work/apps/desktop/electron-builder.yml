@@ -92,10 +92,22 @@ win:
     # → electron-updater 的字符串比对，其中任何一步编码有损都会静默破坏更新校验。
     # 与产物名用 ASCII 是同一条理由。证书的 display name 对用户不可见。
     #
-    # 🔴 **换机器必须先在目标机跑一次 `signing:cert`**，否则打包会报找不到证书 ——
-    # 且证书换了等于换了签名主体，已装旧版的机器更新校验会失败。
+    # 🔴 **两种机器要做的事不一样，混了会静默破坏更新**：
+    #   · 打包机（有私钥）：跑 `signing:cert` —— 新建/复用证书，并把公开部分加进
+    #     本机 `CurrentUser\Root` 与 `TrustedPublisher`。
+    #   · 目标机（只有公钥，用来接收更新）：跑 `signing:trust` —— **只装信任根、
+    #     不建证书**。在这台机器上跑 `signing:cert` 会造出一张新证书，而已发布的包
+    #     是原来那张签的，于是这台机器永远收不到更新。它只需要
+    #     `scripts/fanhe-work-signing-public.cer`（**已入版本控制**，私钥不需要）。
+    #   · 查目标机装没装好：`signing:trust-check`（只读，退出码 0 = 能收更新）。
     #
-    # 🔴 那一步还会把这张自签证书的公开部分加进 `CurrentUser\Root`（受信任根）。
+    # 🔴 换证书之所以致命，**不是**因为签名主体变了 —— `publisherName` 由证书的
+    # Subject DN 推出来，同 CN 就同字符串，换一张同 CN 的证书不会让它变样。真正
+    # 断掉的是**信任根**：自签根逐机导入，已装机器上没有新根 → `Status` 不再是
+    # `Valid` → 发布者比对被整段跳过 → 更新被拒（不报错，只静默失败）。
+    #
+    # 🔴 打包机那一步（以及目标机的 `signing:trust`）都要把公开部分加进
+    # `CurrentUser\Root`（受信任根）。
     # **只加 `TrustedPublisher` 是不够的**，这是 T6-03b 实测出来的一个静默洞：
     # 仅进 `TrustedPublisher` 时 `Get-AuthenticodeSignature` 返回
     # `Status=UnknownError`（"证书链在不受信任的根中终止"），文件看起来签好了，

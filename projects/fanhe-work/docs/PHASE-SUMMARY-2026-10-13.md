@@ -8,6 +8,8 @@
 > 🔄 **补记（2026-10-13 21:xx，T7-02）**　本文件定稿于 19:30。其后又落了 **T7-02**（外壳界面来源固定 **T7-02a** + 客户端更新按钮 **T7-02b**，代码提交 `4c0ac8a`），因此有四处与下文不同：① 四道门禁 **536 → 578 项**（web 97 → 116、desktop 99 → 122）；② `verify:pack` **32 → 35 项**（本轮实测 **34 通过 / 1 FAIL**，FAIL 即签名那一项）；③ **打包验证受阻于本机签名证书已不在**（`dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`），产物为「新 web + 新 asar + 未签名 exe」的中间态，**未发新版**；④ 风险 R3 由「换机须重跑 `signing:cert`」升级为「**本机当前已无证书，且重建会让已装 `v0.1.0` / `v0.1.1` 的机器永久收不到更新 —— 待用户裁决**」（机制是**信任根逐机**，**不是**「换了签名主体」，见下条补记）。另新增一条进度事实：**「更新后设置丢失」的真根因已定位并修复**（界面来源/端口每次启动都变 → localStorage 与 IndexedDB 换分区；修法为端口候选链 + 单实例锁 + 旧来源发现）。详见 `WORK-STATUS.md` §4.1 与 §4.1.14、`DEVELOPMENT-PLAN.md` 9.55。**下文数字除上述四处外仍然有效。**
 >
 > 🔄 **补记（2026-10-13 22:xx，T6-03d）**　本文件定稿于 19:30，其后又落了 **T6-03d**（证书工具链 v1 → v2：签名身份档案 + 轮换闸 + 导入/导出 + `-CheckOnly` + `-AdoptFromArtifact`，代码提交 `6b05ca2`），因此再补五处：① 四道门禁 **578 → 598 项**（desktop 122 → **142**，新增 20 项签名身份档案单测）；② 🔴 **R3 的裁决题面已收窄** —— 原始签名身份**从已发布产物的内嵌签名里找了回来**（`CN=Fanhe Work` / `0604B2381B8666C99F247DA7B576A4647601A5A3`，v0.1.0 与 v0.1.1 同身份），本机身份档案已用 `signing:adopt` 补齐、**轮换闸已 armed**，题面只剩一句「有没有这张证书的 `.pfx` 备份」；③ **R3 的表述本身要更正**：换证书致命的原因**不是** `publisherName` 变了（它由证书 Subject DN 推出，同 CN 就同字符串），而是**信任根逐机** —— 换证书等于换信任根，已装机器上 `Status` 不再是 `Valid`，electron-updater 会跳过整段比对并拒绝更新；④ `verify:pack` **35 → 39 项**（新增第六节 **4 项**：身份档案比对 + 两条反例；本轮实跑 **35 通过 / 4 失败**，四条失败**同源于证书不在本机** —— exe 未签名 → 报告无 `Status=Valid`、无主体、无指纹）；⑤ **上一轮探针的清理漏了 `CA` 库**（只清了 `My` / `TrustedPublisher` / `Root`），`CN=Fanhe Guard Probe` 一直留在 `CurrentUser\CA`，本轮已清并复查 `GUARD_LEFT=0`。详见 `WORK-STATUS.md` §4.1.15、`DEVELOPMENT-PLAN.md` 9.56、`T6-03-UPDATE-CHANNEL.md` §十一。**下文数字除上述五处外仍然有效。**
+>
+> 🔄 **补记（2026-10-13 23:1x，T6-03e）**　其后又落了 **T6-03e 目标机装根脚本化**（新增 `signing:trust` / `signing:trust-check`，并把公钥 `.cer` 纳入版本控制），因此再补四处：① §4.1 的「前置」从**手工 `certutil`** 改为一条命令 —— 目标机只需公钥，拷过去跑 `signing:trust` 即可，**不建证书**；② §4.1 那条「⚠️ 脆弱点」**已消除**（`.cer` 移入 `apps/desktop/scripts/` 并入库，身份一变会在 `git diff` 里显形）；③ **本机根已补回**，§11.1 那句「本机连已发布旧包都验不过」**当天即被推翻** —— 两个安装包双双回到 `STATUS=Valid VALUE=0`；④ **顺手修掉三处会致害的既有内容**（`electron-builder.yml` 里「目标机跑 `signing:cert`」、`verify:pack` 里「Status 非 Valid 就跑 `signing:cert`」、五处 v1 遗留步号）。⚠️ **但那只修好「验」的一半**：私钥仍不在本机，`dist:dir` 依旧报 `Cannot find certificate CN=Fanhe Work`，**发版仍阻塞在上面那句裁决上**。四道门禁仍 **598 项 0 失败**、`verify:pack` 仍 39 项（35 过 / 4 失败，同因）。详见 `WORK-STATUS.md` §4.1.16、`DEVELOPMENT-PLAN.md` 9.57、`T6-03-UPDATE-CHANNEL.md` §十二。**下文数字除上述四处外仍然有效。**
 
 ---
 
@@ -119,8 +121,9 @@
 | 现状 | A（`v0.1.0`）与 B（`v0.1.1`）两端均已发布，链路两端齐备 |
 | 待做 | 在一台装着 v0.1.0 的机器上点一次更新，确认版本变成 0.1.1 |
 | 性质 | 须真人操作，自动化替代不了。完成后差分下载才第一次真正可用（`0.1.0.exe.blockmap` 已发布） |
-| 前置 | 🔴 **目标机（接收更新的机器）只需要「公钥」**：把根证书装进它的 `CurrentUser\Root`（再装进 `TrustedPublisher` 抑制弹窗）即可。**不要**在目标机跑 `signing:cert` —— 那会在那台机器上生成一张**新**证书，它的根与已发布包的签名者（`0604B238…`）不同，装了照样被判 `UnknownError`。`signing:cert` 是**开发机（打包机）**要跑的。公钥现成：`apps/desktop/release/signtool-public.cer`（指纹 `0604B238…`，无私钥）。**这一步不需要私钥，因此不受「证书丢失」那个阻塞影响。** |
-| ⚠️ 脆弱点 | 那张 `.cer` 是原始身份**唯一**剩下的凭据，而它躺在 `release/`（gitignored 的构建输出目录）里，**只有一份、不在版本控制**。它经历过 17:39 那轮构建仍在（说明 electron-builder 不是整目录清），但没有任何东西保护它。**公钥无泄露风险，应当纳入版本控制或另存一份。** |
+| 前置 | 🔴 **目标机（接收更新的机器）只需要「公钥」**：把根证书装进它的 `CurrentUser\Root`（再装进 `TrustedPublisher` 抑制弹窗）即可。**不要**在目标机跑 `signing:cert` —— 那会在那台机器上生成一张**新**证书，它的根与已发布包的签名者（`0604B238…`）不同，装了照样被判 `UnknownError`。`signing:cert` 是**开发机（打包机）**要跑的。公钥现成：**`apps/desktop/scripts/fanhe-work-signing-public.cer`（已纳入版本控制，指纹 `0604B238…`，无私钥）**。**这一步不需要私钥，因此不受「证书丢失」那个阻塞影响。** |
+| ✅ 已脚本化（2026-10-13 23:1x，T6-03e） | 上面这步**不再是手工 `certutil` 了**：把那个 `.cer` 拷到目标机，跑 **`pnpm --filter @fanhe/desktop signing:trust`**（只装根、**不建证书**）；不放心就先跑 **`signing:trust-check`**（只读，退出码 0 = 这台机器能收到用该证书签的更新，1 = 不能且指出缺哪一环）。**打包机本机已用它把根补回**：`fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` 双双从 `UnknownError`(1) 回到 `STATUS=Valid VALUE=0`。⚠️ 那只修好「验」的一半，私钥仍不在本机，`dist:dir` 依旧失败。见 `WORK-STATUS.md` §4.1.16、`DEVELOPMENT-PLAN.md` 9.57、`T6-03-UPDATE-CHANNEL.md` §十二。 |
+| ~~⚠️ 脆弱点~~ **✅ 已消除（2026-10-13 23:1x，T6-03e）** | ~~那张 `.cer` 是原始身份**唯一**剩下的凭据，而它躺在 `release/`（gitignored 的构建输出目录）里，**只有一份、不在版本控制**。~~ 它已从 `release/` 移到 **`apps/desktop/scripts/fanhe-work-signing-public.cer` 并纳入版本控制**（换机 `git checkout` 就有；且**身份一变它就会在 `git diff` 里显形**，对「静默换身份」是一道免费绊线）。公钥无泄露风险，与 6.3 第 6 条不冲突。 |
 
 ### 4.2 T5-05 访问策略（用户已决定维持现状）
 
@@ -150,7 +153,7 @@
 
 **R2 环境耦合（中）**。门禁依赖数据库容器在跑；数据库逐机，换机须靠备份重建；推送链路依赖凭据与代理配置，全局 `.gitconfig` 里存在 URL 级代理项，会压过 `http.proxy` 与环境变量。
 
-**R3 签名证书与信任根逐机（中，2026-10-13 22:xx 已收窄并更正表述）**。自签证书在 `CurrentUser\My`，信任根在 `CurrentUser\Root`，两者均随机器不随盘。换机必须重跑 `signing:cert`，否则打包报找不到证书、更新校验失败。⚠️ **「证书更换等于更换签名主体」这句是错的，已更正**：`publisherName` 由证书的 Subject DN 推出来（`app-builder-lib` 的 `computePublisherName`），**同 CN 就同字符串**，换证书不会让它变样；真正断掉的是**信任根** —— 换证书等于换根，已装机器上 `Status` 不再是 `Valid`(0)，electron-updater 会跳过整段发布者比对并拒绝更新。**结论（已装机器收不到更新）不变，要补的是信任根。** T6-03d 起有 `signing:check` 只读自检与轮换闸（`-AllowRotate`）挡住「静默换身份」，原始身份也已从产物里找回并写进本机档案，题面只剩「有没有 `.pfx` 备份」，见 `WORK-STATUS.md` §4.1 与 §4.1.15。
+**R3 签名证书与信任根逐机（中，2026-10-13 22:xx 已收窄并更正表述；23:1x 目标机侧已脚本化）**。自签证书在 `CurrentUser\My`，信任根在 `CurrentUser\Root`，两者均随机器不随盘。换机必须重跑 `signing:cert`，否则打包报找不到证书、更新校验失败。⚠️ **「证书更换等于更换签名主体」这句是错的，已更正**：`publisherName` 由证书的 Subject DN 推出来（`app-builder-lib` 的 `computePublisherName`），**同 CN 就同字符串**，换证书不会让它变样；真正断掉的是**信任根** —— 换证书等于换根，已装机器上 `Status` 不再是 `Valid`(0)，electron-updater 会跳过整段发布者比对并拒绝更新。**结论（已装机器收不到更新）不变，要补的是信任根。** T6-03d 起有 `signing:check` 只读自检与轮换闸（`-AllowRotate`）挡住「静默换身份」，原始身份也已从产物里找回并写进本机档案，题面只剩「有没有 `.pfx` 备份」，见 `WORK-STATUS.md` §4.1 与 §4.1.15。**T6-03e 起目标机侧也有名字了**：`signing:trust`（只装根、不建证书）+ `signing:trust-check`（只读自检），公钥 `.cer` 已纳入版本控制（`apps/desktop/scripts/fanhe-work-signing-public.cer`），本机根已补回、两个已发布安装包恢复 `STATUS=Valid`（§4.1 前置与脆弱点两处已随之更新）。
 
 **R4 数据隔离语义（低，属设计）**。子账号之间看不到对方数据，notes / events / launch_profiles 均按 `user_id` 隔离，权限点只管功能开关。主账号汇总查看需要额外的数据层授权。
 
@@ -182,6 +185,12 @@
 | `docs/WORK-STATUS.md` | §2.3 提交表补入 `5fd7f84` 之后的 17 笔并更新 HEAD；§2.4 门禁 530 改 536、e2e 149 改 150；§7 换机步骤第 9、10 步判据同步；§2.1、§4.1、§4.1.0、§4.3 同步 v0.1.1 发布、T5-05 决定与阶段七登记状态 |
 | `docs/DEVELOPMENT-PLAN.md` | 头部「当前状态」与第九章总述同步至阶段六收口、536 项、e2e 150、T5-05 决定；9.51 节加阶段七登记勘误 |
 | `docs/PHASE-SUMMARY-2026-10-13.md` | 本文件，新建 |
+| `apps/desktop/scripts/create-signing-cert.ps1` | **T6-03e**：新增 `-InstallTrustRoot` / `-CheckTrustRoot` 两个分支与三个函数（`Get-PublicCertPath` / `Install-TrustForCert` / `Read-PublicCert`），第 4 步改为导出到版本控制内路径，头部补「两种机器」 |
+| `apps/desktop/scripts/fanhe-work-signing-public.cer` | **T6-03e 新增入库**（766 字节，指纹 `0604B238…`，公钥；自 `release/signtool-public.cer` 复制，指纹一致） |
+| `apps/desktop/package.json` | **T6-03e**：新增 `signing:trust` / `signing:trust-check` |
+| `apps/desktop/electron-builder.yml` | **T6-03e**：「目标机必须跑 `signing:cert`」两句错误改为「两种机器」对照 |
+| `apps/desktop/scripts/verify-pack.mjs` | **T6-03e**：Status 非 Valid 的提示指向 `signing:trust` 而非 `signing:cert`；漂移出路的表述同步；两处步号校准 |
+| `docs/WORK-STATUS.md` / `docs/DEVELOPMENT-PLAN.md` / `docs/T6-03-UPDATE-CHANNEL.md` | **T6-03e**：新增 §4.1.16 / 9.57 / §十二；头部与 R3 同步 |
 | `交接-20261012/README.md` | 快照时点刷新为 `6e5ff78`，第八节下一步同步 |
 
 ### 6.3 存储分工（谁进 GitHub、谁只在 U 盘）

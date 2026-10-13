@@ -429,7 +429,7 @@ logger.warn(`Sign verification failed, installer signed with incorrect certifica
 | `StatusMessage` | `A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider` | （空） |
 | 在 `CurrentUser\Root` 里 | `False` | `True` |
 
-修法（已写进 `create-signing-cert.ps1` 第 3 步）：**把自签根证书也加进 `CurrentUser\Root`。**
+修法（已写进 `create-signing-cert.ps1` 第 4 步）：**把自签根证书也加进 `CurrentUser\Root`。**
 
 ```powershell
 certutil -user -addstore -f Root <cert.cer>
@@ -668,6 +668,8 @@ win:
 
 2026-10-13 实测：`Cert:\CurrentUser\My` 为空 → `dist:dir` 报 `⨯ Cannot find certificate CN=Fanhe Work`。此时唯一看得见的补救动作是重跑 `signing:cert`，而它会**静默**造出一张新证书。更糟的是本机**连已发布的旧包都验不过**（两个安装包的 `Status` 都是 `UnknownError`(1)），因为原始根也已从 `Root` 消失。
 
+> ⏱ **后记（§十二，T6-03e）**：本段最后那句「连已发布的旧包都验不过」**当天 23:1x 已不成立** —— 用新做的 `signing:trust` 把公钥证书装回 `CurrentUser\Root`，两个安装包双双回到 `STATUS=Valid VALUE=0`。但那只修好「验」的一半，私钥仍不在本机，`dist:dir` 依旧失败。
+
 要说明的是「没人记得」这句话**说重了**：`WORK-STATUS.md` 4.1.12 与 `DEVELOPMENT-PLAN.md` 9.53 **都写着**那个指纹。但它是散文里的一串字符 —— **机器读不到、构建前检查用不上**。所以缺口精确地是：**缺一份机器可读、且能被流程真正执行的记录**。「文档里写过」与「流程会拦住你」是两件事：前者靠人想起来去翻，后者不靠。
 
 ### 11.2 🔴 「换了证书为什么致命」—— 上一轮写错了因果，这里纠正
@@ -689,7 +691,7 @@ electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56
   if (data.Status === 0) { ...比对 publisherNames... }
 ```
 
-`Status` 要求证书链走到一张**本机受信任**的根；自签根是**逐机**导入的（`create-signing-cert.ps1` 第 3 步只装当前用户）。所以：
+`Status` 要求证书链走到一张**本机受信任**的根；自签根是**逐机**导入的（`create-signing-cert.ps1` 第 4 步只装当前用户，目标机则用 `signing:trust` 单独装）。所以：
 
 > **换证书 = 换信任根 = 已装机器上没有它 → `Status` 变 `UnknownError`(1) → 整段比对被跳过 → 更新被拒。**
 
@@ -732,3 +734,66 @@ electron-updater/out/windowsExecutableCodeSignatureVerifier.js:56
 **遗留**：`signing:import` 需要一份真实 `.pfx`，本机没有，**未实测**；`-ExportPath` 的工作区守卫同样**未走到**。`CN=Fanhe Work` 的私钥在本机仍不存在，本轮刻意未创建 —— 裁决题面见 `WORK-STATUS.md` 4.1。
 
 **向下兼容**：脚本名、`-Subject` / `-ValidYears` / `-ReportPath` 三个参数、报告里原有六个键（`SUBJECT` / `THUMBPRINT` / `NOT_AFTER` / `HAS_PRIVATE_KEY` / `EKU` / `RESULT`）**一字未改**；新增参数全部可选；**没有档案的机器行为与 v1 完全一致**。四道门禁 **598 项 0 失败**。提交 `6b05ca2`。
+
+
+## 十二、T6-03e 目标机装根脚本化（`signing:trust` / `signing:trust-check`，2026-10-13 23:1x）
+
+§六 ~ §十一 一路把「签」「记」「验」都做成了可执行的东西，但**「给目标机装信任根」始终是一段散在文档里的手工 `certutil` 命令**。这一节补的就是它。
+
+### 12.1 为什么要做：正确路径没有名字，就拦不住错误路径
+
+11.2 把「换证书为什么致命」的因果纠正过来了，结论是**要补的是信任根**。但纠正一个说法本身不做事 —— 目标机的运维动作仍然是：
+
+```bash
+# 手册里的做法：把 .cer 拷过去，然后手工执行
+certutil -user -addstore -f Root fanhe-work-signing-public.cer
+```
+
+而 11.1 记的那条**文档错误**（`electron-builder.yml` 写着「换机器必须先在目标机跑 `signing:cert`」）能存活那么久，原因正在这里：**当时有一个 `signing:cert` 命令，错指令与命令名对得上、看一眼就像有依据；而正确的路径没有名字** —— 没名字的东西没法被 `pnpm scripts` 列出来，也没法在审阅一条指令时被顺手发现「不存在这个组合」。**让正确路径也有名字，它才有机会在没有被想起的地方拦住错误路径。**
+
+顺带说明「装根」为什么值得单独一个命令、而不是继续藏在 `signing:cert` 里：`signing:cert` 的职责是「本机有私钥，我要打包」，它的第 4 步顺手装根只是副作用；而目标机的职责是「我要收更新」，它**绝不能**触发第 1~3 步（那会造一张新证书）。混淆两者的代价是不可逆的 —— 已装机器从此永久收不到更新，且不报错。
+
+### 12.2 两种机器，两套动作
+
+| | 打包机 | 目标机 |
+| -- | -- | -- |
+| 有什么 | 私钥（`CurrentUser\My`） | 只有公钥 `.cer` |
+| 跑什么 | `signing:cert` | `signing:trust` |
+| 会创建证书吗 | 会（复用优先，有档案时受闸约束） | **不会** |
+| 会写身份档案吗 | 会 | **不会** |
+| 装哪两个库 | `TrustedPublisher` + `Root` | `TrustedPublisher` + `Root`（**同一份** `Install-TrustForCert` 实现） |
+| 只读自检 | `signing:check` | `signing:trust-check` |
+
+`-CheckTrustRoot` 是 `-InstallTrustRoot` 的只读版，形状刻意与 `-CheckOnly` 一致：**退出码 0 = 这台机器能收到用该证书签的更新；退出码 1 = 不能，且 `reason` 指出缺哪一环**（`certificate-is-not-in-CurrentUser-Root` / `certificate-is-not-in-CurrentUser-TrustedPublisher` / `no-public-certificate`）。
+
+### 12.3 判据是「在不在 `Root` 里」，不是「链能不能建起来」
+
+`Status=UnknownError` 的已记录形态就是 `Root=False`，所以 `-CheckTrustRoot` 的判据取**库成员关系**：证书在不在 `CurrentUser\Root` 里。
+
+`X509Chain.Build` 的结果也报（`CHAIN_BUILDS=`），但只作补充信号 —— 它是另一条代码路径（`X509Chain` 而非 `WinVerifyTrust`），**不允许让它与实测结论互相矛盾**。本轮两种情况都吻合（未装 `False`、装上 `True`），所以保留它作交叉印证，但不把判据押在它身上。
+
+`TrustedPublisher` 单列而不合并：它**只抑制「未知发布者」弹窗、不让链变可信**（T6-03b 的结论），所以缺它报 `RESULT=OK_WITH_WARNING`（更新照验，只是可能弹窗）而不报 `NOT_TRUSTED`。两者的分工写进了 `Install-TrustForCert` 的注释 —— 这是 T6-03b 花了一轮才弄清的事。
+
+### 12.4 公钥证书进了版本控制，并成为一道免费绊线
+
+`fanhe-work-signing-public.cer` 从 `release/`（gitignored 构建输出目录、每轮重写、**只有一份**）移到 `scripts/` 并入库。三个理由：
+
+1. **它正是整个事故中唯一活下来的凭据** —— 私钥丢了、档案丢了，两个已发布安装包的内嵌签名是唯一的线索；把证据放在会被下一次构建冲掉的目录里，等于没有证据；
+2. 换机时 `git checkout` 就有，不用去打包机上拷；
+3. **身份一变它就会在 `git diff` 里显形** —— 对「静默换身份」这件 §十一 全程都在防的事，这是一道不需要人记得的绊线。
+
+公钥没有泄露风险，与 `DEVELOPMENT-PLAN.md` 6.3 第 6 条（私钥不进工作区）不冲突：搬进版本控制的是**公开那一半**。
+
+### 12.5 顺手修掉三处会致害的内容
+
+- **`electron-builder.yml` 的「🔴 换机器必须先在目标机跑一次 `signing:cert`」**：这句同时含两个错误 —— 目标机跑 `signing:cert` 会造出错误的根；「证书换了等于换了签名主体」是 11.2 已纠正过的因果错误。改成「两种机器」对照 + 指向 `signing:trust` / `signing:trust-check`。
+- **`verify-pack.mjs` 的「Status 不是 Valid 最常见的原因…… 跑一次 `signing:cert`」**：**照这条修会加剧问题**。改成指向 `signing:trust`，并显式写明不要用 `signing:cert` 修它、断的是信任根不是签名主体。
+- **五处 v1 遗留步号**：`create-signing-cert.ps1` / `signing-identity.mjs` / `verify-pack.mjs` ×2 / `verify-signature.ps1` 里都写着「第 3 步」，而**信任那一步现在是第 4 步**（v2 在它前面插了档案与轮换闸）。步号漂移单看无害，但它正指向「装根」这一处，而这一处的指令错一次就不可逆 —— 故一并校准。
+
+### 12.6 实测与本机状态的变化
+
+五组实测（初始 → 装上 → 复查 → 幂等 → 错误路径）见 `WORK-STATUS.md` 4.1.16，全部符合设计。**本机根补回后 `fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` 双双 `STATUS=Valid VALUE=0`** —— 11.1 那句「连旧包都验不过」当天即被推翻。
+
+⚠️ **但这一步只修好「验」的一半，没修「签」的一半。** 私钥仍不在本机，`dist:dir` 依旧报 `Cannot find certificate CN=Fanhe Work`，**发版仍阻塞在裁决题面上**（`WORK-STATUS.md` 4.1）。两件事必须分开记，否则下一个读状态的人会以为证书问题已经解决了。
+
+四道门禁 **598 项 0 失败**，`verify:pack` 39 项（35 通过 / 4 失败）与基线逐字同因。本轮**无新增单测** —— PowerShell 分支无法被 Node 单测触及，改用实测代替，关键判据写进脚本注释。向下兼容：`signing:cert` 语义与报告键一字未改，新增参数全部可选。
