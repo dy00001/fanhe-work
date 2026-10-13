@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { versionManifestRequest } from './api'
+import { currentHost } from './host'
 import { type UpdateNotice, buildUpdateNotice, startVersionCheck } from './version-check'
 import { APP_VERSION, BUILD_TIME, COMMIT_SHA } from './version'
 
@@ -33,6 +34,16 @@ import { APP_VERSION, BUILD_TIME, COMMIT_SHA } from './version'
  * 于是它无法在 Node 里被直接测（理由见 `version-check.ts` 的文件头）。
  */
 const LOCAL = { version: APP_VERSION, builtAt: BUILD_TIME, commitSha: COMMIT_SHA } as const
+
+/**
+ * 当前宿主，同样在模块加载时取一次。
+ *
+ * 预加载脚本在页面脚本之前执行，所以到这一行时桥已经在了；而宿主在一次会话里不会变
+ * （外壳不会在某次刷新后变成浏览器），每次 refresh 重读只会多一次全局访问。
+ *
+ * 传给 `buildUpdateNotice` 而不是让那一层自己判断：判定层不 import 相对路径模块。
+ */
+const HOST = currentHost()
 
 /**
  * 版本检查的状态，供账号菜单消费。
@@ -77,7 +88,7 @@ export function useVersionCheck(): { notice: UpdateNotice | null; refresh: () =>
       .then((comparison) => {
         // 已被后一次取代时不写状态。
         if (inFlight.current !== check) return
-        setNotice(buildUpdateNotice(comparison, LOCAL.version))
+        setNotice(buildUpdateNotice(comparison, LOCAL.version, HOST))
       })
       .catch(() => {
         // startVersionCheck 本身不抛（见 version-check.ts 文件头）。这一支是给

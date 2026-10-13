@@ -146,7 +146,29 @@ export type UpdateNotice = {
   text: string
   /** 悬停说明：把两边的版本号都写出来。 */
   title: string
+  /**
+   * 这一行被选中时该做什么。
+   *
+   * `reload` —— 浏览器态：刷新页面就会拿到新的前端产物。
+   * `install` —— 桌面态：界面是内置产物，刷新不会变；要交给外壳的更新通道去装。
+   *   见 `lib/host.ts` 的文件头（这是 T6-03b 收口 T6-02 的那一处）。
+   */
+  action: UpdateNoticeAction
 }
+
+export type UpdateNoticeAction = 'reload' | 'install'
+
+/**
+ * 宿主。**内联而不是从 `lib/host.ts` import。**
+ *
+ * 理由与下面 `formatVersionLabel` 那段一样：本模块 import 任何相对路径模块都会撞上
+ * 文件头那节的扩展名问题，连纯函数用例都跑不了。
+ *
+ * 「同一套取值写两处会漂移」由测试钉住：`version-check.test.mjs` 里直接把
+ * `detectHost(...)` 的返回值喂给 `buildUpdateNotice`，所以两个模块对这一组取值的
+ * 理解一旦分叉，用例就会红。
+ */
+export type UpdateNoticeHost = 'browser' | 'desktop'
 
 /**
  * 比对结果 → 提示文案。只有 `outdated` 提示。
@@ -155,22 +177,40 @@ export type UpdateNotice = {
  * `unknown` 是「无法判断」—— 把无法判断报成「有更新」比不报更糟（它会让用户在
  * 没有更新的情况下反复去找「怎么更新」，而那个按钮不存在）。
  *
- * 传 `localVersion` 做参数而不是读模块常量：这样测试能钉住文案而不必改构建常量，
- * 与 `lib/version.ts` 里那批 `build*` / `format*` 同款。**不给默认值** —— 这一层不
- * import `version.ts`（理由见文件头），而一个「忘了传就报错」的必填参数比一个
- * 悄悄退化成 `undefined` 的默认值更容易在测试里发现。
+ * 传 `localVersion` 与 `host` 做参数而不是读模块常量：这样测试能钉住文案而不必改
+ * 构建常量，与 `lib/version.ts` 里那批 `build*` / `format*` 同款。**不给默认值** ——
+ * 这一层不 import `version.ts` / `host.ts`（理由见文件头），而一个「忘了传就报错」的
+ * 必填参数比一个悄悄退化成 `undefined` 的默认值更容易在测试里发现。
+ *
+ * 🔴 **两个宿主的文案必须不同，且这不是装饰。** 桌面外壳加载的是内置产物，
+ * 「刷新页面即可更新」在那儿是一句做不到的话：用户照做、页面没变，此后他不再信这条
+ * 提示 —— 而这一行的全部价值就是让他知道有新版本。
  */
 export function buildUpdateNotice(
   comparison: VersionComparison,
   localVersion: string,
+  host: UpdateNoticeHost,
 ): UpdateNotice | null {
   if (comparison.outcome !== 'outdated') return null
 
   const latestLabel = formatVersionLabel(comparison.latest.version)
+  if (host === 'desktop') {
+    return {
+      latestVersion: comparison.latest.version,
+      // 「点此重启更新」而不是「重启后生效」：外壳把这一行接到了真实的安装动作上
+      // （T6-03b 的 `update:install`，它装完就让应用退出重启），把话说成「你自己去重启」
+      // 会让人以为还得手动做什么，而现在点一下就够了。
+      text: `已可更新到 ${latestLabel}，点此重启更新`,
+      title: `本机 ${formatVersionLabel(localVersion)} · 服务端 ${latestLabel} · 点此安装并重启`,
+      action: 'install',
+    }
+  }
+
   return {
     latestVersion: comparison.latest.version,
     text: `服务端已是 ${latestLabel}，刷新页面即可更新`,
     title: `本机 ${formatVersionLabel(localVersion)} · 服务端 ${latestLabel}`,
+    action: 'reload',
   }
 }
 

@@ -205,6 +205,25 @@ check('asar 不含 src/ 与 test/（files 是显式白名单，不是默认 **/*
   )
 })
 
+// electron-updater 是运行期依赖（T6-03b）：主进程 `require('electron-updater')`。
+// 它在 `dependencies` 里，electron-builder 会自动收进 asar —— **但这属于「打包器
+// 行为」而不是「我们的配置」**（electron-builder.yml 的 files 里并没有列它），
+// 与 @fanhe/shared 那一组是同一种情况，所以同样要钉住。
+//
+// 为什么不能只靠「typecheck 通过」：typecheck 看的是 node_modules 里的类型，
+// 而这里要证明的是**它进了产物**。少了它，安装后启动就会在加载期抛模块解析错误。
+for (const required of [
+  '/node_modules/electron-updater/package.json',
+  '/node_modules/electron-updater/out/main.js',
+]) {
+  check(`asar 含 ${required}`, () => {
+    expect(
+      asarFiles.includes(required),
+      `asar 里没有 ${required}。它必须是 apps/desktop/package.json 的 **dependencies**（不是 devDependencies），否则 electron-builder 不会收它`,
+    )
+  })
+}
+
 check('asar 内的版本号等于仓库根版本', () => {
   const asar = loadAsar()
   const manifest = JSON.parse(asar.extractFile(asarPath, 'package.json').toString('utf8'))
@@ -281,10 +300,20 @@ check('resources/agent/package.json 内容为 {"type":"module"}', () => {
  * 而本进程起不了子进程（原因见文件头），且本沙箱的 PowerShell 会静默吞掉 stdout。
  * 那份 .ps1 把结果写进文件、这里读回来，是唯一能真正拿到文本的通道。
  *
- * 为什么不把报告的「Status」当成通过判据：`Status` 把「签名存在」与
- * 「证书链可信」混在一个字段里，而自签证书在任何没导入过它的机器上必然是
- * 不可信的 —— 那不是打包缺陷。所以这里只要求 `Status !== 'NotSigned'`，
- * 并把实际 Status 原文记进输出，不粉饰。
+ * 🔴 判据是报告里的 `Status == Valid`（数值 0），不是 `Status != NotSigned`。
+ *
+ * 这里原来写的是后者，理由是「自签证书在没导入过它的机器上必然不可信，那不是打包
+ * 缺陷」。**那条理由错了，而且它掩盖了一个真的阻塞项**（T6-03b 才发现）：
+ *
+ *   electron-updater 的 Windows 校验只在 `data.Status === 0` 时才进入发布者名比对
+ *   （`windowsExecutableCodeSignatureVerifier.js`），而 `SignatureStatus` 的 0 就是
+ *   `Valid`。其余任何值都会整段跳过匹配、**更新被拒** —— 包括未受信链产生的
+ *   `UnknownError`（数值 1）。所以对自签方案来说，「不是 NotSigned」不是一个更低的
+ *   门槛，而是一个**永远过不了 electron-updater** 的门槛。
+ *
+ * 实测（本机，修复前后）：`STATUS=UnknownError VALUE=1` → 把自签证书加进
+ * `CurrentUser\\Root` → `STATUS=Valid VALUE=0`。加根的动作在
+ * `scripts/create-signing-cert.ps1` 第 3 步里，见那里的注释。
  */
 function peCertificateTable(file) {
   const buf = Buffer.alloc(4096)
@@ -320,9 +349,14 @@ function peCertificateTable(file) {
  * 读回 `scripts/verify-signature.ps1` 写出的报告。
  *
  * 报告是 `KEY=VALUE` 与 `EXE=<名字>` 交替的平铺文本（.ps1 里刻意不写 JSON，
- * 免得为了转义再引入一层出错机会）。这里只取签名身份相关的四列，其余忽略。
+ * 免得为了转义再引入一层出错机会）。这里只取签名身份相关的几列，其余忽略。
  * 解析不出任何 EXE 时 `byName` 为空，由调用方的断言把它报成失败 ——
  * 而不是静默地「没有坏消息就是好消息」。
+ *
+ * `statusValue` 是 `SignatureStatus` 的数值。**它是判据本身**（见上面的
+ * 「判据是 Status == Valid」那节）：electron-updater 比的就是这个数字与 0，
+ * 所以这里也按数字比，而不是按 `Status` 那个名字比 —— 名字是给人看的，
+ * 数值才是上游真正用的东西。
  */
 function parseSignatureReport(text) {
   const byName = new Map()
@@ -332,11 +366,11 @@ function parseSignatureReport(text) {
     const line = rawLine.replace(/^\uFEFF/, '')
     const exe = /^EXE=(.+)$/.exec(line)
     if (exe !== null) {
-      current = { name: exe[1], status: '', subject: '', thumbprint: '' }
+      current = { name: exe[1], status: '', statusValue: '', subject: '', thumbprint: '' }
       byName.set(current.name, current)
       continue
     }
-    const kv = /^\s+(PATH|SIZE|STATUS|SUBJECT|THUMBPRINT|ERROR)=([\s\S]*)$/.exec(line)
+    const kv = /^\s+(PATH|SIZE|STATUS|STATUS_VALUE|SUBJECT|THUMBPRINT|ERROR)=([\s\S]*)$/.exec(line)
     if (kv !== null && current !== null) {
       const key = kv[1].toLowerCase()
       if (key in current) current[key] = kv[2].trim()
@@ -523,11 +557,30 @@ if (configuredSubject === null) {
       return `${considered.length} 个`
     })
 
-    check('签名报告里每个产物都不是 NotSigned', () => {
-      const notSigned = considered.filter(([, v]) => v.status === 'NotSigned').map(([k]) => k)
-      expect(notSigned.length === 0, `报告为 NotSigned：${notSigned.join(', ')}`)
+    check('签名报告里每个产物都是 Valid（Status 数值为 0）', () => {
+      // 按**数值**比，不按名字比：electron-updater 的判断是 `data.Status === 0`，
+      // 而 0 就是 Valid。下面这条一旦变红，意味着更新通道会拒绝每一个下载到的版本。
+      const notValid = considered
+        .filter(([, v]) => v.statusValue !== '0')
+        .map(([k, v]) => `${k}(Status=${v.status || '?'} 数值=${v.statusValue || '?'})`)
+      expect(
+        notValid.length === 0,
+        `以下产物的签名状态不是 Valid：${notValid.join(', ')}。\n` +
+          '        更新器只在 Status=Valid 时校验发布者，其余一律拒绝安装。\n' +
+          '        最常见的原因是自签证书不在受信任根里 —— 跑一次 `pnpm --filter @fanhe/desktop signing:cert`。',
+      )
       const statuses = [...new Set(considered.map(([, v]) => v.status))]
       return `${considered.length} 个 exe，状态 ${statuses.join('/')}`
+    })
+
+    // 反例：把「Valid」放宽成「不是 NotSigned」会漏掉哪一种情况，就在这条里说明白。
+    check('反例 · 未受信链会穿过「不是 NotSigned」这条松判据', () => {
+      const loose = { status: 'UnknownError', statusValue: '1' }
+      expect(
+        loose.status !== 'NotSigned' && loose.statusValue !== '0',
+        '这条反例自身的前提不成立，说明对 SignatureStatus 的理解变了',
+      )
+      return 'UnknownError 确实不是 NotSigned，且确实不是 Valid'
     })
 
     check('签名报告里的主体与配置的证书主体一致', () => {

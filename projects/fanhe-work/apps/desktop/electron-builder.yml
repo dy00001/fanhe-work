@@ -95,6 +95,16 @@ win:
     # 🔴 **换机器必须先在目标机跑一次 `signing:cert`**，否则打包会报找不到证书 ——
     # 且证书换了等于换了签名主体，已装旧版的机器更新校验会失败。
     #
+    # 🔴 那一步还会把这张自签证书的公开部分加进 `CurrentUser\Root`（受信任根）。
+    # **只加 `TrustedPublisher` 是不够的**，这是 T6-03b 实测出来的一个静默洞：
+    # 仅进 `TrustedPublisher` 时 `Get-AuthenticodeSignature` 返回
+    # `Status=UnknownError`（"证书链在不受信任的根中终止"），文件看起来签好了，
+    # 而 electron-updater 的 Windows 校验只在 `data.Status === 0`（`Valid`）时才
+    # 进入发布者名比对 —— 非 0 就整段跳过、**每次更新都被拒**。
+    # 补进 `Root` 后：`STATUS=Valid VALUE=0`。
+    # 添加用 `certutil -user -addstore -f Root`：`Import-Certificate` 在无 UI 会话里
+    # 会以「此操作中不允许使用 UI」失败（它要弹根证书确认框）。
+    #
     # 只按主题名匹配是可行的：electron-builder 用
     # `Get-ChildItem -Recurse Cert: -CodeSigningCert` 取候选、拿第一个命中的。
     # 实测本机该命令只返回一条（`CurrentUser\My`，有私钥）；`TrustedPublisher` 里

@@ -17,6 +17,7 @@ import { type ThemePreference, isThemePreference } from '../lib/preferences'
 import { useTheme } from '../lib/theme'
 import { useVersionCheck } from '../lib/use-version-check'
 import { buildVersionDetail, buildVersionLine } from '../lib/version'
+import { type UpdateNotice } from '../lib/version-check'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from './ui/breadcrumb'
 import {
@@ -90,7 +91,44 @@ type TopBarProps = {
  * 挂在那一行旁边：版本号回答「我现在跑的是哪一版」，而更新提示回答「那一版已经被
  * 换掉了」，两者是同一件事的两个时刻，分开放会让用户以为它们无关。判定与降级规则
  * 见 `lib/version-check.ts`。
+ *
+ * 那一行**点下去的后果按宿主不同**（T6-03b）：浏览器刷新页面，桌面外壳交给本机更新
+ * 通道装完重启。见 `runUpdateNoticeAction`。
  */
+
+/**
+ * 执行更新提示那一行的动作（T6-03b）。
+ *
+ * 两个宿主做的是不同的事，**这不是美化而是事实**：
+ *
+ * - 浏览器态：界面来自服务端，`location.reload()` 会拿到新的前端产物。
+ * - 桌面态：界面来自安装目录里的内置产物，刷新不会变。要交给外壳的更新通道 ——
+ *   它把已下载的新版装上，然后应用自己退出重启。
+ *
+ * **`installUpdate` 返回失败时不静默。** 最常见的失败是「开发态外壳」：那里通道
+ * 不可用（没有 `app-update.yml`），点下去什么都不会发生。此时退回到刷新并打一行
+ * 警告，让人至少知道刚才那一下没有生效 —— 一个点了没反应、也没有任何痕迹的按钮，
+ * 会让人以为整个更新功能坏了。
+ */
+async function runUpdateNoticeAction(notice: UpdateNotice): Promise<void> {
+  const bridge = window.fanheDesktop
+  if (notice.action === 'reload' || typeof bridge?.installUpdate !== 'function') {
+    // 条件里的第二项理论上到不了（`action` 为 `install` 说明宿主判定是桌面），
+    // 但它到得了就说明宿主判定与桥不一致，这时刷新是唯一还成立的动作。
+    window.location.reload()
+    return
+  }
+
+  try {
+    const result = await bridge.installUpdate()
+    if (!result.ok) console.warn(`[update] 未执行安装（${result.reason}）：${result.detail}`)
+  } catch (error) {
+    console.warn(
+      `[update] 安装通道调用失败：${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
 export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
   const { preference, setPreference } = useTheme()
   const { notice, refresh } = useVersionCheck()
@@ -233,7 +271,9 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
                 className="flex-col items-start gap-0.5"
                 title={notice.title}
                 onSelect={() => {
-                  window.location.reload()
+                  // 不做 `await`：Radix 会在选中后收起菜单，而桌面态的安装会让应用
+                  // 直接退出 —— 等一个注定不会 resolve 的 Promise 没有意义。
+                  void runUpdateNoticeAction(notice)
                 }}
               >
                 <span className="flex items-center gap-2">

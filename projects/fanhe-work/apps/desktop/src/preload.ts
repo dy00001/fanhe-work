@@ -22,6 +22,13 @@
  * - `checkLaunchProfiles(profiles)` —— 启动自检。**传的是配置数组**，理由同上。
  *   返回一份报告，里面每条问题都带一句能照着做的引导。
  *
+ * T6-03b 再加三个，都属更新通道：
+ * - `getUpdateStatus()` —— 当前状态（阶段、版本、进度）。界面据此决定那一行说什么。
+ * - `checkForUpdates()` —— 主动查一次。**它只检查并下载，不安装。**
+ * - `installUpdate()` —— 安装已下载的新版并退出应用。**没有下载好的包时会被拒绝**，
+ *   判据在主进程的 `isReadyToInstall`，不在这里 —— 这条通道对页面脚本开放，而
+ *   `quitAndInstall()` 会让应用退出，不能只信调用方说「准备好了」。
+ *
  * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
  * 的成对方式追加通道。
  *
@@ -29,8 +36,11 @@
  *
  * 沙箱（`sandbox: true`）下预加载只能拿到 `electron` 模块与少数几个 Node 垫片，
  * `process.platform` / `process.versions` 在其中可用，因此下面不需要任何额外依赖。
+ * 更新状态的那个类型是 `import type`，编译后会被擦掉，不会给预加载引入运行期依赖。
  */
 import { contextBridge, ipcRenderer } from 'electron'
+
+import type { UpdateStatus } from './update.js'
 
 export type ServiceStatus = {
   /** 当前生效的服务地址。尚未读取完成时为空串。 */
@@ -80,6 +90,14 @@ export type LaunchDiagnosticsResult = {
   diagnostics: LaunchDiagnosticResult[]
 }
 
+/**
+ * 安装请求的结果。
+ *
+ * 失败只有一种原因（没有下载好的包），但**刻意带上 detail**：界面在开发态点到这一行
+ * 时，只有「没准备好」这四个字会让人以为功能坏了，而实际原因是「开发态不检查更新」。
+ */
+export type UpdateInstallResult = { ok: true } | { ok: false; reason: 'not_ready'; detail: string }
+
 const desktopBridge = Object.freeze({
   /** 供界面判定「当前跑在外壳里」。浏览器里这个对象不存在。 */
   isDesktopShell: true as const,
@@ -115,6 +133,20 @@ const desktopBridge = Object.freeze({
    */
   checkLaunchProfiles: (profiles: unknown): Promise<LaunchDiagnosticsResult> =>
     ipcRenderer.invoke('launch:diagnostics', { profiles }) as Promise<LaunchDiagnosticsResult>,
+  /** 更新通道的当前状态。界面挂载时问一次，之后按需要重问。 */
+  getUpdateStatus: (): Promise<UpdateStatus> =>
+    ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,
+  /**
+   * 主动查一次更新。**只检查并下载，不安装** —— 安装是 `installUpdate`。
+   *
+   * 返回检查之后的状态。开发态与冒烟态下通道不可用，此时返回的 `phase` 是
+   * `unsupported` 而不是抛错，调用方不必为此写一条分支。
+   */
+  checkForUpdates: (): Promise<UpdateStatus> =>
+    ipcRenderer.invoke('update:check') as Promise<UpdateStatus>,
+  /** 安装已下载的新版并退出应用。没有就绪的包时返回 `not_ready`，应用不会退出。 */
+  installUpdate: (): Promise<UpdateInstallResult> =>
+    ipcRenderer.invoke('update:install') as Promise<UpdateInstallResult>,
 })
 
 contextBridge.exposeInMainWorld('fanheDesktop', desktopBridge)

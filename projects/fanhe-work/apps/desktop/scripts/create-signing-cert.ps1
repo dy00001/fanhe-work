@@ -85,23 +85,62 @@ try {
   }
 
   # --- 3. Trust the public part on THIS machine --------------------------------
-  # Without this the signature is present but reported as untrusted, and the
-  # acceptance check cannot distinguish "we signed it" from "Windows rejects it".
+  # TWO stores are needed, and they do different jobs. Adding only to
+  # TrustedPublisher -- which is what this script did until T6-03b -- is not enough
+  # and leaves a silent hole:
+  #
+  #   TrustedPublisher  suppresses the "unknown publisher" prompt. It does NOT make
+  #                     the certificate chain trusted.
+  #   Root               is what makes the chain trusted. Without it
+  #                     Get-AuthenticodeSignature reports Status=UnknownError
+  #                     ("the certificate chain terminated in a root certificate
+  #                     which is not trusted"), NOT Valid.
+  #
+  # !! Why that matters: electron-updater's Windows verifier only enters its
+  # publisher-name matching when `data.Status === 0` (SignatureStatus.Valid) --
+  # see windowsExecutableCodeSignatureVerifier.js. With Status=UnknownError the whole
+  # match block is skipped and EVERY update is refused, while the file still looks
+  # perfectly signed to a human. Measured on this machine before the fix:
+  # STATUS=UnknownError VALUE=1, Root=False; after: STATUS=Valid VALUE=0, Root=True.
+  #
   # Only the public certificate is exported; the private key never leaves the store.
-  $alreadyTrusted = @(Get-ChildItem Cert:\CurrentUser\TrustedPublisher -ErrorAction SilentlyContinue |
-    Where-Object { $_.Thumbprint -eq $cert.Thumbprint })
+  $cerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("fanhe-codesign-" + $cert.Thumbprint + '.cer')
+  try {
+    Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT -Force | Out-Null
 
-  if ($alreadyTrusted.Count -gt 0) {
-    Add-Report 'TRUST=already-present'
-  } else {
-    $cerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("fanhe-codesign-" + $cert.Thumbprint + '.cer')
-    try {
-      Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT | Out-Null
+    $pid_ = $cert.Thumbprint
+    $inPublisher = @(Get-ChildItem Cert:\CurrentUser\TrustedPublisher -ErrorAction SilentlyContinue |
+      Where-Object { $_.Thumbprint -eq $pid_ })
+    if ($inPublisher.Count -gt 0) {
+      Add-Report 'TRUST_PUBLISHER=already-present'
+    } else {
       Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPublisher' | Out-Null
-      Add-Report 'TRUST=added-to-TrustedPublisher'
-    } finally {
-      if (Test-Path $cerPath) { Remove-Item $cerPath -Force }
+      Add-Report 'TRUST_PUBLISHER=added'
     }
+
+    $inRoot = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+      Where-Object { $_.Thumbprint -eq $pid_ })
+    if ($inRoot.Count -gt 0) {
+      Add-Report 'TRUST_ROOT=already-present'
+    } else {
+      # certutil, not Import-Certificate: adding to Root through the cmdlet fails in a
+      # non-interactive session with "This operation does not allow the use of UI" --
+      # it wants the root-certificate confirmation dialog. `certutil -user -addstore`
+      # writes HKCU and does not prompt (measured: exit 0).
+      $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+      $out = & $certutil '-user' '-addstore' '-f' 'Root' $cerPath 2>&1 | Out-String
+      $code = $LASTEXITCODE
+      $ok = @(Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $pid_ }).Count -gt 0
+      Add-Report "TRUST_ROOT_CERTUTIL_EXIT=$code VERIFIED=$ok"
+      if (-not $ok) {
+        $oneLine = ($out -replace "`r?`n", ' | ').Trim()
+        Add-Report "TRUST_ROOT_FAILED out=$oneLine"
+        throw "could not add the signing certificate to CurrentUser\Root; electron-updater would refuse every update"
+      }
+    }
+  } finally {
+    if (Test-Path $cerPath) { Remove-Item $cerPath -Force }
   }
 
   # --- 4. Report ---------------------------------------------------------------

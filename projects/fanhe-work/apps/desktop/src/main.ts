@@ -41,6 +41,7 @@
  * 而不是只能靠人眼。**它不改变正常启动的任何行为。**
  */
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -54,6 +55,14 @@ import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from 
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
+import {
+  applyUpdateEvent,
+  describeUpdateStatus,
+  initialUpdateStatus,
+  isReadyToInstall,
+  type UpdateEvent,
+  type UpdateStatus,
+} from './update.js'
 
 /**
  * 前端构建产物的绝对路径。
@@ -82,6 +91,19 @@ const DIST_ROOT = webDistRoot({
 const PACKAGED_SERVICE_URL = 'https://work.fanhe.dpdns.org'
 
 const IS_SMOKE = process.argv.includes('--smoke')
+
+/**
+ * 更新通道的探针模式（T6-03b）。它与 `--smoke` 是两件事：
+ * `--smoke` 验「界面能画出来」且**刻意不查更新**（验收要离线可重复），
+ * 而 `--update-probe` 正好相反 —— 它只做更新检查这一件事，且必须在打包态跑。
+ */
+const IS_UPDATE_PROBE = process.argv.includes('--update-probe')
+
+/**
+ * 探针等多久。见 `runUpdateProbe`：**超时是一种结果（`阶段=timeout`），不是错误** ——
+ * 网络卡住时这个进程必须退出，否则验收脚本会挂在那里等它。
+ */
+const UPDATE_PROBE_TIMEOUT_MS = 120_000
 
 /**
  * 本次启动读到的配置结果。进程内唯一一份，IPC 通道直接返回它。
@@ -308,7 +330,193 @@ function registerLaunchIpc(): void {
   })
 }
 
+/**
+ * 更新通道（T6-03b）。
+ *
+ * ## 这一层只做翻译，判断在 `update.ts`
+ *
+ * `applyUpdateEvent` / `isReadyToInstall` 是纯函数、有单测；这里把
+ * `electron-updater` 的回调翻译成那边的事件，把结果通过 IPC 交出去。
+ * **翻译层刻意做得很薄** —— 它是这条链路上唯一跑不了单测的部分。
+ *
+ * ## 为什么「重启后生效」这句话是真的
+ *
+ * `autoInstallOnAppQuit = true`。T6-02 的提示在桌面态写的是「已可更新到 vX，
+ * 重启后生效」，而那句话成立的前提正是这个开关：下载完的新版会在应用退出时被装上。
+ * 若它被改成 false，文案就成了一句空话 —— 用户重启之后还是旧版，而且不会再有提示。
+ * 两条路都保留：**点那一行**立即安装并退出（`update:install`），**正常退出**也会装上。
+ *
+ * ## 只在打包态、且不在冒烟/探针模式时启用
+ *
+ * 开发态没有 `app-update.yml`（它由 electron-builder 在打包时生成），
+ * `checkForUpdates()` 会直接抛。冒烟模式刻意不检查：验收脚本要可重复、离线可跑，
+ * 而更新检查会去访问 GitHub。
+ *
+ * 探针模式（`--update-probe`）则**故意**要在打包态真的走一次检查 —— 见下面。
+ */
+let updateStatus: UpdateStatus = initialUpdateStatus()
+
+function dispatchUpdateEvent(event: UpdateEvent): void {
+  updateStatus = applyUpdateEvent(updateStatus, event)
+  console.log(`[update] ${describeUpdateStatus(updateStatus)}`)
+}
+
+/** 更新通道在当前形态下可用吗。 */
+function updateChannelAvailable(): boolean {
+  return app.isPackaged && !IS_SMOKE
+}
+
+/**
+ * 把 `electron-updater` 的回调接上，并在启动后检查一次。
+ *
+ * **启动后检查而不是等用户点**：桌面工具会被开一整天，用户不会主动去想「有没有新版」。
+ * 检查失败不弹任何东西 —— 它是一条非关键路径，报错的表现应当是「没有提示」，
+ * 而不是让一个已经能用的应用弹一个用户无法处理的错误框。
+ */
+function wireAutoUpdater(): void {
+  if (!updateChannelAvailable()) {
+    dispatchUpdateEvent({
+      type: 'unsupported',
+      detail: app.isPackaged ? '冒烟模式不检查更新' : '开发态不检查更新',
+    })
+    return
+  }
+
+  // 有新版就自动下（默认即 true，写出来是因为这是一条决定而非巧合）：
+  // 用户点「重启更新」时不该再等一次下载。
+  autoUpdater.autoDownload = true
+  // 见上方「为什么「重启后生效」这句话是真的」。
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => dispatchUpdateEvent({ type: 'checking' }))
+  autoUpdater.on('update-available', (info) =>
+    dispatchUpdateEvent({ type: 'available', version: info.version }),
+  )
+  autoUpdater.on('update-not-available', () => dispatchUpdateEvent({ type: 'not-available' }))
+  autoUpdater.on('download-progress', (progress) =>
+    dispatchUpdateEvent({ type: 'progress', percent: progress.percent }),
+  )
+  autoUpdater.on('update-downloaded', (info) =>
+    dispatchUpdateEvent({ type: 'downloaded', version: info.version }),
+  )
+  autoUpdater.on('error', (error) =>
+    dispatchUpdateEvent({
+      type: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    }),
+  )
+
+  void autoUpdater.checkForUpdates().catch((error: unknown) => {
+    // 上面那个 error 监听通常已经收过了；这里兜住「还没接上监听就同步抛」的情况。
+    dispatchUpdateEvent({
+      type: 'error',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+  })
+}
+
+/**
+ * 注册更新通道的 IPC。
+ *
+ * 三个通道，对应界面上的三件事：**看现在什么状态**、**现在去查一下**、**装并重启**。
+ *
+ * `update:install` 用 `isReadyToInstall` 而不是只信调用方：这条通道对渲染进程里的
+ * 任何脚本开放，而 `quitAndInstall()` 会让应用退出。**没有下载好的包时一律拒绝** ——
+ * 那是「点了没反应」与「点了一次莫名其妙的退出」的区别。
+ */
+function registerUpdateIpc(): void {
+  ipcMain.handle('update:status', () => updateStatus)
+
+  ipcMain.handle('update:check', async () => {
+    if (!updateChannelAvailable()) return updateStatus
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (error) {
+      dispatchUpdateEvent({
+        type: 'error',
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return updateStatus
+  })
+
+  ipcMain.handle('update:install', () => {
+    if (!isReadyToInstall(updateStatus)) {
+      return {
+        ok: false as const,
+        reason: 'not_ready' as const,
+        detail: '还没有下载完成的新版本，无法安装。',
+      }
+    }
+    // 不等它返回：这一行之后进程就会开始退出流程。
+    autoUpdater.quitAndInstall()
+    return { ok: true as const }
+  })
+}
+
+/**
+ * 更新通道的探针模式（`--update-probe`）。
+ *
+ * ## 为什么要有它
+ *
+ * 更新通道的验收（改 sha512 → 拒绝、换签名主体 → 拒绝）**只能在打包态、且需要真的
+ * 走一次网络下载**。手工做法是发两版、装一台、等一次下载 —— 那样这两条反例基本不会
+ * 被跑第二次。有了这个模式，验收脚本能拿一个本地静态目录冒充更新源（`provider:
+ * 'generic'`），把整条链路变成可离线重复的断言。
+ *
+ * ## 判据只报事实，不判好坏
+ *
+ * 它把最后一行状态打成 `[update-probe] 阶段=... 版本=...`，然后**按调用方给的期望**
+ * 决定退出码。期望由命令行给出（`--expect-downloaded` / `--expect-error`），
+ * 因为这个探针同时要服务于「应该装成功」与「应该被拒绝」两种反例。
+ *
+ * 超时也归为一种结果（`阶段=timeout`）而不是挂死：不改写状态机里的状态，
+ * 就打印一行、退出非零。
+ */
+async function runUpdateProbe(): Promise<void> {
+  const expectDownloaded = process.argv.includes('--expect-downloaded')
+  const expectError = process.argv.includes('--expect-error')
+
+  wireAutoUpdater()
+
+  // 🔴 探针显式关掉「退出时自动安装」。
+  //
+  // 正常使用路径需要它为真（见 `wireAutoUpdater` 上面那段：那是「重启后生效」这句话
+  // 成立的前提），但探针不是正常使用路径 —— 它只观察「通道把这次检查判成了什么」。
+  // 第一次跑验收时它带着默认值，于是成功下载之后 `app.exit()` 顺手把新版本装了：
+  // **一个只读的验收动作修改了这台机器上的软件**，而且下一次跑的结果会被上一轮的
+  // 安装影响。验收脚本必须是可重复的，所以这里关掉它，并把生效值打进输出。
+  autoUpdater.autoInstallOnAppQuit = false
+
+  // 轮询而不是再加一份事件监听：状态机已经是唯一真相，多一处监听就多一处会分叉。
+  const deadline = Date.now() + UPDATE_PROBE_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (updateStatus.phase === 'downloaded' || updateStatus.phase === 'error') break
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+
+  const status = updateStatus
+  console.log(`[update-probe] 阶段=${status.phase} 版本=${status.version ?? '-'}`)
+  if (status.detail !== '') console.log(`[update-probe] 说明=${status.detail}`)
+  console.log(`[update-probe] 是否可安装=${isReadyToInstall(status) ? '是' : '否'}`)
+  console.log(`[update-probe] 退出时自动安装=关（探针刻意关掉，正常启动时为开）`)
+
+  let ok: boolean
+  if (expectDownloaded) ok = status.phase === 'downloaded'
+  else if (expectError) ok = status.phase === 'error'
+  else ok = status.phase !== 'idle' && status.phase !== 'checking'
+  console.log(`[update-probe] ${ok ? 'PASS' : 'FAIL'}`)
+  app.exit(ok ? 0 : 1)
+}
+
 async function bootstrap(): Promise<void> {
+  // 探针模式先于一切：它只关心更新通道，不需要前端产物，也不需要内置服务。
+  // 放在最前面是为了让 `dist:dir` 产物能单独被验，而不必先构建 web。
+  if (IS_UPDATE_PROBE) {
+    await runUpdateProbe()
+    return
+  }
+
   if (!existsSync(DIST_ROOT)) {
     throw new Error(`未找到前端构建产物：${DIST_ROOT}。请先运行 pnpm --filter @fanhe/web build`)
   }
@@ -340,6 +548,9 @@ async function bootstrap(): Promise<void> {
 
   registerServiceIpc()
   registerLaunchIpc()
+  // 更新通道的 IPC 在窗口之前注册：界面挂载时就会问一次当前状态（见 T6-02 的
+  // 「挂载时查一次」），晚注册会让那一次拿到「通道不存在」。
+  registerUpdateIpc()
 
   staticServer = await startStaticServer({ root: DIST_ROOT, apiBaseUrl: serviceUrl })
   shellOrigin = `http://127.0.0.1:${staticServer.port}`
@@ -351,6 +562,9 @@ async function bootstrap(): Promise<void> {
 
   const window = buildWindow(true)
   await window.loadURL(`${shellOrigin}/`)
+
+  // 检查放在窗口显示之后：这条链路会去访问网络，不该让它挡在首屏前面。
+  wireAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
