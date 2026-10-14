@@ -156,6 +156,8 @@ git status --short apps/desktop/scripts/fanhe-work-signing-public.cer
 
 **先改版本号。** 仓库根 `package.json` 的 `version` 一处即可（`apps/desktop/package.json` 由 `sync-version.mjs` 在打包时同步）。**不改就会用旧号覆盖 `release/` 里那个同名的已发布安装包** —— 而那正是 P0 验证的 A/B 端。
 
+🔴 **而且必须在重建前端之前改完。** 前端产物的版本号是**构建期**由 `vite.config.ts` 的 `define` 从仓库根 `package.json` 文本替换进去的 —— 先构建再提版本号，产物里烧的就还是旧号，而它**看起来完全正常**。2026-10-14 的 `v0.1.2` 就是这样发出去的（前端 22:41 构建，版本号 22:57 才提）。
+
 **再重建前端，最后打包**（`dist` 不重建 web，否则打进包里的是上一次的 `apps/web/dist`）：
 
 ```bash
@@ -165,7 +167,16 @@ CODEBUDDY_SAFE_DELETE_BULK_THRESHOLD=1000000 pnpm --filter @fanhe/desktop dist
 
 ⚠️ **那个环境变量不是可选的**，见第七节的两条守卫报错 —— 它是本项目在 U 盘上打包必须过的一关。**若抬了阈值仍报 `genie-trash ... ETIMEDOUT`，先手工删掉 `release/win-unpacked*` 再跑。**
 
-第 0 步那个坑（`dist` 不重建 web）**已有机械判据**：`verify-pack.mjs` 第 286 行起断言 `resources/web` 与 `apps/web/dist` **逐文件一致**，注释写明它挡的是「半新半旧」而非「整体拷旧」。跑 `pnpm --filter @fanhe/desktop verify:pack` 即可。
+第 0 步那个坑（`dist` 不重建 web）**已有机械判据，而且 2026-10-14 之后是两道**：
+
+| 关 | 位置 | 判据 |
+| -- | -- | -- |
+| **打包前** | `dist` / `dist:dir` 的第一步，`scripts/check-web-build.mjs` | 产物里烧进的版本号 == 仓库根 `package.json` 的版本号；不符则**拒绝打包** |
+| **打包后** | `verify-pack.mjs`「二·补二」 | 同一条判据，对**已打进包里的**产物再验一次 |
+
+**⚠️ 原来这里写的那句话是错的**，原文说「`verify-pack.mjs` 第 286 行起断言 `resources/web` 与 `apps/web/dist` 逐文件一致……跑 `verify:pack` 即可」。那条断言**只能证明包里的副本与源目录一致，证明不了源目录本身是新的** —— 两边同旧时它照样全绿。2026-10-14 发 `v0.1.2` 就是从这个缝里漏出去的：包里烧的是 `0.1.1`，而 `verify:pack` 当时 43 项全过。详见 `docs/P0-UPDATE-VERIFICATION.md` §0.5 与 `docs/WORK-STATUS.md`。
+
+**更要紧的是：这一次的顺序其实是对的。** 上面「先改版本号 → 再重建前端 → 最后打包」三步都被执行了，只是**版本号那一步排在了重建前端之后**（前端 22:41 构建，版本号 22:57 才提到 `0.1.2`）。所以光把顺序写进文档不够 —— 判据必须机械，这正是上面那道前置闸存在的理由。
 
 ## 四、轮换步骤（目标机）—— **必须在发版被消费之前完成**
 

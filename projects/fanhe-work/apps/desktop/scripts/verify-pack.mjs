@@ -69,6 +69,11 @@ import {
   sameThumbprint,
 } from './signing-identity.mjs'
 
+// 从打包产物里读回构建期注入的版本号 / 构建时刻 / 提交号（T7-05）。
+// 与 `scripts/check-web-build.mjs` 共用同一份提取逻辑：判据只有一处实现，
+// 才不会有「打包前那道闸放过了、打包后这条断言换了个写法又放过」这种事。
+import { extractBakedIdentities, listTree } from './baked-identity.mjs'
+
 // asar 是 CJS，用 createRequire 而不是 import 去加载它。
 const require_ = createRequire(import.meta.url)
 
@@ -294,20 +299,6 @@ check('resources/web/index.html 引用了 assets（不是空壳）', () => {
 // 客户端里根本不存在**，点更新永远只走「刷新页面」那条路。四道门禁全绿（源码没问题），
 // 问题只在产物。所以这里按**内容**断言，而不只是按文件在不在。
 
-/** 列出目录下所有文件的相对路径（用 `/` 分隔），排序后返回。 */
-function listTree(dir) {
-  const files = []
-  const walk = (current, prefix) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
-      if (entry.isDirectory()) walk(join(current, entry.name), relative)
-      else files.push(relative)
-    }
-  }
-  walk(dir, '')
-  return files.sort()
-}
-
 check('resources/web 与 apps/web/dist 逐文件一致（不只是 index.html）', () => {
   expect(existsSync(sourceWebDist), `源目录 ${sourceWebDist} 不存在，先构建 web`)
   const packedRoot = join(resourcesDir, 'web')
@@ -400,6 +391,67 @@ check('反例 · 转义形态也要认得（否则换一次打包配置就会假
   const escaped = [...'重启'].map((c) => `\\u${c.codePointAt(0).toString(16)}`).join('')
   expect(includesText(escaped, '重启'), `转义形态 ${escaped} 没被认出`)
   return escaped
+})
+
+// ── 二·补二：产物自报的版本号必须等于本次要发布的版本（T7-05） ────────────
+//
+// 上面那三条标记断言（`fanheDesktop` / `重启更新到` / `正在下载`）只能证明「产物不早于
+// 某个已知特性」—— 它们的锚点是**写死的字符串**，因此只能抓住写它们时想抓的那一次陈旧。
+//
+// 2026-10-14 的 `v0.1.2` 正是从这个缝里漏出去的：三条标记全在、逐字节比对也通过
+// （源目录与包内是同一份产物，只是那一份本身就旧），而包里烧的版本号是 `0.1.1`。
+// 用户从 GitHub 装了 0.1.2，菜单那行显示的仍是 `v0.1.1`，看起来像更新失败。
+// 更根本的一层是：这三条断言都在回答「产物够不够新」，而「够新」没有绝对判据，
+// 除非拿产物自报的版本去和**本次要发布的版本**比。
+//
+// 所以下面换成**绝对**锚点：产物自己说的版本 == 仓库根 `package.json` 的版本。
+// 判据里不含任何需要随发版维护的常量，因此不会像「把待验版本写成常量」那样在
+// 下次发版时静默失效（本项目在 `P0-UPDATE-VERIFICATION.md` 上已经吃过一次）。
+
+let packedIdentity = null
+check('能从产物里读出构建期身份三连（版本 / 构建时刻 / 提交号）', () => {
+  const found = extractBakedIdentities(packedBundle)
+  expect(
+    found.length > 0,
+    '产物里找不到身份三连 —— 要么这份前端不是 `pnpm --filter @fanhe/web build` 产出的，' +
+      '要么注入值的形态变了（见 scripts/baked-identity.mjs 头部）',
+  )
+  packedIdentity = found[0]
+  return `${packedIdentity.version} · ${packedIdentity.builtAt} · ${packedIdentity.commit}`
+})
+
+check('产物里烧的版本号等于仓库根版本（挡「新版本号 + 旧产物」）', () => {
+  expect(packedIdentity !== null, '上一条没能读出身份三连，无法比对')
+  expect(
+    packedIdentity.version === rootManifest.version,
+    `产物里烧的是 ${packedIdentity.version}，仓库根是 ${rootManifest.version}` +
+      `（产物构建于 ${packedIdentity.builtAt}，提交 ${packedIdentity.commit}）。` +
+      '前端版本号是构建期烧进去的，正确顺序是「先定版本号 → `pnpm --filter @fanhe/web build` → 再 dist」',
+  )
+  return packedIdentity.version
+})
+
+check('产物里的版本号只有一处（挡半新半旧）', () => {
+  const versions = [...new Set(extractBakedIdentities(packedBundle).map((i) => i.version))]
+  expect(
+    versions.length === 1,
+    `产物里出现了 ${versions.length} 个不同的版本号：${versions.join(', ')} —— ` +
+      '说明入口脚本里混了不同轮次的构建产物',
+  )
+  return versions[0]
+})
+
+// 反例：证明上面那条比对不是恒真。一条「怎么喂都通过」的断言比没有断言更危险 ——
+// 它会让人以为产物被验过了（这正是 2026-10-14 那次漏检的形态）。
+check('反例 · 版本比对能证伪（旧版本号的合成文本必须被判为不符）', () => {
+  const synthetic = 'var a=`0.0.1`,b=`2020-01-01T00:00:00.000Z`,c=`abcdef1`,d=a;'
+  const found = extractBakedIdentities(synthetic)
+  expect(found.length === 1, '合成文本里没读出身份三连 —— 那么上面那条比对也不可信')
+  expect(
+    found[0].version !== rootManifest.version,
+    `合成文本的版本 ${found[0].version} 被判为与仓库根 ${rootManifest.version} 相同 —— 比对不可信`,
+  )
+  return `识别到 ${found[0].version}，与仓库根 ${rootManifest.version} 不同（如预期）`
 })
 
 check('resources/agent/agent.ts 存在且与源码逐字节一致', () => {

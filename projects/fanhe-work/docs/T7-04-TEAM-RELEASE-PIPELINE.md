@@ -52,6 +52,17 @@
 
 `apps/desktop/package.json` 的 `dist` 脚本只跑 `sync-version.mjs && tsc && electron-builder`，而 `electron-builder.yml` 的 `extraResources` 把 `../web/dist` 原样投进 `resources/web`。改了前端忘了先 build web，会打出带旧界面的新版本安装包。工作记忆记载 v0.1.0 与 v0.1.1 两个包就带着 11:34 的旧产物，直接导致 T6-03b 的宿主分派没进客户端。
 
+🔴 **2026-10-14 补充：这个缺口又咬了一次，而且换了张脸 —— 说明「写进清单」不是对策。**
+
+`v0.1.2` 发布前**确实跑了** `pnpm --filter @fanhe/web build`，宿主分派的标记断言也确实全过（那个按钮回来了）。但它仍然带出了陈旧产物：**前端产物构建于 22:41，而版本号 22:57 才提到 `0.1.2`** —— 前端产物的版本号是**构建期**从仓库根 `package.json` 文本替换进去的，所以「先构建前端」这个顺序**本身还差一步**：版本号必须更早定下来。结果用户从 GitHub 装了 `0.1.2`，菜单那行显示 `v0.1.1`。
+
+**对策已从「纪律」改为「机械判据」**（判据不含需要随发版维护的常量，因此不会静默失效）：
+
+- 打包前：`scripts/check-web-build.mjs`，接在 `dist` / `dist:dir` 的第一步，版本不符即**拒绝打包**；
+- 打包后：`verify-pack.mjs`「二·补二」，对已打进包里的产物再验一次。
+
+正确顺序：**先定版本号 → 再 `pnpm --filter @fanhe/web build` → 最后 `dist`**。详见 `docs/WORK-STATUS.md` 4.1.18。
+
 ### 缺口 6：无自动化门禁，无回滚脚本
 
 仓库内没有 `.github/workflows`，质量门禁（lint、typecheck、format:check、四包单测、浏览器 e2e、外壳冒烟）全部依赖人工按顺序执行。`tools/checks/db-backup.mjs` 说明已有备份意识，但没有任何回滚脚本与回滚判据。
@@ -139,7 +150,7 @@ staging 存在之后，最容易出现的滑坡是把生产数据导入 staging 
 
 ### 5.2 打包纪律四条
 
-1. **先构建前端，再打包外壳。** 顺序是 `pnpm --filter @fanhe/web build` 然后 `pnpm --filter @fanhe/desktop dist`。这是缺口 5 的全部对策，建议把两步写进同一个发布脚本，留给记忆的空间越少越好。
+1. **三步顺序：先定版本号 → 再构建前端 → 最后打包外壳。** 顺序是「改仓库根 `package.json` 的 version 并提交」→「`pnpm --filter @fanhe/web build`」→「`pnpm --filter @fanhe/desktop dist`」。**第一步不能排到第二步之后** —— 前端产物的版本号是构建期烧进去的（缺口 5 的 2026-10-14 补充）。**现在这一步有机械判据**：`check:web` 已内置为 `dist`/`dist:dir` 的第一步，不符即拒绝打包；建议仍把它写进同一个发布脚本，留给记忆的空间越少越好。
 2. **版本号只改仓库根一处。** `sync-version.mjs` 在打包时同步到 `apps/desktop/package.json`。预发布版本用 `0.2.0-rc.1` 形态，`packages/shared/src/version.ts` 第 110 至 119 行已规定预发布号排在正式版之前。
 3. **签名前自检，换证书单独安排发布。** 发版前跑 `signing:check`，确认证书身份与上一版一致。换证书等于换信任根（T6-03d 已查明），必须单独一次发布，与功能发布合并会同时打断更新链路与版本推进。
 4. **产物只从 `release/` 取，并记录 sha256。** 打包后执行 `verify:pack` 与 `verify:sign`，前者第六节会比对产物指纹与签名身份档案。

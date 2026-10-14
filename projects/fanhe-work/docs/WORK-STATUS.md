@@ -544,6 +544,64 @@ T7-01 有提交、有独立文档（`docs/T7-01-ACCOUNT-ADMIN.md`）。**阶段�
 
 
 
+### 4.1.18 `v0.1.2` 装完显示 0.1.1 —— 产物陈旧换了张脸又出现一次（T7-05，2026-10-14）
+
+**现象（用户实测）**：从 GitHub 下载 `0.1.2` 安装包、装完，账号菜单那行显示 **`v0.1.1 · 2026-10-14 · dd4e9e6`**，看起来像更新失败。
+
+**先定性：装进去的确实是 `0.1.2`。** 两条独立判据都指向它 —— 注册表卸载项 `梵禾 Work 0.1.2` / `DisplayVersion=0.1.2`，以及安装目录里 `梵禾 Work.exe` 的 `VersionInfo.FileVersion = 0.1.2`（`ProductVersion = 0.1.2.0`）。**出问题的是界面那行字，不是安装本身。**
+
+**根因：前端产物的版本号是构建期烧进去的，而它烧在了版本号提升之前。**
+
+菜单那行三个值全部来自 Vite 的 `define`（`apps/web/vite.config.ts` → `apps/web/src/lib/version.ts`），在**前端构建那一刻**从仓库根 `package.json` 文本替换进去。时间线（实测文件 mtime 与提交时刻）：
+
+| 时刻 | 事件 |
+| -- | -- |
+| 22:39:39 | `dd4e9e6`（签名身份轮换）提交 —— 此时版本号仍是 `0.1.1` |
+| **22:41:13** | `apps/web/dist` 构建完成 → **烧进 `0.1.1` + `dd4e9e6`** |
+| 22:51~22:54 | `dist` 打包（`resources/web` 22:52 从上面那份拷入，安装包 22:54） |
+| 22:57:05 | `e40bdfc` 提交：版本号 `0.1.1` → `0.1.2` |
+
+**即：三步顺序「先改版本号 → 再重建前端 → 最后打包」都被执行了，只是版本号那一步排到了重建前端之后。** 文档里那句「先 `pnpm --filter @fanhe/web build` 再 `dist`」是对的，但它漏掉了更靠前的一步。
+
+**为什么既有断言一条都没拦住 —— 这是本条最值钱的一课：**
+
+| 既有断言 | 它实际验的是什么 | 为什么这次漏过 |
+| -- | -- | -- |
+| `resources/web` 与 `apps/web/dist` **逐字节一致** | 包内副本 == 源目录 | 两边**同旧**时照样全绿 |
+| 产物含 `fanheDesktop` / `重启更新到` / `正在下载` | 产物**不早于**某个已知特性 | 锚点是**写死的字符串**，只能抓住写它们时想抓的那一次陈旧 |
+| asar 内 `package.json` 版本 == 仓库根版本 | **桌面壳**的版本号 | 与前端产物无关，它是对的（`0.1.2`） |
+
+三条全在、比对全过，包里烧的却是 `0.1.1`。**共同点是它们都在回答「产物够不够新」，而「够新」没有绝对判据** —— 除非拿产物**自报的版本**去和**本次要发布的版本**比。
+
+**修法：换成绝对判据，两道关，判据只有一处实现。**
+
+- 新增 `apps/desktop/scripts/baked-identity.mjs`：从产物里读回构建期注入的**身份三连**（版本 + ISO 构建时刻 + 提交短号）。按**形状**认，不搜具体版本号 —— 因此判据里不含任何需要随发版维护的常量，不会像「把待验版本写成常量」那样在下次发版时静默失效（`P0-UPDATE-VERIFICATION.md` 已经吃过一次同款亏）。
+- 新增 `apps/desktop/scripts/check-web-build.mjs`（`pnpm --filter @fanhe/desktop check:web`）：**打包前**的前置闸，接在 `dist` / `dist:dir` 的第一步。不符即拒绝打包，失败消息里直接写出正确顺序。
+- `verify-pack.mjs` 新增「二·补二」四条断言（含一条反例）：对**已打进包里**的产物再验一次。
+- 新增 `apps/desktop/test/baked-identity.test.mjs` **12 项**单测，其中 4 项是反例（只有版本号没有三连、中间不是带 `Z` 的 ISO、死文件里的版本号不算数、合成旧版本必须被判为不符）。
+
+**判据本身当场验过（不是「跑通了就算」）：**
+
+| 验证 | 结果 |
+| -- | -- |
+| 对**当前陈旧的** `apps/web/dist` 跑前置闸 | ❌ `产物里烧的是 0.1.1，仓库根是 0.1.2`，退出码 1 |
+| 对**用户实际装到的** `D:\fanhe work\@fanhedesktop\resources\web` 跑前置闸 | ❌ 同上（同一份产物，md5 一致） |
+| 对**现有那份陈旧安装包**跑 `verify:pack` | **47 项里 46 项通过，唯一失败的就是新加的这条** —— 直接证明原来那 43 项确实有洞 |
+| 反例断言 | 合成旧版本号被正确判为不符（非恒真） |
+
+**门禁**：**611 项 0 失败**（desktop 由 142 增至 **154**，+12；其余 shared 108 / api 233 含 5 项设计性跳过 / web 116 不变），`lint` / `typecheck` / `format:check` 退出码全 0。
+
+**踩到的两个坑（都已写进代码注释）：**
+
+1. **压缩后三个字面量之间不是裸逗号**，中间夹着下一次赋值（`` `0.1.1`,cg=`2026-…`,lg=`dd4e9e6` ``）。第一版正则按「逗号 + 引号」写，一条都匹配不上，而失败信息是「找不到三连」—— 那会把人引向「产物不是这套流程产出的」这个**错误结论**。
+2. **带 `g` 的正则是状态化的**：不重置 `lastIndex` 时，同样的输入第二次调用会得出不同结果，表现为「第一次检查通过、第二次同样的产物不通过」。已加专项用例钉住。
+
+**⚠️ 仍未闭合**：`0.1.2` 已经装在用户机器上，且**同一版本号重新上传不会产生更新**（electron-updater 比版本号）—— 要让那行字变对，只能发下一个版本。**未决：是否为此发 `0.1.3`。**
+
+**⚠️ 这一装对 P0 验证的副作用**：用户这次是**手工从 GitHub 装的 `0.1.2`**，于是机器上原有的 `v0.1.1` 被覆盖掉了。而 §4.1 那唯一一条未闭合项要求「**从 `v0.1.1` 起步** → 自动下载 → 退出重开 → `FileVersion` 变 `0.1.2`」。**该路径仍然可做，但要先退回去**：重新安装 `fanhe-work-setup-0.1.1.exe`（仍在 Release `412862351` 里），再走 `docs/P0-UPDATE-VERIFICATION.md` §0.6 路径 B。**若决定发 `0.1.3`，这次手工安装反而变成了有利条件** —— 那时 B 端换成 `0.1.3`，而 `0.1.2` 正好是已经装好的 A 端，且 `0.1.3` 的菜单版本号会是正确的，验收时肉眼即可确认。
+
+
+
 ### 4.1.9 T6-02 的实施记录（已完成，供对照）
 
 - **取数把「响应不是预期形状」降级为 `unknown`，不当作解析失败报错。** 外壳（T4-01）加载远程地址时会经过 Cloudflare 那一层，而 T5-05 暂缓意味着现在没有拦截页（将来做了就有）。这条路是非关键的，崩掉会让客户端起不来。
@@ -1215,6 +1273,7 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 | 10-14 | **本机接收条件实测 + P0 验证路径分叉** | ① `signing:trust-check`（只读）**退出码 0**、`RESULT=OK`、`TRUST_ROOT` / `TRUST_PUBLISHER` / `CHAIN_BUILDS` / `TRUST_CERT_MATCHES_RECORD` 四项全 `True`；`Root` 与 `TrustedPublisher` 里**新旧两根各 2 条**。② 本机**已装 `v0.1.1`**，更新缓存**是热的**（`installer.exe` 112,209,032 字节 = `v0.1.1` 安装包）。③ GitHub 复核：`v0.1.1` 仍是最新已发布版（`draft=false`、三资产齐备），**尚无 `0.1.2`**。④ 🔴 **由此发现并修掉一个真实缺口**：`docs/P0-UPDATE-VERIFICATION.md` 原文通篇按「A=`v0.1.0` → B=`v0.1.1`」写，判据是「期望 `0.1.1`」「缓存期望 112,209,032」且教人装**退役旧根** —— **`0.1.2` 一发布这些判据全部失效**。新增第 0.6 节给出 A / B 两条路的对照表与路径 B 的分步操作（含实测值）。**路径 B（`0.1.1` → `0.1.2`）严格更强**：本机已是 `v0.1.1`（免卸装）、两根并存（步骤 1 可跳过）、且**它是唯一能把轮换手册 §八第一条从源码论证变成端到端实测的路径**（`v0.1.1` 是旧身份签的，`0.1.2` 是新身份签的，这才是真正的跨身份实测）。⑤ **顺序约束收窄为「逐机」** —— 手册第五节只对尚未装新根的机器成立；发布前真正要做的是盘一遍「还有哪些机器装了 `v0.1.0` / `v0.1.1`」。见 `docs/P0-UPDATE-VERIFICATION.md` §0.6 与 `docs/SIGNING-ROTATION-RUNBOOK.md` §八 |
 | 10-14 | **发布 v0.1.2 + 路径 B 探针实测（跨身份更新闭合）** | ① **发布 `v0.1.2`**：注解 tag → `e40bdfc`（同 `v0.1.1` 惯例）；GitHub Release ID `412862351`，**先建草稿 → 传完三资产 → 核对大小 → 再解除草稿**（避免「已发布但缺 `latest.yml`」的窗口会让客户端取不到版本清单）；未认证 by-tag **200**，线上 `latest.yml` 与本地**逐字节一致**，安装包 `Content-Length: 112218832` 相符。② **四道门禁发布前实跑**（不引用旧结果）：test **599 项 0 失败**、`lint`/`typecheck`/`format:check` 退出码全 0。③ 🔴 **路径 B 探针 PASS —— 轮换手册 §八第一条从「源码级论证」转正为「端到端实测」**：旧客户端（`v0.1.1`，旧身份签）接受新身份签的 `0.1.2`，日志 `Signature validated using only CN Fanhe Work.` 与源码级论证预测的比对路径**逐字吻合**。用**本地验收台**代替真源（`provider: generic` + `python -m http.server`），因**从 agent 沙箱启动的 GUI 进程出网被拦**；安装目录 `app-update.yml` 已还原并逐字节比对 `IDENTICAL`。④ **两个新环境事实**：沙箱拦 GUI 出网（判据：`--proxy-server` 指向不存在的端口时错误**不变成** `ERR_PROXY_CONNECTION_FAILED`）；**`HTTP_PROXY`/`HTTPS_PROXY` 对应用无效**（走 `electron.net`/Chromium，只认系统代理与 `--proxy-server`；本机系统代理实测已配好）。⑤ **差分下载**：计算正确（3%，2,806.4 KB / 109,588.7 KB），实际传输未走通（rig 缺 `Accept-Ranges`，真实源实测支持 `206`）。⑥ **唯一未闭合**：真实源的端到端更新（退出应用 → 重开 → `FileVersion=0.1.2`），需真人 |
 | 10-14 | **私钥保管方案（两份加密备份 + 私钥忽略规则）** | 用户要求「把私钥存进工作空间，保证各设备统一使用同一个私钥」。**没有直接执行**，因为查到三条事实：① 工作空间根仓库实测 **`public`**（未认证 `HTTP 200`、`private=false`）；② 工作空间此前**没有任何私钥忽略规则** —— `.pfx` 是「未跟踪但未被忽略」，一条 `git add -A` 就进暂存区；③ `create-signing-cert.ps1` 第 755 行**刻意拒绝**导出到工作空间内，`DEVELOPMENT-PLAN.md` 6.3 第 6 条亦写明「与工作空间分开保管，不随盘移动」。**但用户担心的那件事是真的**：轮换的根因正是**私钥从未被备份**。据此落地 —— ① **补私钥忽略规则，两层** —— 扩展名层 `*.pfx`/`*.p12`/`*.pvk`/`*.jks`/`*.keystore`/`*.key`/`*.pem`，**目录层 `/keys/`**（锚定工作空间根）。**两层都要**：只按扩展名忽略时 `keys/` 目录对 git 仍可见，里面任何非私钥扩展名的文件都会被跟踪 —— 而「顺手在放私钥的目录里写一个口令备忘 `.txt`」正是最可能发生的失误。**刻意不忽略 `.cer`** 以免破坏轮换绊线；已核对全库无已跟踪文件位于该路径下，并验证正反两面，`credential.ts` 未受影响；② 新建 **`docs/SIGNING-KEY-BACKUP.md`**（九节）；③ 脚本导出分支新增 `EXPORT_IN_WORKSPACE=True reason=guard-bypassed-by-AllowWorkspaceExport` 审计行（**纯 ASCII 无 BOM、解析 0 错误、`signing:check` 仍 `RESULT=OK`/退出码 0**）；④ 建立 `<工作空间根>/keys/` 并由目录层规则整体忽略。🔴 **纠正一处前提**：「所有设备用同一个私钥」**不靠复制私钥** —— 私钥只在打包机需要，一致性由**公钥入库 + 身份档案 + 轮换闸 + 逐机自检**四件公开的东西保证。**导出动作刻意留给用户执行**（口令用 `Read-Host` 取以免进 PSReadLine 历史），期望报告为 `ACTION=reuse` 而非 `ACTION=created`。见 6.3 第 6 条与 `docs/SIGNING-ROTATION-RUNBOOK.md` §零 bis |
+| 10-14 | **`v0.1.2` 装完显示 `0.1.1` —— 产物陈旧换脸重现（T7-05）** | 用户从 GitHub 装了 `0.1.2`，账号菜单仍显示 `v0.1.1 · 2026-10-14 · dd4e9e6`。**先定性**：装进去的**确实是 `0.1.2`**（注册表 `DisplayVersion=0.1.2` + 安装目录 exe `FileVersion=0.1.2` 两条独立判据），错的是界面那行字。**根因**：那三个值是 Vite **构建期**从仓库根 `package.json` 文本替换进产物的，而**构建排在版本号提升之前** —— 前端 22:41 构建（版本号还是 `0.1.1`），版本号 22:57 才提到 `0.1.2`，安装包 22:54 打出。即三步顺序都做了，只是版本号那步排错了位置。**既有断言为何全数漏过（最值钱的一课）**：「`resources/web` 与 `apps/web/dist` 逐字节一致」比的是**包内副本 vs 源目录**，两边同旧时照样全绿；三条标记断言（`fanheDesktop` / `重启更新到` / `正在下载`）的锚点是**写死的字符串**，只能抓住写它们时想抓的那一次陈旧。**共同点是它们都在回答「产物够不够新」，而「够新」没有绝对判据。** 修法：新增 `scripts/baked-identity.mjs`（按**形状**读回构建期注入的「版本 + ISO 构建时刻 + 提交短号」三连，判据里**不含需要随发版维护的常量**）、`scripts/check-web-build.mjs`（**打包前**前置闸，接在 `dist`/`dist:dir` 第一步，不符即拒绝）、`verify-pack.mjs`「二·补二」四条断言、`test/baked-identity.test.mjs` 12 项单测（含 4 条反例）。**当场验证**：对陈旧的 `apps/web/dist` 与用户实际装到的 `resources/web`（md5 一致）前置闸均报 `产物里烧的是 0.1.1，仓库根是 0.1.2` 并退出码 1；对现有陈旧安装包跑 `verify:pack`，**47 项里 46 项通过、唯一失败的就是新加这条**，直接证明原来那 43 项确实有洞。门禁 **611 项 0 失败**（desktop 142→**154**），`lint`/`typecheck`/`format:check` 全 0。**踩坑两条**：压缩后三字面量之间**不是裸逗号**（夹着 `cg=`/`lg=`，第一版正则一条都匹配不上却报「找不到三连」，把人引向错误结论）；带 `g` 的正则**有状态**（不重置 `lastIndex` 会让同一输入两次得出不同结果）。见 4.1.18 |
 
 **§十一 新增/修改的关键文件（T7-02）**：`projects/fanhe-work/apps/desktop/src/shell-origin.ts`（**新**：端口 → origin → 存储分区的纯函数，`shellPortCandidates` / `orderLegacyPorts` / `parseOriginDirName` / `parseStoredPort` / `isFreshOrigin`，**不 import electron 与 fs**）、`apps/desktop/src/{main,server}.ts`（端口候选链 + `shell-origin.json` 偏好 + 单实例锁 + 旧来源发现 + `listenOnce` / `isRetryableListenError`）、`apps/desktop/test/shell-origin.test.mjs`（**新** 19 项）、`apps/desktop/test/scratch.mjs`（**新**：从 `LOCALAPPDATA` 推系统临时目录）、`apps/desktop/test/{server,config,paths}.test.mjs` 与 `test/acceptance/t40{2,3,4}-*.mjs`（端口用例 4 项 + 统一 import `SYSTEM_SCRATCH`）、`apps/desktop/scripts/verify-pack.mjs`（+3 项断言 +2 条反例：`resources/web` 与 `apps/web/dist` 逐文件一致、三条产物标记、签名报告必须比本轮产物新）；`apps/web/src/lib/desktop-update.ts`（**新**）、`apps/web/src/lib/use-desktop-update.ts`（**新**）、`apps/web/src/components/UpdateNotice.tsx`（**新**）、`apps/web/src/components/TopBar.tsx`（接线 + `runUpdateNoticeAction` 补「还没下载好」那一支）、`apps/web/test/desktop-update.test.mjs`（**新** 19 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/api` 与 `packages/shared` 本轮一行未改。**
 
