@@ -82,16 +82,17 @@ export function Sidebar({ items, collapsed, onToggleCollapsed }: SidebarProps) {
           collapsed ? 'w-[72px]' : 'w-60',
         )}
       >
-        {/* 品牌行。内容 36 高、上下 16/20 —— 与原型一致，logo 30px 因此在 72px 的
-            行里居中。名称只在展开态出现。
-            **图标对齐：品牌 logo 左缘固定在侧栏左缘 16px 处**，展开/折叠状态
-            不跳。导航图标的左缘是 22px（`nav` 的 `px-3` + 条目 `px-2.5`），两者
-            差 6px 是刻意的——品牌是页头、导航是列表，列表从稍内的位置起排是常见
-            做法。这里只锁品牌自身的「不跳」，不强行把品牌拉到 22px 与导航同线。 */}
+        {/* 品牌行。内容 36 高、上下 16/20 —— 与原型一致。
+            **图标对齐（按原型折叠态 logo 居中）**：折叠态 30px logo 中心落 x=36
+            —— 与折叠态导航/分组/底部图标的 x=36 中轴同线。这里用 `pl-[21px]`
+            （30px 在 72px 的精确居中值）而非 `justify-center` 是刻意的：宽度动画
+            期间 `justify-center` 会让 logo 先在 240px 里跳到 x≈105 再滑回，而
+            `transition-[padding]` 让 logo 屏幕 x 平滑走 16→21，切换不甩位。展开态
+            回左缘 16px + 名称（原型 `padding:16px 16px 20px`）。 */}
         <div
           className={cn(
-            'flex h-[72px] shrink-0 items-center gap-2.5 pt-4 pb-5',
-            collapsed ? 'pr-0 pl-[16px]' : 'pr-4 pl-[16px]',
+            'flex h-[72px] shrink-0 items-center gap-2.5 pt-4 pb-5 transition-[padding] duration-200 ease-out',
+            collapsed ? 'pr-0 pl-[21px]' : 'px-4',
           )}
         >
           <img
@@ -107,12 +108,12 @@ export function Sidebar({ items, collapsed, onToggleCollapsed }: SidebarProps) {
         <TooltipProvider delayDuration={200}>
           <nav
             className={cn(
-              'flex flex-1 flex-col gap-3 pb-3',
-              // 折叠态：去掉左右内边距，让每一行都占满 72px 宽、图标沿同一条垂直中轴线居中，
-              // 与品牌行（px-0）、底部行（px-0）保持一致，hover/active 高亮也变成全宽一条。
-              // 展开态保留 px-3：内容需要左右留白。
+              // 两态都保留 px-3（12px）水平内边距 —— 与原型 `.nav{padding:0 12px 12px}`
+              // 一致：折叠态图标在 (72−24)=48px 内容区里居中，中心落 x=36；展开态条目
+              // 从这里左起 10px（px-2.5），图标左缘 x=22。
+              'flex flex-1 flex-col gap-3 px-3 pb-3',
               // 折叠态的子项浮层要溢出侧栏，`nav` 的裁剪必须放行，否则浮层被直接切掉。
-              collapsed ? 'overflow-visible px-0' : 'overflow-x-hidden overflow-y-auto px-3',
+              collapsed ? 'overflow-visible' : 'overflow-x-hidden overflow-y-auto',
             )}
           >
             {sections.map((section) =>
@@ -184,14 +185,15 @@ function NavEntry({
       to={navPath(item.code)}
       className={({ isActive }: NavLinkRenderProps) =>
         cn(
-          // 悬停「一帧到位」、不带 transition —— 设计稿（原型 §5 规则①）里原 UI
+          // 悬停「一帧到位」、不带类型 transition —— 设计稿（原型 §5 规则①）里原 UI
           // 除分段控件外所有悬停都是瞬时的，导航项是其中最典型的一处。
-          // **图标对齐：左缘固定在侧栏左缘 22px 处**（展开态由 `nav` 的 `px-3`
-          // + 条目 `px-2.5` 推到此位置；折叠态由条目自身的 `pl-[22px]` 推到此
-          // 位置 —— 两态总和都是 22），状态切换时图标不会左右跳。`padding` 加
-          // `transition` 是为了在 200ms 宽度动画里让条目内部的留白同步收放。
+          // **图标对齐（按原型 `.app.collapsed .item{justify-content:center;padding:0}`）**：
+          // 展开态图标左缘 x=22（nav 的 px-3 + 条目 px-2.5）；折叠态图标在 48px
+          // 内容区居中，`pl-[15px]` → 18px 图标中心落 x=36。这里用 `pl-[15px]` 而
+          // 不是 `justify-center`：宽度动画期间后者会让图标瞬间甩到远端再滑回，而
+          // `transition-[padding]` 让图标屏幕 x 平滑走 22→27（中心 31→36），不跳位。
           'flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl transition-[padding] duration-200 ease-out',
-          collapsed ? 'pr-0 pl-[22px]' : indent ? 'pr-2.5 pl-[38px]' : 'px-2.5',
+          collapsed ? 'pr-0 pl-[15px]' : indent ? 'pr-2.5 pl-[38px]' : 'px-2.5',
           // 当前项按原型是「加 2px 字号」而不是加粗（16/400）。
           isActive
             ? 'bg-accent text-base font-normal text-foreground'
@@ -261,11 +263,11 @@ function NavGroupBlock({
           aria-expanded={flyoutOpen}
           aria-label={group.label}
           title={group.label}
-          // **图标对齐：与导航条目同一条 x=22 垂直中轴线**（用 `pl-[22px]`
-          // 而不是 `place-items-center` 居中），保证折叠/展开切换时分组图标
-          // 与相邻导航图标在同一条直线上，不发生错位。
+          // **图标对齐（按原型）**：折叠态分组图标在 48px 内容区居中，`pl-[15px]`
+          // → 中心 x=36，与导航条目/底部图标同一条 x=36 垂直中轴；展开态 `px-2.5`
+          // → 左缘 x=22。用 padding 过渡而非 justify-center，切换不跳位。
           className={cn(
-            'flex h-8 w-full items-center rounded-xl pr-0 pl-[22px] transition-[padding] duration-200 ease-out',
+            'flex h-8 w-full items-center rounded-xl pr-0 pl-[15px] transition-[padding] duration-200 ease-out',
             flyoutOpen
               ? 'bg-accent text-foreground'
               : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -373,12 +375,11 @@ function SideFoot({
     <div
       className={cn(
         'flex shrink-0 gap-2 border-t border-border-soft p-3',
-        // 折叠态：底部所有图标沿与导航同一条 x=22 垂直中轴线排列。**不**用
-        // `items-center`（那会让 32px 的设置/通知各自居中，与 48px 的主题组
-        // 互不对齐），而是用 `pl-[22px]` 把整列内容从 x=22 起排。`items-stretch`
-        // 是 `flex-col` 的默认值，这里写出来是为了与展开态的 `items-center`
-        // 显式区分，防止后人把基类的 `items-center` 误删。
-        collapsed ? 'flex-col items-stretch gap-2 pr-0 pl-[22px]' : 'items-center',
+        // 折叠态：底部所有图标与导航/分组同一条 x=36 垂直中轴 —— `flex-col
+        // items-center` 让 48px 主题组与 32px 设置/通知整体在 72px 里居中，各自
+        // 组件的图标都收在 x=36 上（原型侧栏底部此处未居中，是它的一处不一致，
+        // 这里按「一条中轴」收敛补齐）；`px-0` 去掉左右内边距，上下留白取自 p-3。
+        collapsed ? 'flex-col items-center gap-2 px-0' : 'items-center',
       )}
     >
       <div
@@ -386,9 +387,8 @@ function SideFoot({
         aria-label="外观"
         className={cn(
           'flex flex-1 gap-0.5 rounded-xl bg-secondary p-0.5',
-          // 折叠态：去掉 `mx-auto`（那会让 48px 主题组在 72px 列里居中、与
-          // 导航图标所在的 x=22 中轴线错开），改由容器的 `pl-[22px]` 统一
-          // 决定起始位置 —— 主题组从此与设置/通知同一条垂直中轴线。
+          // 折叠态：w-12 定宽 + 父级 `items-center` 把整个分组居中（盒 [12,60]），
+          // 三档按钮各自 `place-items-center` → 图标都收在 x=36，与设置/通知同线。
           collapsed && 'w-12 flex-none flex-col',
         )}
       >
