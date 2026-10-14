@@ -68,9 +68,18 @@ v0.1.0 与 v0.1.1 两个安装包**带着旧的前端产物**。原因是打包�
 
 ### 路径 B 操作（本机；实测值已填）
 
-**步骤 0　清掉热的缓存（必做）**
+**步骤 0　先判断缓存里那个 `installer.exe` 是什么版本**
 
-实测本机缓存目录里躺着一个 `installer.exe`，**112,209,032 字节 = 正是 `v0.1.1` 安装包**（MTIME 2026-10-13 19:38）。**不删它，updater 会直接复用，下载这一步不会真的发生** —— 而「差分下载」恰恰是要证明的东西。删前先确认该目录里只有这一个文件。
+本机实测缓存目录里有一个 `installer.exe`，**112,209,032 字节 = `v0.1.1` 安装包**（MTIME 2026-10-13 19:38）。**它有两种含义，处理方式相反**：
+
+| 它是 | 含义 | 处理 |
+| -- | -- | -- |
+| **已下好的新版**（版本 > 当前已装） | updater 会直接复用，**「下载」这一步不会真的发生** | **删掉**，否则验证失去意义 |
+| **当前已装版本**（本机即如此：已装 `v0.1.1`，缓存里就是 `v0.1.1` 的包） | 它是**差分下载必需的「旧文件」** | **留着** —— 删了就只能整包下载（109.6 MB 而不是 2.8 MB） |
+
+🔴 **判据是比对版本号，不是「见到就删」。** 本机属于第二种，**留着**。
+
+⚠️ **另一种残留会让差分算错**：缓存里的 `current.blockmap`。若它来自上一次**已经下过新版本**的会话，差分算法会把它当成「旧 blockmap」，于是新旧完全相同、算出 `To download: 0 KB (0%)`，再因 sha512 不符而回退整包（实测踩到过）。**做法：确认 `current.blockmap` 与当前已装版本对应；不确定就删掉它，让 updater 从发布源重新取旧 blockmap。**
 
 **步骤 1　跳过。** 两个根都在（见上）。
 
@@ -102,6 +111,32 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "D:/fanhe work/@fanhedesktop/梵禾 
 ⚠️ **探针与步骤 2′ 之间必须清一次缓存**，否则步骤 2′ 会复用探针下好的包、跳过下载。
 
 > **`0.1.2` 之后这一点会改善**：`0.1.2` 的前端产物里**已经有可点的更新按钮**（`verify:pack` 断言 `重启更新到` 在包里），所以从 `0.1.2` 往后再做这类验证时，**入口回到「点按钮」**，不必再靠「退出再打开」。第 0.5 节那个缺陷在 `0.1.2` 里已经修掉 —— 但**它修不到已经装在别人机器上的 `0.1.0` / `0.1.1`**，那两台仍只能走退出重开。
+
+### 路径 B 执行记录（2026-10-14）
+
+**已做到哪一步、还差哪一步，都记在这里，避免重复。**
+
+| 环节 | 状态 | 实测 |
+| -- | -- | -- |
+| `0.1.2` 发布 | ✅ | GitHub Release `v0.1.2`（ID `412862351`，tag → `e40bdfc`）；未认证 by-tag **200**；线上 `latest.yml` 与本地**逐字节一致**；安装包线上 `Content-Length: 112218832` 相符 |
+| 四道门禁 | ✅ | test **599 项 0 失败**（shared 108 + api 233 + web 116 + desktop 142）、`lint` / `typecheck` / `format:check` **退出码全 0** |
+| 步骤 0 清缓存 | ✅ | 原 `installer.exe`（`v0.1.1` 包）已移出备份；**验证后放回** —— 它是差分下载的「旧文件」 |
+| 步骤 1 装新根 | ✅ 跳过 | 本机 `Root` / `TrustedPublisher` 各 2 条，新旧并存 |
+| 🔴 步骤 2 探针 | ✅ **PASS** | `阶段=downloaded 版本=0.1.2` / `是否可安装=是` / 退出码 0；日志 **`Signature validated using only CN Fanhe Work.`** |
+| 步骤 2′ / 3 / 4 真实路径 | ⏳ **待真人** | 需要「启动 → 下载 → 退出 → 重开 → 验 `FileVersion=0.1.2`」 |
+
+🔴 **探针为什么用「本地验收台」而不是真源**：**从 agent 沙箱启动的 GUI 进程出网被拦**（直连 `ERR_CONNECTION_RESET`；把 `--proxy-server` 指向不存在的端口，错误**不变成** `ERR_PROXY_CONNECTION_FAILED` ⇒ 开关没被采纳）。做法是把安装目录的 `resources/app-update.yml` 临时改成 `provider: generic` + `http://127.0.0.1:8799/`（**保留 `publisherName`，所以发布者校验照旧生效**），用 `python -m http.server` 提供三个资产，**跑完立刻还原**（已与备份逐字节比对 `IDENTICAL`）。
+
+⚠️ **本机系统代理其实是配好的**（`ProxyEnable=1`、`ProxyServer=127.0.0.1:7897`），而 **`HTTP_PROXY` / `HTTPS_PROXY` 对应用无效** —— `electronHttpExecutor` 走 `electron.net`（Chromium 网络栈），**Chromium 不读这两个环境变量**。所以**在正常终端里启动应用时应当能到达 GitHub**；沙箱只是 agent 侧的限制。**这一步请你自己启动应用来做。**
+
+**关于差分下载（判据 6）**：本轮实测到 **计算正确** —— `Full: 109,588.7 KB, To download: 2,806.4 KB (3%)`；但**实际差分传输没走通**，两次回退各有原因，都不是产品缺陷：
+
+| 回退原因 | 出处 |
+| -- | -- |
+| `Cannot download "…0.1.1.exe.blockmap", status 404` | 验收台最初只放了 `0.1.2` 三个资产，缺旧 blockmap |
+| `Server doesn't support Accept-Ranges (response code 200)` | **本地 rig 的 `python -m http.server` 不支持 Range**；真实源实测支持（`206 Partial Content` + `Accept-Ranges: bytes`） |
+
+**所以真实源上的差分下载仍未被端到端跑到**，但两侧的证据都在：计算正确 + 真实源支持 Range。**这一步会随步骤 2′ 一起被真人验证掉**（若日志里不再出现 `Cannot download differentially`，差分即生效）。
 
 ## 一、两种机器不能混
 
@@ -240,7 +275,8 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "<安装目录>/梵禾 Work.exe" --u
 | `Cannot download differentially, fallback to full download ... status 404` | 差分不可用，回退整包 | **不算失败**，但说明 blockmap 没被用上，值得记一笔 |
 | 退出应用后版本没变 | `autoInstallOnAppQuit` 没生效，或退出方式绕过了它 | 用正常关窗退出，不要用任务管理器强杀 |
 | 更新后设置像是丢了 | 端口漂移导致存储分区变了（T7-02 的老问题） | 检查 `shell-origin.json`；这是 T7-02a 要防的，不该再发生 |
-| 找不到「更新按钮」 | 正常现象，已发布客户端没有这个按钮 | 见第 0.5 节，走「退出再打开」 |
+| 找不到「更新按钮」 | **只对 `v0.1.0` / `v0.1.1` 成立**（那两个包带的是旧前端产物）；**`0.1.2` 起有按钮** | 见第 0.5 节，走「退出再打开」 |
+| 报 `net::ERR_CONNECTION_RESET` / `ERR_CONNECTION_TIMED_OUT` | **网络层，与签名无关**：到 GitHub 的连通性不通 | 先确认代理。🔴 **`HTTP_PROXY` / `HTTPS_PROXY` 对应用无效** —— 它走 `electron.net`（Chromium），**只认系统代理与 `--proxy-server`**。查 `HKCU:\…\Internet Settings` 的 `ProxyEnable` / `ProxyServer`；本机实测 `1` / `127.0.0.1:7897` |
 
 ## 五、做完之后要回填什么
 
@@ -250,5 +286,9 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "<安装目录>/梵禾 Work.exe" --u
 4. 若差分真的生效（不再出现回退整包），把「差分下载的正验」也一并标为已完成。
 5. 把第 0.5 节那个缺陷记进待办 —— **`0.1.2` 已经修掉它**（产物含 `重启更新到`），剩下要记的是「已装 `0.1.0` / `0.1.1` 的机器仍无按钮」这一既成事实。
 6. 🔴 **若走的是路径 B（`0.1.1` → `0.1.2`），还要回填两处**：
-   - `docs/SIGNING-ROTATION-RUNBOOK.md` §八第一条：由「源码级论证，非端到端实测」改为**已实测**，并记下观察（探针 `阶段=downloaded 版本=0.1.2` 或用户路径的 `FileVersion=0.1.2`）。
-   - 同手册「执行记录」表：把「仍未做」那行里的「目标机装新根」划掉（本机两个根已并存，实测 `Root` / `TrustedPublisher` 各 2 条）。
+   - ✅ **`docs/SIGNING-ROTATION-RUNBOOK.md` §八第一条已改为已实测**（2026-10-14，探针 `阶段=downloaded 版本=0.1.2` + 日志 `Signature validated using only CN Fanhe Work.`）。
+   - ✅ 同手册「执行记录」表已补本轮结果；「目标机装新根」一行已按「本机两个根并存」划掉。
+7. ⏳ **只有做完步骤 2′/3/4（真人）之后**，下面三处才能动 —— **目前都还是 ⏳，别提前改**：
+   - `docs/T6-03-UPDATE-CHANNEL.md` §八.1 第 4 条。
+   - `docs/WORK-STATUS.md` §4.1 与头部「当前阶段」。
+   - `docs/DEVELOPMENT-PLAN.md` 头部「当前状态」与 `docs/PHASE-SUMMARY-2026-10-13.md` §4.1。

@@ -2118,6 +2118,32 @@ subject=CN=Fanhe Work
 
 **顺带收窄了一条被过度一般化的约束。** 轮换手册第五节的「装新根必须早于消费新版本」**只对尚未装新根的机器成立**，不是全局时序。本机两根并存 ⇒ **发布前后任意时刻都能验**。发布前真正该做的是**盘一遍「还有哪些机器装了 `v0.1.0` / `v0.1.1`」** —— 比记顺序更实用。
 
+**执行结果（2026-10-14，路径 B 走通）**
+
+**已发布 `v0.1.2`**：注解 tag 指向 `e40bdfc`（同 `v0.1.1` 惯例 —— 指向版本号提升那个提交，即 `dist` 打包时的源码状态）；GitHub Release ID `412862351`。发布走的是**先建草稿 → 传完三资产 → 逐项核对大小 → 再解除草稿**，因为「已发布但 `latest.yml` 还没传上去」会有一个窗口让客户端取不到版本清单。核对结果：未认证 GET by-tag **200**、线上 `latest.yml` 与本地**逐字节一致**（349 字节）、安装包线上 `Content-Length: 112218832` 相符。**发布前四道门禁实跑**（不引用旧结果）：test **599 项 0 失败**、`lint` / `typecheck` / `format:check` **退出码全 0**。
+
+🔴 **探针实测 PASS —— 9.60 里那条「源码级论证」由此转正为「端到端实测」。** 客户端是已装的 **`v0.1.1`（旧身份 `0604B238…` 签的）**，待验包是 **`0.1.2`（新身份 `095CB390…` 签的）**：
+
+```
+Found version 0.1.2
+[update] 阶段=downloading 版本=0.1.2 进度=100%
+Verifying signature …temp-fanhe-work-setup-0.1.2.exe
+Signature validated using only CN Fanhe Work.
+[update] 阶段=downloaded 版本=0.1.2
+[update-probe] 是否可安装=是
+[update-probe] PASS
+```
+
+**那行 `Signature validated using only CN Fanhe Work.` 就是 9.60 论证的现场证据** —— electron-updater 自己打印的正是「只用 CN 做的校验」，与 `windowsExecutableCodeSignatureVerifier.js:70~:84` 的比对路径（取 `Subject` 的 CN、**指纹不参与**）逐字吻合。**跨身份的包被旧客户端接受，第二道门照常通过；第一道门因新根已在本机 `CurrentUser\Root` 而通过。**
+
+**探针为什么用本地验收台而不是真源**：**从 agent 沙箱启动的 GUI 进程出网被拦**。判别做法值得记下来 —— 把 `--proxy-server` 指向一个**不存在的端口**，如果错误**没有**变成 `ERR_PROXY_CONNECTION_FAILED`，就说明这个开关根本没被采纳，问题在沙箱而不在代理配置。于是改用 `provider: generic` + `python -m http.server` 提供三个资产（**保留 `publisherName`，发布者校验照旧生效**），安装目录的 `app-update.yml` 跑完立刻还原并与备份逐字节比对 `IDENTICAL`。
+
+**顺带挖出两个环境事实**：① **`HTTP_PROXY` / `HTTPS_PROXY` 对应用毫无作用** —— `electronHttpExecutor` 走 `electron.net`（Chromium 网络栈），而 **Chromium 不读这两个环境变量**，只认系统代理与 `--proxy-server`。本机系统代理**其实是配好的**（`ProxyEnable=1`、`ProxyServer=127.0.0.1:7897`），所以**用户在正常终端启动应用时应当能到达 GitHub**。② 沙箱拦 GUI 出网这条，会让「从 agent 里跑 GUI 应用做网络验证」这类做法整体不可用。
+
+**差分下载（P0 判据 6）**：**计算正确** —— `Full: 109,588.7 KB, To download: 2,806.4 KB (3%)`，即只需下 3%。但**实际差分传输没走通**，两次回退都不是产品缺陷：第一次缺旧 blockmap（验收台只放了 `0.1.2` 三个资产）；第二次是 `Server doesn't support Accept-Ranges` —— **本地 rig 的 `python -m http.server` 不支持 Range**，而**真实源实测支持**（`206 Partial Content` + `Accept-Ranges: bytes`）。**真实源上的差分仍未被端到端跑到**，但两侧证据齐备，且它会随最后一次真人验证一起被覆盖。
+
+⚠️ **唯一未闭合**：真实发布源的端到端更新 —— 启动 `v0.1.1` → 自动下载 `0.1.2` → **退出应用**（`autoInstallOnAppQuit`）→ 重开 → exe `FileVersion` 变 `0.1.2`。探针刻意关掉了退出时自动安装，所以这一步替代不了。逐步操作见 `docs/P0-UPDATE-VERIFICATION.md` §0.6。
+
 **本计划与实施方案配合使用。** 实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 
 
