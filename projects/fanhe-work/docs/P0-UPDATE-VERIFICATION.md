@@ -77,27 +77,31 @@ Get-ChildItem "$env:LOCALAPPDATA\@fanhedesktop-updater" -Recurse -File -ErrorAct
 
 ### 步骤 1　装信任根
 
-拿 `fanhe-work-signing-public.cer`（仓库 `apps/desktop/scripts/` 下，已纳入版本控制，指纹 `0604B2381B8666C99F247DA7B576A4647601A5A3`，**不含私钥**）。两条路选一条。
+🔴 **先分清要装哪一个根 —— 2026-10-14 签名身份轮换之后，仓库里那个 `.cer` 已经不是本手册要用的了。**
 
-**路线 A　目标机上有这个仓库**（推荐，可复查）
+本手册验的是 **v0.1.0 → v0.1.1**，这两个包都是**旧身份**签的：
 
-```powershell
-# 经工作空间入口调用，串行执行，不要并发
-pnpm --filter @fanhe/desktop signing:trust-check   # 只读自检：退出码 0 = 能收到用该证书签的更新
-pnpm --filter @fanhe/desktop signing:trust         # 装根（TrustedPublisher + Root），不建证书
-pnpm --filter @fanhe/desktop signing:trust-check   # 复查，期望 TRUST_ROOT=True、退出码 0
-```
+| 身份 | 指纹 | 用在哪 | 公钥在哪 |
+| -- | -- | -- | -- |
+| **旧（本手册用这个）** | `0604B2381B8666C99F247DA7B576A4647601A5A3` | v0.1.0 / v0.1.1（本手册的 A 与 B） | `apps/desktop/scripts/fanhe-work-signing-public-retired-0604b238.cer`（**退役存档**） |
+| 新（2026-10-14 轮换） | `095CB390A4CD0A64EF89B4364CC095A6A8A2A9BB` | 0.1.2 及以后 | `apps/desktop/scripts/fanhe-work-signing-public.cer`（当前身份） |
 
-**路线 B　目标机上没有仓库**
-
-把那个 `.cer` 拷过去，然后：
+**`signing:trust` 装的是当前身份那一个**，所以本手册**不要用它** —— 它会装成新根，而 v0.1.1 是旧身份签的，装错根照样被判 `UnknownError`。**本步骤用 `certutil` 手工装退役的那一个。**
 
 ```powershell
-certutil -user -addstore -f Root "<路径>\fanhe-work-signing-public.cer"
-certutil -user -addstore -f TrustedPublisher "<路径>\fanhe-work-signing-public.cer"
+# 装旧根（本手册需要的那一个）。必须用 certutil —— Import-Certificate 在非交互会话里
+# 要弹根证书确认框，会报「此操作中不允许使用 UI」。
+certutil -user -addstore -f Root "<路径>\fanhe-work-signing-public-retired-0604b238.cer"
+certutil -user -addstore -f TrustedPublisher "<路径>\fanhe-work-signing-public-retired-0604b238.cer"
+
+# 复查：期望 Root 与 TrustedPublisher 里各有一条 CN=Fanhe Work
+(Get-ChildItem Cert:\CurrentUser\Root | Where-Object { $_.Subject -eq 'CN=Fanhe Work' }) |
+  Select-Object Thumbprint, NotAfter
 ```
 
-必须用 `certutil`。`Import-Certificate` 在非交互会话里要弹根证书确认框，会报「此操作中不允许使用 UI」。
+**期望看到 `0604B2381B8666C99F247DA7B576A4647601A5A3`。** 若只看到 `095CB390…`，说明装错了那一个 —— 那是给 0.1.2 用的。
+
+> **本机（打包机）现在两个根都有**（轮换时新根随 `signing:cert` 装进本机，旧根此前已装），所以**直接就能验**，不必再做这一步。这一步是给**另一台机器**准备的。
 
 两个库的分工：`Root` 让证书链变**可信**（这一条决定 updater 放不放行）；`TrustedPublisher` 只抑制「未知发布者」弹窗。缺前者会**静默**失败，缺后者只是可能弹窗。
 
