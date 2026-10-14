@@ -22,7 +22,13 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, describe, test } from 'node:test'
 
-import { PERMISSIONS, ROLE_CODES, type PermissionCode, type RoleCode } from '@fanhe/shared'
+import {
+  AUDIT_ACTIONS,
+  PERMISSIONS,
+  ROLE_CODES,
+  type PermissionCode,
+  type RoleCode,
+} from '@fanhe/shared'
 
 import { resolveTestDatabaseUrl, TEST_DATA_PREFIX } from './helpers/db.js'
 
@@ -82,6 +88,13 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
   after(async () => {
     await app.close()
     if (createdUserIds.length > 0) {
+      // 审计行必须**先于**账号清理。`audit_logs.actorId` 的外键是 SetNull，账号
+      // 一删就匹配不上，那批行会永远留在库里。
+      //
+      // 只按 `ip: TEST_IP` 清理不够：账号管理取 `request.ip`，而 inject 的默认
+      // 来源是 127.0.0.1。本文件此前没有审计断言，这批行因此无人过问 —— 实测库里
+      // 积了近三百行（五类动作各几十条）。改用 actorId 圈定，与来源地址无关。
+      await prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } })
       await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } })
     }
     await prisma.loginAttempt.deleteMany({ where: { ip: TEST_IP } })
@@ -706,5 +719,107 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
     })
     assert.equal(response.statusCode, 400)
     assert.equal(response.json().error, 'invalid_permissions')
+  })
+
+  // -----------------------------------------------------------------------
+  // 审计留痕
+  // -----------------------------------------------------------------------
+
+  /**
+   * 阶段一验收清单「关键操作在 `audit_logs` 有记录」的端到端断言。
+   *
+   * 这条此前一直悬空：`audit.ts` 有写入点、`user-admin.ts` 有调用，但没有任何
+   * 用例从**读取端**确认过。写入端正确而读取端无人验证，等于「代码里写着会写」
+   * 而没有证据。这里把五类账号管理动作一次性走完，再回查审计表。
+   *
+   * 来源地址显式给 `TEST_IP`：inject 默认落在 127.0.0.1，而清理只认 TEST_IP。
+   * 不显式给的话这些行会留在库里（这正是本断言缺席期间发生的事）。
+   */
+  test('五个账号管理动作各留一条审计，操作者可追溯且不含凭证', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const from = { remoteAddress: TEST_IP }
+    const username = `${TEST_DATA_PREFIX}audited${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const newPassword = 'audit-test-password-1234'
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      ...from,
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '留痕测试',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(created.statusCode, 201)
+    const targetId = (created.json() as { user: { id: string } }).user.id
+    createdUserIds.push(targetId)
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: `/api/system/users/${targetId}`,
+      headers: auth(owner.token),
+      ...from,
+      payload: { status: 'disabled' },
+    })
+    assert.equal(updated.statusCode, 200)
+
+    const reset = await app.inject({
+      method: 'POST',
+      url: `/api/system/users/${targetId}/reset-password`,
+      headers: auth(owner.token),
+      ...from,
+      payload: { newPassword },
+    })
+    assert.equal(reset.statusCode, 200)
+
+    const granted = await app.inject({
+      method: 'PUT',
+      url: `/api/system/users/${targetId}/permissions`,
+      headers: auth(owner.token),
+      ...from,
+      payload: { granted: [PERMISSIONS.PERSONAL_NOTE_WRITE], denied: [] },
+    })
+    assert.equal(granted.statusCode, 200)
+
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/api/system/users/${targetId}`,
+      headers: auth(owner.token),
+      ...from,
+    })
+    assert.equal(removed.statusCode, 200)
+
+    const rows = await prisma.auditLog.findMany({
+      where: { ip: TEST_IP, targetId },
+      orderBy: { createdAt: 'asc' },
+    })
+    const byAction = new Map(rows.map((row) => [row.action, row]))
+
+    for (const action of [
+      AUDIT_ACTIONS.SYSTEM_USER_CREATE,
+      AUDIT_ACTIONS.SYSTEM_USER_UPDATE,
+      AUDIT_ACTIONS.SYSTEM_USER_RESET_PASSWORD,
+      AUDIT_ACTIONS.SYSTEM_USER_SET_PERMISSIONS,
+      AUDIT_ACTIONS.SYSTEM_USER_DELETE,
+    ]) {
+      const row = byAction.get(action)
+      assert.ok(row !== undefined, `${action} 应当留下一条审计`)
+      assert.equal(row.actorId, owner.userId, `${action} 的操作者应当是发起请求的 owner`)
+      assert.equal(
+        row.actorName,
+        '账号管理测试',
+        'actorName 是快照：账号被删除后 actorId 会置空，没有快照就再答不出「谁做的」',
+      )
+      assert.equal(row.targetType, 'user')
+      assert.equal(row.result, 'success')
+    }
+
+    // 凭证不得进审计表。写入端已守住，这里从读取端再钉一次。
+    const serialized = JSON.stringify(rows.map((row) => row.detail))
+    assert.ok(!serialized.includes(TEST_PASSWORD), '审计 detail 不得含创建时提交的口令')
+    assert.ok(!serialized.includes(newPassword), '审计 detail 不得含重置后的新口令')
   })
 })
