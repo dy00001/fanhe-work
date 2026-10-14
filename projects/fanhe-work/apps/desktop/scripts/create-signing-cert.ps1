@@ -33,7 +33,21 @@
 #   "Cannot find certificate CN=Fanhe Work", and the only visible remedy --
 #   re-running this script -- would have minted a NEW certificate with the SAME
 #   subject but a DIFFERENT thumbprint. That stops every already-installed copy
-#   from ever updating again, silently.
+#   from updating until the new root is installed on it, silently.
+#
+#   ROTATED ON 2026-10-14 -- the identity quoted above is now historical.
+#   The .pfx was never found. It was searched for four ways and all four came
+#   back empty: by extension across all four local drives (C/D/E/F), inside
+#   every archive in the workspace, by private-key content markers, and by
+#   enumerating all four CurrentUser stores. `signing:cert -AllowRotate` was
+#   therefore run; the identity is now
+#     095CB390A4CD0A64EF89B4364CC095A6A8A2A9BB  (notAfter 2031-10-14).
+#   The retired public key is kept beside this script as
+#   fanhe-work-signing-public-retired-0604b238.cer, because the two published
+#   installers (v0.1.0 / v0.1.1) are signed by the OLD identity, so a machine
+#   that has to verify THOSE still needs the OLD root. -InstallTrustRoot always
+#   uses the CURRENT identity file, which is the right default; the retired copy
+#   is for the manual certutil path only. See docs/SIGNING-ROTATION-RUNBOOK.md.
 #
 #   WHY, EXACTLY (get this right -- the intuitive answer is wrong):
 #   It is NOT because publisherName changes. publisherName is derived from the
@@ -50,6 +64,19 @@
 #   machines do not have: Status becomes UnknownError(1), the whole comparison is
 #   skipped, and the update is refused. Same gate T6-03b hit locally, recurring
 #   after a machine change. Fix the TRUST ROOT, not publisherName.
+#
+#   AND THE COMPARISON ITSELF SURVIVES A ROTATION -- this is what makes the
+#   remedy above work, so do not skip it. The comparison at :70-:84 reads
+#   `data.SignerCertificate.Subject` and matches it against publisherName; the
+#   THUMBPRINT appears in neither gate. This certificate's subject is only
+#   `CN=Fanhe Work` (measured: no O/OU/L), so the match reduces to CN equality,
+#   and a new certificate with the SAME CN keeps that string identical. Hence:
+#   install the new root on the target machine and the update path is whole
+#   again. It is "no new root" that is permanent, not "new certificate" -- the
+#   earlier wording ("updating again, silently") was too strong on this point.
+#   Provenance: source reading, NOT an end-to-end test. What IS measured is the
+#   converse (same package, only the root removed -> refused; restored -> passes,
+#   T6-03b offline rig). See docs/SIGNING-ROTATION-RUNBOOK.md section 2 and 8.
 #
 #   So every run now writes a small JSON record (default
 #   %LOCALAPPDATA%\FanheWork\signing\signing-identity.json) holding the current
