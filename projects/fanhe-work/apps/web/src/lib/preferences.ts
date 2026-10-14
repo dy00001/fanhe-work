@@ -19,8 +19,19 @@
  * 不进组件。
  */
 
-/** 侧栏折叠状态。值为 `'true'` 或 `'false'`。 */
-const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed'
+/**
+ * 侧栏折叠状态。值为 `'true'` 或 `'false'`。
+ *
+ * **0.1.3 布局重置迁移：键名从 `fanhe-work.ui.sidebar-collapsed` 升到
+ * `…v2`，旧键不再被读。** 原因是 0.1.3 重做了侧栏的折叠对齐（`nav` 在折叠
+ * 态改为 `px-0`）、托盘常驻与运行期版本号读取；开发期间为验证折叠对齐曾把
+ * `'true'` 写入此键，跨会话持久化在 Electron 的 userData 里，导致每一次启
+ * 动都从折叠态开始 —— 而折叠态按设计就是无文字、底色与边框极淡（`bg-card`
+ * =#fff 对 `bg-background`=#fafafa 仅 5 档差），看起来像「侧栏没修好」。
+ * 升键名让旧值自然失效、新键从默认（展开）开始，是一次性的、**故意不可逆**
+ * 的偏好重置。注释里写明原因，方便以后翻历史时知道键名为何突变。
+ */
+const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed.v2'
 
 /**
  * 读取侧栏折叠偏好。

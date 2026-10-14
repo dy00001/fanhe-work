@@ -1240,8 +1240,10 @@ const SIDEBAR_WIDTH_PROBE = `(() => {
   requestAnimationFrame(tick)
 })()`
 
-/** 侧栏折叠偏好的键。与 `src/lib/preferences.ts` 里的常量必须一致。 */
-const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed'
+/** 侧栏折叠偏好的键。与 `src/lib/preferences.ts` 里的常量必须一致。
+ * 0.1.3 起为重置开发期残留的折叠偏好，键名升到 `.v2`（见 `preferences.ts`
+ * 里 `SIDEBAR_COLLAPSED_KEY` 的 JSDoc），本常量同步跟上。 */
+const SIDEBAR_COLLAPSED_KEY = 'fanhe-work.ui.sidebar-collapsed.v2'
 
 /** 主题偏好的键。同样与 `src/lib/preferences.ts` 保持一致。 */
 const THEME_KEY = 'fanhe-work.ui.theme'
