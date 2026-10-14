@@ -72,6 +72,14 @@ infra/portable/state/leak-baseline.json
 *.key
 *.pem
 
+# 上面是「按扩展名」的兜底，这一条是「按目录」的兜底。两份兜底都要，因为
+# 扩展名挡不住两件很可能会发生的事：
+#   ① 有人把 .pfx 打包成 .zip 再放进 keys/ 备份；
+#   ② 更糟的，有人顺手在 keys/ 里留一个记录口令的 .txt。
+# 而 keys/ 这个目录的**唯一用途**就是放私钥材料，所以整目录忽略不会误伤。
+# 用前导斜杠锚定到工作空间根，避免命中项目里同名的深层目录。
+/keys/
+
 # Local assistant memory. Managed by the memory system, scoped to this user and
 # session history, therefore kept out of version control.
 .workbuddy-ai/
