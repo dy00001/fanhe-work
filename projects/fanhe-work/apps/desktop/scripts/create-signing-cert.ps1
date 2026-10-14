@@ -767,6 +767,13 @@ try {
       Export-PfxCertificate -Cert $cert -FilePath $full -Password $secure | Out-Null
       Add-Report "EXPORT=$full"
       Add-Report "EXPORT_THUMBPRINT=$($cert.Thumbprint)"
+      # Record a deliberate bypass of the guard above. Without this line the report
+      # looks identical whether the key landed outside the workspace (the intended
+      # default) or inside it via -AllowWorkspaceExport, and the whole point of the
+      # guard is that going inside is a decision someone has to be able to audit.
+      if (Test-PathInside $full $wsRoot) {
+        Add-Report 'EXPORT_IN_WORKSPACE=True reason=guard-bypassed-by-AllowWorkspaceExport'
+      }
     }
 
     # --- 6. Record the identity ---------------------------------------------------

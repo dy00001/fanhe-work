@@ -50,6 +50,28 @@ infra/portable/state/leak-baseline.json
 # 每次部署环境一份（换机时重新生成），与apps/api/.env 也是两份不同的密钥。
 .env.compose
 
+# 私钥材料。这一条是 2026-10-14 补的，起因是一个实测出来的空档：工作空间里
+# 此前**没有任何**针对私钥的忽略规则，于是 .pfx 放进来是「未跟踪但未被忽略」
+# 的状态 —— 一条 `git add -A` 就会把它收进暂存区，而这个仓库的根会推到
+# GitHub，且实测为 **public**（未认证访问 200）。也就是说，缺这条规则时，
+# 「把私钥放进工作空间」与「把私钥公开」之间只隔一次顺手提交。
+#
+# 只忽略私钥类扩展名，**刻意不忽略 .cer** —— 公钥必须继续可跟踪，因为
+# 「身份一变就在 git diff 里显形」正是签名身份轮换的绊线
+# （见 apps/desktop/scripts/create-signing-cert.ps1 头部与
+#  docs/SIGNING-ROTATION-RUNBOOK.md）。
+#
+# 这条规则是**兜底**，不是保管方案。真正的保管方式见
+# docs/SIGNING-KEY-BACKUP.md；脚本层面另有一道守卫，会拒绝把私钥导出到
+# 工作空间内（create-signing-cert.ps1 的 -ExportPath 分支）。
+*.pfx
+*.p12
+*.pvk
+*.jks
+*.keystore
+*.key
+*.pem
+
 # Local assistant memory. Managed by the memory system, scoped to this user and
 # session history, therefore kept out of version control.
 .workbuddy-ai/
