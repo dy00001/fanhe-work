@@ -50,7 +50,7 @@
  * 配合单实例锁（第二个实例会抢不到同一个端口、顺延到一个新分区）。这两件事合起来
  * 才是「更新之后设置与本地数据都还在」的完整实现 —— 改动前先读那两个位置。
  */
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
@@ -63,7 +63,6 @@ import {
   type LoadResult,
 } from './config.js'
 import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from './agent.js'
-import { appVersionArg } from './app-version.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
@@ -182,6 +181,20 @@ app.on('second-instance', () => {
 let staticServer: StaticServerHandle | null = null
 let shellOrigin = ''
 
+/** 主窗口引用。供托盘与「第二个实例」复用，避免依赖 `getAllWindows()[0]` 这种脆弱的顺序。 */
+let mainWindow: BrowserWindow | null = null
+/** 系统托盘。常驻后台时它是唯一的可见入口；为 null 表示尚未创建（如冒烟/探针模式）。 */
+let tray: Tray | null = null
+/**
+ * 是否正在真正退出。
+ *
+ * 本版本把「最小化 / 关闭」都改成「退到托盘后台常驻」，于是关窗口按钮不再等于退出进程。
+ * 只有两条路径会把它置真：① 用户从托盘右键菜单选「退出」；② 更新安装触发
+ * `quitAndInstall`（见 `registerUpdateIpc`）。其余情况下窗口的 `close` / `minimize`
+ * 都只是隐藏，进程继续后台运行。
+ */
+let isQuitting = false
+
 /**
  * `console-message` 的参数形态在 Electron 各版本间变过（旧版是
  * `(event, level, message, …)`，新版是 `(event, details)`）。这里只用到「级别」与
@@ -223,19 +236,6 @@ function buildWindow(visible: boolean): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 把**运行期**的应用版本号送进预加载脚本（T7-05）。
-      //
-      // 走 `additionalArguments` 而不是 IPC：预加载脚本要在页面脚本之前就把这个值
-      // 摆到 `window.fanheDesktop` 上，而 IPC 是异步的 —— 用它就得让界面先渲染一版
-      // 没有版本号、再补一版，那正是这个字段要消除的「显示一个不对的值」。
-      // 这条通道也不需要任何权限：值由主进程给出，渲染进程只能读。
-      //
-      // 为什么值得专门开一条通道：前端产物里那个版本号是**构建期**从仓库根
-      // `package.json` 文本替换进去的，因此它回答的是「这份前端是什么时候构建的」，
-      // 而不是「用户装的是哪一版」。两者在打包链路漏掉一次重建之后就会分叉
-      // （`v0.1.2` 实测：包里烧着 `0.1.1`）。`app.getVersion()` 读的是被打包的那份
-      // `package.json`，**恒等于用户装的那一版**，不受构建顺序影响。
-      additionalArguments: [appVersionArg(app.getVersion())],
     },
   })
 
@@ -255,7 +255,123 @@ function buildWindow(visible: boolean): BrowserWindow {
     }
   })
 
+  // 关闭按钮（X）：默认行为是销毁窗口并触发退出流程。改为「藏到托盘」——
+  // 除非这是一次真正的退出（`isQuitting` 为真），否则只隐藏，让应用继续后台运行。
+  // 见文件顶部 `isQuitting` 的说明。
+  window.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault()
+      window.hide()
+    }
+  })
+
+  // 最小化按钮：同样退到托盘而不是停在任务栏。隐藏后任务栏只留托盘图标一个入口。
+  window.on('minimize', () => {
+    window.hide()
+  })
+
   return window
+}
+
+/**
+ * 注册「应用版本号」这个只读通道（T7-05）。
+ *
+ * ## 为什么值得单独开一个通道
+ *
+ * 前端产物里那个版本号是**构建期**从仓库根 `package.json` 文本替换进去的，它回答的是
+ * 「这份前端是哪一版、什么时候构建的」，**不是**「用户装的是哪一版」。两者在打包链路
+ * 漏掉一次前端重建之后就会分叉：`v0.1.2` 实测就是包里烧着 `0.1.1`，用户从 GitHub
+ * 装了 `0.1.2`，菜单那行显示旧版本号，看起来像更新失败。
+ *
+ * 而 `app.getVersion()` 读的是**被打包的那份 `package.json`**，恒等于用户装的那一版，
+ * 不受构建顺序影响。
+ *
+ * ## 为什么用 `sendSync` / `on`，而不是 `invoke` / `handle`
+ *
+ * 预加载脚本要在**页面脚本之前**把这个值摆到 `window.fanheDesktop` 上。`invoke` 是
+ * 异步的，界面会先渲染一版没有版本号、再补一版 —— 那正是这个字段要消除的
+ * 「先显示一个不对的值」。`sendSync` 在启动时只发生一次，阻塞的代价可以忽略。
+ *
+ * ## 为什么不用 `webPreferences.additionalArguments` 传进来
+ *
+ * 那样预加载就得自己解析 `process.argv`。**第一版就是这么写的，冒烟当场拦下**：
+ * 解析逻辑被抽成 `src/app-version.ts`，而预加载 `require('./app-version.js')`
+ * 在**沙箱化的预加载**里不被允许（报 `Unable to load preload script … module not
+ * found: ./app-version.js`，整条桥都没了）。沙箱下的预加载只能 require `electron`
+ * 与少数几个 Node 垫片，**本地模块一个都不行**。
+ *
+ * 改回 IPC 之后这个问题整体消失，而且版本号从此只有一处来源（主进程），
+ * 不再有「两端字符串必须对齐」的跨进程契约。
+ *
+ * ## 为什么在窗口之前注册
+ *
+ * 与 `registerUpdateIpc()` 同一条理由：界面在预加载阶段就要拿到它，晚注册会让那一次
+ * 拿到「通道不存在」，而 `sendSync` 对不存在的通道会**挂住**，不是返回空值。
+ */
+function registerAppVersionIpc(): void {
+  ipcMain.on('app:version', (event) => {
+    event.returnValue = app.getVersion()
+  })
+}
+
+/**
+ * 把主窗口恢复到前台。托盘图标点击与「显示窗口」菜单项都走这里。
+ *
+ * 窗口可能处于三种状态：最小化（任务栏里）、隐藏（托盘态，不在任务栏）、正常显示。
+ * 统一归一成「显示并聚焦」，调用方不必先判断当前是哪一种。
+ */
+function showMainWindow(): void {
+  if (mainWindow === null) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+/**
+ * 创建系统托盘（T7-06）。
+ *
+ * ## 为什么需要它
+ *
+ * 本版本把「最小化 / 关闭」都改成「退到托盘后台常驻」，于是关闭按钮不再等于退出。
+ * 用户需要一条始终在场的入口来恢复窗口或真正退出 —— 托盘图标就是这条入口。
+ *
+ * ## 图标来源
+ *
+ * 直接复用前端产物里的品牌 logo：`DIST_ROOT/brand/logo.png`（打包态是
+ * `resources/web/brand/logo.png`，开发态是 `apps/web/dist/brand/logo.png`）。
+ * 它与任务栏图标是同一枚（见 `electron-builder.yml` 的 `win.icon`），托盘不需要
+ * 独立资源文件，少一处要维护的二进制。
+ *
+ * 🔴 已知限制：logo 非方形、无透明通道，托盘里会带底色 —— 与任务栏图标同一处限制，
+ * 换一枚方形带 alpha 的 .ico 即可（改动只在 `electron-builder.yml` 一行，不影响这里）。
+ *
+ * ## 为什么不在冒烟/探针模式建托盘
+ *
+ * 那两个是自动化验收模式，跑在无显示的沙箱里，`new Tray` 在那种环境会抛。
+ * 验收脚本本来也不关心托盘，跳过它对功能无影响。
+ */
+function createTray(): void {
+  const iconPath = join(DIST_ROOT, 'brand', 'logo.png')
+  let image = nativeImage.createFromPath(iconPath)
+  if (image.isEmpty()) image = nativeImage.createEmpty()
+  else image = image.resize({ width: 16 })
+  tray = new Tray(image)
+  tray.setToolTip('梵禾 Work')
+  // 左键点击托盘图标：直接恢复窗口（最常见的操作，不该藏进右键菜单）。
+  tray.on('click', () => showMainWindow())
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '显示窗口', click: () => showMainWindow() },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        },
+      },
+    ]),
+  )
 }
 
 /**
@@ -517,6 +633,8 @@ function registerUpdateIpc(): void {
       }
     }
     // 不等它返回：这一行之后进程就会开始退出流程。
+    // 先置位：否则窗口的 `close` 拦截会把它当成「藏到托盘」而拦下，更新装不上。
+    isQuitting = true
     autoUpdater.quitAndInstall()
     return { ok: true as const }
   })
@@ -759,6 +877,7 @@ async function bootstrap(): Promise<void> {
   console.log(`[config] 运行形态 ${app.isPackaged ? '安装态' : '开发态'}，前端产物 ${DIST_ROOT}`)
   if (currentService.warning !== null) console.warn(`[config] ${currentService.warning}`)
 
+  registerAppVersionIpc()
   registerServiceIpc()
   registerLaunchIpc()
   // 更新通道的 IPC 在窗口之前注册：界面挂载时就会问一次当前状态（见 T6-02 的
@@ -774,15 +893,20 @@ async function bootstrap(): Promise<void> {
   }
 
   const window = buildWindow(true)
+  mainWindow = window
   await window.loadURL(`${shellOrigin}/`)
+  createTray()
 
   // 检查放在窗口显示之后：这条链路会去访问网络，不该让它挡在首屏前面。
   wireAutoUpdater()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      const next = buildWindow(true)
-      void next.loadURL(`${shellOrigin}/`)
+    if (mainWindow !== null) {
+      // 窗口可能只是藏在托盘里（最小化/关闭到托盘），直接恢复而不是新建。
+      showMainWindow()
+    } else {
+      mainWindow = buildWindow(true)
+      void mainWindow.loadURL(`${shellOrigin}/`)
     }
   })
 }
@@ -918,8 +1042,17 @@ async function probeUpstream(): Promise<boolean> {
   }
 }
 
+// 真正退出前的统一钩子：任何会导致退出的路径（托盘「退出」、更新安装、系统注销）都先到这里，
+// 把 `isQuitting` 置真，确保窗口的 `close` 拦截不会再把它当成「藏到托盘」。
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
+// 窗口「全部关闭」不再自动退出：本应用常驻托盘，窗口被关（实为隐藏）时进程继续后台运行。
+// 真正的退出只来自 `isQuitting` 已置真的那些路径，它们走到这里时窗口已经在销毁，
+// 本就不该再拦。macOS 同样沿用（Dock 仍在，可再次唤起）。
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // 空实现：进程靠托盘维持，不在此退出。
 })
 
 app.on('will-quit', () => {

@@ -103,9 +103,12 @@ export function Sidebar({ items, collapsed, onToggleCollapsed }: SidebarProps) {
         <TooltipProvider delayDuration={200}>
           <nav
             className={cn(
-              'flex flex-1 flex-col gap-3 px-3 pb-3',
+              'flex flex-1 flex-col gap-3 pb-3',
+              // 折叠态：去掉左右内边距，让每一行都占满 72px 宽、图标沿同一条垂直中轴线居中，
+              // 与品牌行（px-0）、底部行（px-0）保持一致，hover/active 高亮也变成全宽一条。
+              // 展开态保留 px-3：内容需要左右留白。
               // 折叠态的子项浮层要溢出侧栏，`nav` 的裁剪必须放行，否则浮层被直接切掉。
-              collapsed ? 'overflow-visible' : 'overflow-x-hidden overflow-y-auto',
+              collapsed ? 'overflow-visible px-0' : 'overflow-x-hidden overflow-y-auto px-3',
             )}
           >
             {sections.map((section) =>

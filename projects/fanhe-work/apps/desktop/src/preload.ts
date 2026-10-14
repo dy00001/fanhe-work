@@ -30,11 +30,14 @@
  *   `quitAndInstall()` 会让应用退出，不能只信调用方说「准备好了」。
  *
  * T7-05 再加一个**非函数**字段：
- * - `appVersion` —— 运行期的应用版本号，由主进程经 `webPreferences.additionalArguments`
- *   送进来（见 `main.ts` 的 `buildWindow`）。界面上「本机是哪一版」必须用它，而不是
+ * - `appVersion` —— 运行期的应用版本号，由主进程经 `ipcMain.on('app:version')` 提供、
+ *   这里用 `ipcRenderer.sendSync('app:version')` 在页面脚本之前取到（见 `main.ts` 的
+ *   `registerAppVersionIpc` 与 `readAppVersion`）。界面上「本机是哪一版」必须用它，而不是
  *   前端产物里那个构建期常量：后者回答的是「这份前端什么时候构建的」，两者在打包链路
  *   漏掉一次重建之后就会分叉（`v0.1.2` 实测：包里烧着 `0.1.1`，界面显示成旧版本）。
  *   `app.getVersion()` 读的是被打包的那份 `package.json`，**恒等于用户装的那一版**。
+ *   第一版曾走 `webPreferences.additionalArguments` + 预加载 `require` 本地模块，被冒烟
+ *   当场拦下（沙箱化预加载不能 `require` 本地模块），后改 IPC，详见 `main.ts` 同段注释。
  *
  * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
  * 的成对方式追加通道。
@@ -48,8 +51,33 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 
-import { readAppVersionArg } from './app-version.js'
 import type { UpdateStatus } from './update.js'
+
+/**
+ * 运行期的应用版本号（T7-05）。
+ *
+ * 界面上的「本机是哪一版」必须用它，而不是前端产物里那个构建期常量 —— 后者回答的是
+ * 「这份前端是哪一版、什么时候构建的」，而**不是**「用户装的是哪一版」。两者在打包链路
+ * 漏掉一次前端重建之后就会分叉（`v0.1.2` 实测：包里烧着 `0.1.1`，界面显示成旧版本）。
+ * `app.getVersion()` 读的是被打包的那份 `package.json`，恒等于用户装的那一版。
+ *
+ * **`sendSync` 而不是 `invoke`。** 预加载脚本在页面脚本之前执行，要把这个值直接摆到
+ * 桥上；`invoke` 是异步的，界面会先渲染一版没有版本号、再补一版 —— 那正是这个字段
+ * 要消除的「先显示一个不对的值」。启动时只发生一次，阻塞的代价可以忽略。
+ *
+ * **这里刻意不 `require()` 任何本地模块。** 沙箱化的预加载只能 require `electron` 与
+ * 少数几个 Node 垫片；第一版把解析逻辑抽成 `src/app-version.ts` 再导入，冒烟当场拦下
+ * —— `Unable to load preload script … module not found: ./app-version.js`，
+ * **整条桥都没了**（连 `isDesktopShell` 一起消失）。逻辑只有两行，不值得为它引本地模块。
+ *
+ * 校验不在这里做：只原样回传。取值与回落都在前端的 `lib/version.ts`
+ * （`readBridgedAppVersion` / `pickAppVersion`）——那是要显示它的地方，
+ * 也是唯一需要判断「什么值可用」的地方。这里放一个空串，前端自会回落。
+ */
+function readAppVersion(): string {
+  const value: unknown = ipcRenderer.sendSync('app:version')
+  return typeof value === 'string' ? value : ''
+}
 
 export type ServiceStatus = {
   /** 当前生效的服务地址。尚未读取完成时为空串。 */
@@ -116,7 +144,7 @@ const desktopBridge = Object.freeze({
    * 读法与理由见 `app-version.ts`。**界面上的「本机是哪一版」必须用这个值** ——
    * 前端产物里那个构建期常量在打包链路漏掉一次重建之后就会与实际装的版本分叉。
    */
-  appVersion: readAppVersionArg(process.argv),
+  appVersion: readAppVersion(),
   platform: process.platform,
   versions: Object.freeze({
     electron: process.versions.electron,

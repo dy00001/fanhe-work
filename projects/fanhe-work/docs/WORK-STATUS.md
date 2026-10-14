@@ -621,12 +621,22 @@ T7-01 有提交、有独立文档（`docs/T7-01-ACCOUNT-ADMIN.md`）。**阶段�
 
 **所有面向用户的版本展示都必须走 `resolveAppVersion()`。** `APP_VERSION` 保留 —— 它说明「这份产物是哪一版」，排查「用户报的问题在哪次构建之后出现」时只有它能对上，且它是网页态唯一的版本来源。
 
-#### 二、跨进程通道：`additionalArguments` → `process.argv` → `window`
+#### 二、跨进程通道：`ipcMain.on('app:version')` → `sendSync` → `window`
 
-- **主进程**（`main.ts` 的 `buildWindow`）：`webPreferences.additionalArguments: [appVersionArg(app.getVersion())]`。
-  **不走 IPC**：预加载脚本要在**页面脚本之前**就把值摆到桥上，而 IPC 是异步的 —— 用它就得让界面先渲染一版没有版本号、再补一版，那正是这个字段要消除的「显示一个不对的值」。
-- **预加载**（`preload.ts`）：`readAppVersionArg(process.argv)`，取不到时空串（界面据此回落）。
-- 🔴 **那个前缀常量不能放 `preload.ts` 里导出。** 主进程一旦 `import` 预加载模块，模块体会在**主进程**里再执行一遍 —— 包括末尾 `contextBridge.exposeInMainWorld('fanheDesktop', …)`，那是渲染进程才有的 API。报错位置离真正的起因很远（「主进程启动失败」，而不是「你 import 错了模块」）。所以抽成独立的 `src/app-version.ts`，两端都引用它。
+- **主进程**（`main.ts` 的 `registerAppVersionIpc()`）：`ipcMain.on('app:version', (event) => { event.returnValue = app.getVersion() })`，在窗口创建之前注册。
+- **预加载**（`preload.ts`）：`ipcRenderer.sendSync('app:version')`，只原样回传 —— 校验不在这里做，取值与回落都在前端的 `lib/version.ts`。
+- **为什么是 `sendSync` 而不是 `invoke`**：预加载脚本在页面脚本之前执行，要把值直接摆到桥上；`invoke` 异步，界面会先渲染一版没有版本号、再补一版 —— 那正是这个字段要消除的「先显示一个不对的值」。启动时只发生一次，阻塞代价可忽略。
+- **为什么不能晚注册**：`sendSync` 遇到不存在的通道会**挂住**，不是返回空值。与 `registerUpdateIpc()` 同一条理由。
+
+🔴 **第一版的方案被冒烟拦下，这个教训比方案本身值钱**：原先走 `webPreferences.additionalArguments` 传参、预加载自己解析 `process.argv`，并把解析逻辑抽成 `src/app-version.ts` 供两端共用。冒烟当场报：
+
+```
+Unable to load preload script: …apps\desktop\dist\preload.js
+Error: module not found: ./app-version.js
+[smoke] 预加载桥=无  console错误=2
+```
+
+**沙箱化的预加载只能 `require` `electron` 与少数几个 Node 垫片，本地模块一个都不行。** 后果不是「少一个字段」—— **整条桥都没了**（连 `isDesktopShell` 一起消失，于是宿主判定退回浏览器态、更新按钮也会回到错误文案）。改回 IPC 后这个问题整体消失，而且版本号从此只有一处来源（主进程），不再有「两端字符串必须对齐」的跨进程契约。
 
 #### 三、`use-version-check.ts` 也跟着改
 
@@ -819,6 +829,16 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 - **一处环境依赖型坑**：`ws-run.cmd` 把 `TMP` / `TEMP` 指向工作区的 `.tmp`，而 `.tmp` 就在 `.ws-root` 底下 → 任何从 `os.tmpdir()` 派生的目录向上找都必然命中工作区根。于是「找不到 `.ws-root` 时返回 null」这条用例在裸 node 下过、经 ws-run 挂。两个测试文件的暂存根因此固定落系统盘。**症状是「裸跑过、门禁里挂」，判据是跑两次对比。**
 - **验证结果（2026-10-12）**：四道门禁全绿，`test` 为 shared 83 + api 197（192 过 / 5 跳过）+ web 70 + **desktop 28**（原 10 + 新增 18），合计 **378 项 0 失败**；lint / typecheck / format:check 全通过。验收脚本 11 项全通过。外壳冒烟 PASS，且**扩展了一条「反代到达上游」**（经内置服务请求 `/api/`，上游回 401/404 也算到达，只有 502 才是没到）—— 在真实工作区读到配置后为「是」，改指向假地址后转「否」。提交 `f2bfc16`。
 - **顺带答了一个悬着的取舍**：「配置要跟着 U 盘走」由此落地，而 R2（`userData` 是否重定向进工作区）**降级为不阻塞主线** —— T4-02 证明了配置不必经由 `userData`。缓存留在系统盘与数据库不进 U 盘是同一类判断，凭据的安全语义也保持不变。
+
+### 4.1.20 `0.1.3` 版本迭代：侧栏收起对齐 + 托盘常驻（2026-10-15）
+
+承接 4.1.19。用户从截图提两个界面/交互问题，与 4.1.19 的版本号修复合并成一次 `0.1.3` 发版（此前「暂不发 0.1.3」的裁决因这两项功能变更落地而改为随它们一起发）。
+
+- **侧栏收起对齐**（`apps/web/src/components/Sidebar.tsx`）：收起态 `nav` 由 `px-3` 改为 `px-0`，与品牌行、底部行一致，所有图标沿同一条垂直中轴线居中，hover 高亮带全宽一致。纯样式，图标尺寸/字号未动。
+- **托盘常驻**（`apps/desktop/src/main.ts`）：新增 `Tray`，最小化/关闭改为 `window.hide()` 退到系统托盘后台常驻；仅托盘右键「退出」或更新安装 `quitAndInstall()` 才真正退出（两者先置 `isQuitting = true`）；`before-quit` 统一置位；`window-all-closed` 改为空实现；冒烟/探针模式不建托盘。托盘图标复用 `DIST_ROOT/brand/logo.png`（与任务栏同枚）。⚠️ 已知限制：logo 非方形无 alpha，托盘里带底色，换方形 `.ico` 即可。
+- **版本号修复（4.1.19 已闭环）随本版一发。**
+
+**门禁（本轮实跑）**：`check:web` 产物版本 == 仓库根 `0.1.3` ✓；外壳冒烟 PASS；`desktop` 154/154、`web` 122/122、`lint` / `typecheck` / `format:check` 全绿。仓库根 `package.json` 已提到 `0.1.3` 并经 `sync-version.mjs` 同步到 `apps/desktop/package.json`。见 `docs/RELEASE-0.1.3.md` 与 `DEVELOPMENT-PLAN.md` 9.64。
 
 ### 4.2 阶段三已无待办
 
@@ -1322,6 +1342,7 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 | 10-14 | **私钥保管方案（两份加密备份 + 私钥忽略规则）** | 用户要求「把私钥存进工作空间，保证各设备统一使用同一个私钥」。**没有直接执行**，因为查到三条事实：① 工作空间根仓库实测 **`public`**（未认证 `HTTP 200`、`private=false`）；② 工作空间此前**没有任何私钥忽略规则** —— `.pfx` 是「未跟踪但未被忽略」，一条 `git add -A` 就进暂存区；③ `create-signing-cert.ps1` 第 755 行**刻意拒绝**导出到工作空间内，`DEVELOPMENT-PLAN.md` 6.3 第 6 条亦写明「与工作空间分开保管，不随盘移动」。**但用户担心的那件事是真的**：轮换的根因正是**私钥从未被备份**。据此落地 —— ① **补私钥忽略规则，两层** —— 扩展名层 `*.pfx`/`*.p12`/`*.pvk`/`*.jks`/`*.keystore`/`*.key`/`*.pem`，**目录层 `/keys/`**（锚定工作空间根）。**两层都要**：只按扩展名忽略时 `keys/` 目录对 git 仍可见，里面任何非私钥扩展名的文件都会被跟踪 —— 而「顺手在放私钥的目录里写一个口令备忘 `.txt`」正是最可能发生的失误。**刻意不忽略 `.cer`** 以免破坏轮换绊线；已核对全库无已跟踪文件位于该路径下，并验证正反两面，`credential.ts` 未受影响；② 新建 **`docs/SIGNING-KEY-BACKUP.md`**（九节）；③ 脚本导出分支新增 `EXPORT_IN_WORKSPACE=True reason=guard-bypassed-by-AllowWorkspaceExport` 审计行（**纯 ASCII 无 BOM、解析 0 错误、`signing:check` 仍 `RESULT=OK`/退出码 0**）；④ 建立 `<工作空间根>/keys/` 并由目录层规则整体忽略。🔴 **纠正一处前提**：「所有设备用同一个私钥」**不靠复制私钥** —— 私钥只在打包机需要，一致性由**公钥入库 + 身份档案 + 轮换闸 + 逐机自检**四件公开的东西保证。**导出动作刻意留给用户执行**（口令用 `Read-Host` 取以免进 PSReadLine 历史），期望报告为 `ACTION=reuse` 而非 `ACTION=created`。见 6.3 第 6 条与 `docs/SIGNING-ROTATION-RUNBOOK.md` §零 bis |
 | 10-14 | **`v0.1.2` 装完显示 `0.1.1` —— 产物陈旧换脸重现（T7-05）** | 用户从 GitHub 装了 `0.1.2`，账号菜单仍显示 `v0.1.1 · 2026-10-14 · dd4e9e6`。**先定性**：装进去的**确实是 `0.1.2`**（注册表 `DisplayVersion=0.1.2` + 安装目录 exe `FileVersion=0.1.2` 两条独立判据），错的是界面那行字。**根因**：那三个值是 Vite **构建期**从仓库根 `package.json` 文本替换进产物的，而**构建排在版本号提升之前** —— 前端 22:41 构建（版本号还是 `0.1.1`），版本号 22:57 才提到 `0.1.2`，安装包 22:54 打出。即三步顺序都做了，只是版本号那步排错了位置。**既有断言为何全数漏过（最值钱的一课）**：「`resources/web` 与 `apps/web/dist` 逐字节一致」比的是**包内副本 vs 源目录**，两边同旧时照样全绿；三条标记断言（`fanheDesktop` / `重启更新到` / `正在下载`）的锚点是**写死的字符串**，只能抓住写它们时想抓的那一次陈旧。**共同点是它们都在回答「产物够不够新」，而「够新」没有绝对判据。** 修法：新增 `scripts/baked-identity.mjs`（按**形状**读回构建期注入的「版本 + ISO 构建时刻 + 提交短号」三连，判据里**不含需要随发版维护的常量**）、`scripts/check-web-build.mjs`（**打包前**前置闸，接在 `dist`/`dist:dir` 第一步，不符即拒绝）、`verify-pack.mjs`「二·补二」四条断言、`test/baked-identity.test.mjs` 12 项单测（含 4 条反例）。**当场验证**：对陈旧的 `apps/web/dist` 与用户实际装到的 `resources/web`（md5 一致）前置闸均报 `产物里烧的是 0.1.1，仓库根是 0.1.2` 并退出码 1；对现有陈旧安装包跑 `verify:pack`，**47 项里 46 项通过、唯一失败的就是新加这条**，直接证明原来那 43 项确实有洞。门禁 **611 项 0 失败**（desktop 142→**154**），`lint`/`typecheck`/`format:check` 全 0。**踩坑两条**：压缩后三字面量之间**不是裸逗号**（夹着 `cg=`/`lg=`，第一版正则一条都匹配不上却报「找不到三连」，把人引向错误结论）；带 `g` 的正则**有状态**（不重置 `lastIndex` 会让同一输入两次得出不同结果）。见 4.1.18 |
 | 10-14 | **菜单那行版本号改为桌面态读运行期值（T7-05 续）** | 用户裁决：**`0.1.3` 暂不发**（等有功能变更一起发），**但把菜单那行改掉**。定位是**纵深**而非替代 —— 4.1.18 那两道机械判据照旧在（它们保证打进包里的产物是新鲜的），这一改保证的是「万一判据又被绕过，界面至少不显示错的版本号」。取值分四层，与 `lib/host.ts` 同款结构：`readBridgedAppVersion(target)`（收形状不读全局）/ `runtimeAppVersion()`（读全局）/ `pickAppVersion()`（取舍）/ `resolveAppVersion()`（出口，**所有面向用户的版本展示都必须走这里**）。跨进程通道：主进程 `webPreferences.additionalArguments: [appVersionArg(app.getVersion())]` → 预加载 `readAppVersionArg(process.argv)` → `window.fanheDesktop.appVersion`。🔴 **不走 IPC**：预加载要在页面脚本之前把值摆到桥上，而 IPC 是异步的，用它就得先渲染一版没有版本号、再补一版，正是这个字段要消除的东西。🔴 **前缀常量不能放 `preload.ts` 里导出** —— 主进程一旦 import 预加载模块，模块体会在主进程里再执行一遍（含 `contextBridge.exposeInMainWorld`），报错位置离起因很远；故抽成独立 `src/app-version.ts`。`use-version-check.ts` 的本机清单也随之改用 `resolveAppVersion()`，否则壳里产物陈旧时会**假提示有更新**。测试：`web/test/version.test.mjs` 8→**14**（含 6 条反例，并挂一个假 `globalThis.window` 证明默认值真的去问外壳）、`desktop/test/app-version.test.mjs`（新）**7** 项。门禁 **624 项 0 失败**（web 116→122、desktop 154→161）。**踩坑**：`finally` 里写 `if (hadWindow) return` 被 `no-unsafe-finally` 拦住 —— 那不是风格问题，**finally 里的 return 会吞掉断言自身的异常**，让失败变成「用例静默通过」。⚠️ **用户机器上要发一个版本才会生效**（当前 `0.1.2` 产物里还是旧代码）。见 4.1.19 |
+| 10-15 | **`0.1.3` 版本迭代（侧栏收起对齐 + 托盘常驻 + 版本号修复合并一发）** | 侧栏收起态 `nav` 由 `px-3` 改 `px-0`（与品牌/底部行一致，图标沿同一条中轴线居中，hover 高亮全宽）；`main.ts` 新增 `Tray`：最小化/关闭 → `window.hide()` 退到托盘后台常驻，仅托盘右键「退出」或更新安装 `quitAndInstall` 真正退出（先置 `isQuitting`）；`before-quit` 统一置位、`window-all-closed` 改空实现、冒烟/探针不建托盘；托盘图标复用 `DIST_ROOT/brand/logo.png`。🔴 **版本号通道的 `additionalArguments` 初版已被冒烟当场拦下**（沙箱化预加载不能 `require` 本地模块，整条桥消失），后改 IPC（`ipcMain.on('app:version')` → `sendSync`），详见 4.1.19 与 `DEVELOPMENT-PLAN.md` 9.63。仓库根 `package.json` 0.1.2→**0.1.3** 经 `sync-version.mjs` 同步桌面端；`apps/web/dist` 已重建。门禁全绿：`check:web` 0.1.3==0.1.3、外壳冒烟 PASS、desktop 154/154、web 122/122、lint/typecheck/format:check 0。**未发版**（待签名 + 真机托盘手测，托盘手测自动化替代不了）。见 `docs/RELEASE-0.1.3.md` 与 `DEVELOPMENT-PLAN.md` 9.64 |
 
 **§十一 新增/修改的关键文件（T7-02）**：`projects/fanhe-work/apps/desktop/src/shell-origin.ts`（**新**：端口 → origin → 存储分区的纯函数，`shellPortCandidates` / `orderLegacyPorts` / `parseOriginDirName` / `parseStoredPort` / `isFreshOrigin`，**不 import electron 与 fs**）、`apps/desktop/src/{main,server}.ts`（端口候选链 + `shell-origin.json` 偏好 + 单实例锁 + 旧来源发现 + `listenOnce` / `isRetryableListenError`）、`apps/desktop/test/shell-origin.test.mjs`（**新** 19 项）、`apps/desktop/test/scratch.mjs`（**新**：从 `LOCALAPPDATA` 推系统临时目录）、`apps/desktop/test/{server,config,paths}.test.mjs` 与 `test/acceptance/t40{2,3,4}-*.mjs`（端口用例 4 项 + 统一 import `SYSTEM_SCRATCH`）、`apps/desktop/scripts/verify-pack.mjs`（+3 项断言 +2 条反例：`resources/web` 与 `apps/web/dist` 逐文件一致、三条产物标记、签名报告必须比本轮产物新）；`apps/web/src/lib/desktop-update.ts`（**新**）、`apps/web/src/lib/use-desktop-update.ts`（**新**）、`apps/web/src/components/UpdateNotice.tsx`（**新**）、`apps/web/src/components/TopBar.tsx`（接线 + `runUpdateNoticeAction` 补「还没下载好」那一支）、`apps/web/test/desktop-update.test.mjs`（**新** 19 项）；`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。**`apps/api` 与 `packages/shared` 本轮一行未改。**
 

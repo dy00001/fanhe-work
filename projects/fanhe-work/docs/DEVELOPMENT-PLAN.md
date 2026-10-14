@@ -2196,7 +2196,7 @@ Signature validated using only CN Fanhe Work.
 
 ### 9.63 界面版本号改为桌面态读运行期值（T7-05 续，2026-10-14）
 
-承接 9.62。用户裁决：**`0.1.3` 暂不发**（等有功能变更一起发），**但把菜单那行改掉**。
+承接 9.62。用户裁决（当时）：**`0.1.3` 暂不发**，先把菜单那行改掉；后于 9.64 因侧栏对齐 + 托盘常驻两项功能变更落地，`0.1.3` 改为随它们一起发。
 
 **定位**：这是**纵深**，不是给产物陈旧找借口 —— 9.62 那两道机械判据照旧在，它们保证打进包里的产物是新鲜的；这一改保证的是「万一判据又被绕过，界面上至少不显示错的版本号」。
 
@@ -2209,11 +2209,11 @@ Signature validated using only CN Fanhe Work.
 | 取舍 | `pickAppVersion(runtime, built)` | 有运行期值就用它，否则回落 |
 | 出口 | `resolveAppVersion()` | 合成。**所有面向用户的版本展示都必须走这里** |
 
-**跨进程通道**：主进程 `webPreferences.additionalArguments: [appVersionArg(app.getVersion())]` → 预加载 `readAppVersionArg(process.argv)` → `window.fanheDesktop.appVersion`。
+**跨进程通道**：主进程 `ipcMain.on('app:version', (e) => { e.returnValue = app.getVersion() })`（`registerAppVersionIpc`，在窗口创建前注册）→ 预加载 `ipcRenderer.sendSync('app:version')`（`readAppVersion`）→ `window.fanheDesktop.appVersion`。
 
-**为什么不走 IPC**：预加载脚本要在**页面脚本之前**把值摆到桥上，IPC 是异步的 —— 用它就得让界面先渲染一版没有版本号、再补一版，那正是这个字段要消除的「显示一个不对的值」。
+**为什么用 `sendSync` 而不是 `invoke`**：预加载脚本要在**页面脚本之前**把值摆到桥上。`invoke` 是异步的，界面会先渲染一版没有版本号、再补一版 —— 那正是这个字段要消除的「显示一个不对的值」。`sendSync` 在启动期只发生一次，阻塞代价可忽略。
 
-🔴 **前缀常量不能放 `preload.ts` 里导出。** 主进程一旦 `import` 预加载模块，模块体会在**主进程**里再执行一遍，包括末尾 `contextBridge.exposeInMainWorld('fanheDesktop', …)` —— 那是渲染进程才有的 API，而报错位置离起因很远（「主进程启动失败」）。所以抽成独立的 `src/app-version.ts`，两端都引用它。
+🔴 **第一版的 `additionalArguments` 方案被冒烟当场拦下，这个教训比方案本身值钱**：原先走 `webPreferences.additionalArguments` 传参、预加载自己解析 `process.argv`，并把解析逻辑抽成独立的 `src/app-version.ts` 供两端共用。冒烟报 `Unable to load preload script … module not found: ./app-version.js`、且**整条桥消失**（连 `isDesktopShell` 都没了）。根因是**沙箱化预加载只能 `require` `electron` 与少数几个 Node 垫片，本地模块一个都不行**。改回 IPC 后问题整体消失，且版本号只剩主进程一处来源，不再有「两端字符串必须对齐」的契约。
 
 **`use-version-check.ts` 也跟着改**：本机清单的 `version` 改用 `resolveAppVersion()`。不改会**假提示有更新** —— 服务端报部署版本，客户端拿构建期常量去比，壳里产物陈旧时被判成「服务端更新」，提示一个压根不存在的更新。
 
@@ -2222,6 +2222,40 @@ Signature validated using only CN Fanhe Work.
 **踩坑**：`finally` 里写 `if (hadWindow) return` 被 `no-unsafe-finally` 拦住。那不是风格问题 —— **finally 里的 return 会吞掉断言自身的异常**，让失败变成「用例静默通过」。
 
 **效果与边界**：桌面态从此显示**已装 exe 的版本**；浏览器态回落构建期常量，而它在网页端恰好是对的（网页端没有「安装」这件事）。⚠️ **用户机器上要发一个版本才会生效**（当前 `0.1.2` 的产物里还是旧代码）。
+
+### 9.64 版本迭代 `0.1.3`：侧栏收起对齐 + 托盘常驻（合并 9.63 版本号修复）
+
+承接 9.63。把三类改动合并成一次版本迭代，统一发 `0.1.3`。完整方案见 `docs/RELEASE-0.1.3.md`。
+
+**① 侧边栏收起态图标对齐（前端，`Sidebar.tsx`）**
+
+症状：侧栏收起（72px）时，导航图标没有沿同一条垂直中轴线对齐，视觉上参差。
+
+根因与修法：品牌行、底部行在收起态都已是 `px-0` + 居中，唯独导航 `nav` 在收起态仍带 `px-3` 内边距，使导航项的 hover/active 高亮带比品牌/底部窄一圈、视觉重心偏移。改为收起态 `px-0`（展开态保留 `px-3`），所有行在收起态占满 72px、图标统一居中，`justify-center` / `place-items-center` 本就存在，无需改图标本身。见 `Sidebar.tsx` 的 `nav` className。
+
+**② 最小化/关闭 → 系统托盘常驻（外壳，`main.ts` + `preload.ts` 不变）**
+
+需求：右上角最小化与关闭不再直接退出，而是**隐藏到系统托盘后台常驻**；仅当在托盘图标上**右键 → 退出**时才真正关闭进程。
+
+实现要点：
+- `main.ts` 增加 `Tray`：图标复用前端产物 `DIST_ROOT/brand/logo.png`（与任务栏图标同一枚，少一处二进制）；左键点击托盘图标 `showMainWindow()`，右键菜单含「显示窗口」「退出」。
+- 窗口 `close` 事件：非真正退出（`isQuitting` 为假）时 `preventDefault()` + `window.hide()`。
+- 窗口 `minimize` 事件：`window.hide()`（任务栏只留托盘图标一个入口）。
+- 真正退出只来自两条路径：托盘菜单「退出」与更新安装 `quitAndInstall()`，两者都先置 `isQuitting = true`；另在 `before-quit` 统一置位，确保 `close` 拦截不会再把它当成「藏到托盘」。
+- `window-all-closed` 改为**空实现**：常驻托盘的应用窗口被关（实为隐藏）时进程继续后台运行；真正的退出不会走到这里再被拦。
+- 冒烟/探针模式**不建托盘**（`new Tray` 在无显示沙箱里会抛，且验收不关心托盘）。
+
+⚠️ 已知限制：托盘图标沿用非方形、无透明通道的 logo，托盘里会带底色；换一枚方形带 alpha 的 .ico 即可（改动只在 `electron-builder.yml` 一行）。
+
+**③ 版本号陈旧修复（9.63 已完成，本次一并发）**：菜单「本机是哪一版」改读运行期 `app.getVersion()`（IPC `app:version`），不再显示打包时烧进去的构建期常量；配套双道机械闸门 `check-web-build.mjs` + `verify-pack.mjs`「二·补二」挡「新版本号 + 旧产物」。
+
+**测试要点**：
+- 门禁：`pnpm typecheck` / `lint` / `format:check` / `test` 全绿；`pnpm --filter @fanhe/desktop check:web` 闸门（产物版本 == 仓库根 `0.1.3`）。
+- 外壳冒烟 `pnpm --filter @fanhe/desktop smoke`：渲染、桥、控制台全绿（托盘不建，不影响）。
+- 托盘手测清单（需在装好的客户端上真机验证，自动化替代不了）：① 点最小化 → 窗口消失、任务栏无按钮、托盘出现图标；② 点关闭（X）→ 同上，进程仍在（任务管理器可见）；③ 左键托盘图标 → 窗口恢复；④ 右键托盘 → 「显示窗口」「退出」；⑤ 仅点「退出」→ 进程真正结束；⑥ 更新下载完成后点安装 → 进程退出并完成安装（`isQuitting` 已置位，不被 `close` 拦截拦下）。
+- 侧栏手测：收起态下品牌行、各导航项、分组图标、底部外观/设置/通知图标都落在同一条垂直中轴线上；hover 高亮带全宽一致。
+
+**发布顺序（沿用 T6-03a 纪律）**：① 改仓库根 `package.json` 版本为 `0.1.3` 并提交；② `pnpm --filter @fanhe/web build`（产物烧入 `0.1.3`）；③ `pnpm --filter @fanhe/desktop dist`（先经 `check:web` 闸门，再过 `verify:pack`）；④ 签名 + 发布 GitHub Release 草稿 → 置公开。
 
 **本计划与实施方案配合使用。** 实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 
