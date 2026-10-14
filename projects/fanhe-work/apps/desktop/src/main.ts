@@ -63,6 +63,7 @@ import {
   type LoadResult,
 } from './config.js'
 import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from './agent.js'
+import { appVersionArg } from './app-version.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
@@ -222,6 +223,19 @@ function buildWindow(visible: boolean): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 把**运行期**的应用版本号送进预加载脚本（T7-05）。
+      //
+      // 走 `additionalArguments` 而不是 IPC：预加载脚本要在页面脚本之前就把这个值
+      // 摆到 `window.fanheDesktop` 上，而 IPC 是异步的 —— 用它就得让界面先渲染一版
+      // 没有版本号、再补一版，那正是这个字段要消除的「显示一个不对的值」。
+      // 这条通道也不需要任何权限：值由主进程给出，渲染进程只能读。
+      //
+      // 为什么值得专门开一条通道：前端产物里那个版本号是**构建期**从仓库根
+      // `package.json` 文本替换进去的，因此它回答的是「这份前端是什么时候构建的」，
+      // 而不是「用户装的是哪一版」。两者在打包链路漏掉一次重建之后就会分叉
+      // （`v0.1.2` 实测：包里烧着 `0.1.1`）。`app.getVersion()` 读的是被打包的那份
+      // `package.json`，**恒等于用户装的那一版**，不受构建顺序影响。
+      additionalArguments: [appVersionArg(app.getVersion())],
     },
   })
 

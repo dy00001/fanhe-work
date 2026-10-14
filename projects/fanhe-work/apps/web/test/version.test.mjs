@@ -22,6 +22,10 @@ import {
   formatBuildDate,
   formatBuildStamp,
   formatVersionLabel,
+  pickAppVersion,
+  readBridgedAppVersion,
+  resolveAppVersion,
+  runtimeAppVersion,
   shortCommit,
 } from '../src/lib/version.ts'
 
@@ -82,4 +86,74 @@ test('悬停说明比那一行多出「提交」这个词与 UTC 原值', () => 
   )
   // 没有构建时间时不留空段。
   assert.equal(buildVersionDetail('0.1.0', '', 'unknown'), '版本 0.1.0 · 提交 unknown')
+})
+
+// ── 运行期版本号（T7-05）──────────────────────────────────────────────────
+//
+// 这一组钉的是「界面显示的版本取哪个值」。它不是装饰：`v0.1.2` 实测过 —— 前端产物
+// 构建于版本号提升之前，包里烧着 `0.1.1`，用户装了 `0.1.2` 而界面显示旧版本号，
+// 看起来像更新失败。修法就是让桌面态改取外壳给的运行期值。
+
+test('从桥的形状里取版本号', () => {
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: '0.1.2' } }), '0.1.2')
+  // 预发布号也是合法版本号，不能被「看起来不像版本」之类的规则挡掉。
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: '0.2.0-rc.1' } }), '0.2.0-rc.1')
+})
+
+test('反例 · 桥的形状不对时一律回落，不猜一个值', () => {
+  // 没有 `window`（Node 测试、浏览器态之外的环境）。
+  assert.equal(readBridgedAppVersion(undefined), null)
+  assert.equal(readBridgedAppVersion(null), null)
+  // 浏览器态：没有外壳就没有这个字段。
+  assert.equal(readBridgedAppVersion({}), null)
+  assert.equal(readBridgedAppVersion({ fanheDesktop: undefined }), null)
+  // 字段被伪造成了别的类型。环境变量式的注入在前端是常见做法，而 `'0'` / `0`
+  // 会静默变成一个看起来正常的版本号。
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: 0 } }), null)
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: null } }), null)
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: undefined } }), null)
+  // 空串：外壳取不到版本号时给的就是空串，显示出来比回落更糟 ——
+  // 那一行会变成 `v · 2026-10-14 · dd4e9e6`。
+  assert.equal(readBridgedAppVersion({ fanheDesktop: { appVersion: '' } }), null)
+})
+
+test('pickAppVersion：有运行期值就用它，否则回落', () => {
+  // 桌面态：壳里那份产物是旧的，也必须显示已装的那个版本号。
+  assert.equal(pickAppVersion('0.1.2', '0.1.1'), '0.1.2')
+  // 浏览器态与测试态：没有运行期值，回落构建期常量。
+  assert.equal(pickAppVersion(null, '0.1.1'), '0.1.1')
+  assert.equal(pickAppVersion('', '0.1.1'), '0.1.1')
+})
+
+test('反例 · 运行期与构建期不一致时不能两头都显示', () => {
+  // 这一条看着多余，其实钉的是「不允许把两个值拼在一起」—— 拼接会让用户以为
+  // 界面在报告一个范围，而它该报告的是一个事实。
+  const line = buildVersionLine('0.1.2', '2026-10-14T14:40:32.661Z', 'dd4e9e6', UTC_PLUS_8)
+  assert.equal(line, 'v0.1.2 · 2026-10-14 · dd4e9e6')
+  assert.ok(!line.includes('0.1.1'), `那一行不该带上构建期那个旧版本号：${line}`)
+})
+
+test('菜单那一行默认读运行期版本号（桌面态）', () => {
+  // Node 里没有 `window`，所以先临时挂一个。这一步是本用例的核心 ——
+  // 它证明「默认值真的会去问外壳」，而不是永远用构建期常量。
+  const hadWindow = Object.hasOwn(globalThis, 'window')
+  globalThis.window = { fanheDesktop: { appVersion: '9.9.9' } }
+  try {
+    assert.equal(resolveAppVersion(), '9.9.9')
+    assert.ok(buildVersionLine().startsWith('v9.9.9'), buildVersionLine())
+    assert.ok(buildVersionDetail().startsWith('版本 9.9.9'), buildVersionDetail())
+  } finally {
+    // 还原要放在 finally：用例失败时若留下这个全局，后续用例会读到一个假的
+    // 外壳版本号，于是它们报的错与真正的病因无关。
+    // 用条件删除而不是 `if (hadWindow) return` —— finally 里的 return 会
+    // **吞掉断言本身的异常**，让失败变成「用例静默通过」。
+    if (!hadWindow) delete globalThis.window
+  }
+})
+
+test('Node 下没有 `window`，运行期版本号回落构建期常量', () => {
+  // 上面那个用例把 `window` 删掉了，这里确认回落方向是对的。
+  assert.equal(runtimeAppVersion(), null)
+  assert.equal(resolveAppVersion(), '0.0.0') // `typeof __APP_VERSION__ === 'string'` 不成立时的占位值
+  assert.ok(buildVersionLine().startsWith('v0.0.0'), buildVersionLine())
 })

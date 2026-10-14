@@ -1,6 +1,22 @@
 /**
  * 版本号的展示层。
  *
+ * ## 两个来源，各回答一个问题
+ *
+ * | 来源 | 回答的问题 |
+ * | -- | -- |
+ * | `__APP_VERSION__` 等**构建期注入**的常量 | 「**这份前端产物**是哪一版、什么时候、从哪个提交构建的」 |
+ * | `resolveAppVersion()` 里外壳给的**运行期**值 | 「**用户装的**是哪一版」 |
+ *
+ * 界面上「本机是哪一版」用第二个。两者在打包链路漏掉一次前端重建之后就会分叉，
+ * 而分叉的表现是界面显示一个**旧版本号** —— `v0.1.2` 实测就是这样（包里烧着 `0.1.1`）。
+ * 浏览器态没有外壳，回落第一个值；而它在网页端恰好是对的（详见 `resolveAppVersion`）。
+ *
+ * ## 构建期常量为什么仍然保留
+ *
+ * 它**不是**被前者取代就完了：它说明「这份产物是哪一版」，排查「用户报的问题在哪次
+ * 构建之后出现」时只有它能对上。它也是网页态唯一的版本来源。
+ *
  * 三个值都是**构建期注入**的常量（见 `vite.config.ts` 的 `define`），不是运行时读来的：
  * 版本号来自仓库根 `package.json`，构建时刻与提交短号由构建过程当场算出来。这样做的好处
  * 是界面上显示的版本与「这个包是用哪份代码、什么时候构建的」严格对应 —— 运行时去问服务端
@@ -28,6 +44,93 @@ export const BUILD_TIME = INJECTED_BUILD_TIME
 
 /** 构建时的提交短号。git 不可用时是 `'unknown'`。 */
 export const COMMIT_SHA = INJECTED_COMMIT_SHA
+
+/**
+ * 桌面外壳在**运行期**给出的版本号；拿不到时 `null`。
+ *
+ * ## 为什么需要它 —— `APP_VERSION` 回答的不是这个问题
+ *
+ * `APP_VERSION` 是**构建期**注入的常量，它回答的是「**这份前端产物**是什么时候、
+ * 从哪个版本构建的」。而界面上「本机是哪一版」问的是「**用户装的**是哪一版」。
+ * 两者在打包链路漏掉一次前端重建之后就会分叉，而分叉的表现是**界面显示一个旧版本号**：
+ *
+ *   `v0.1.2` 实测（2026-10-14）—— 前端 22:41 构建（当时版本号还是 `0.1.1`），
+ *   版本号 22:57 才提到 `0.1.2`，安装包 22:54 打出。用户从 GitHub 装了 `0.1.2`，
+ *   菜单那行显示 `v0.1.1`，看起来像更新失败。
+ *
+ * 外壳侧的 `app.getVersion()` 读的是**被打包的那份 `package.json`**，恒等于用户装的
+ * 那一版，不受构建顺序影响。所以桌面态优先用它。
+ *
+ * ## 浏览器态为什么必须回落到构建期常量
+ *
+ * 网页端由 api 或 nginx 提供，没有外壳、也就没有这个桥。那里唯一能拿到的就是
+ * 构建期注入的值 —— 而它在网页端恰好是**对的**：网页端没有「安装」这件事，
+ * 「这份产物是哪一版」就是它唯一有意义的版本含义。
+ *
+ * ## 为什么拆成三层
+ *
+ * 与 `lib/host.ts` 的 `detectHost` / `currentHost` 同款：
+ * `readBridgedAppVersion` 收形状、不读全局（因此能在 Node 里直接测）；
+ * `runtimeAppVersion` 读全局、只做包装；`pickAppVersion` 只负责取舍。
+ */
+/** `window` 里我们要看的那一部分。写成独立类型，测试才能传一个普通对象进来。 */
+export type AppVersionProbeTarget = {
+  fanheDesktop?: { appVersion?: unknown } | undefined
+}
+
+/**
+ * 从桥的形状里取版本号；取不到（字段缺失、不是非空字符串）返回 `null`。
+ *
+ * **只认非空字符串。** 环境变量式的注入在前端是常见做法，而 `'0'` / `0` 这类值
+ * 会静默变成一个看起来正常的版本号。`null` 让调用方走回落，而回落值是浏览器态
+ * 本来就要显示的东西，不会更糟。
+ */
+export function readBridgedAppVersion(
+  target: AppVersionProbeTarget | undefined | null,
+): string | null {
+  if (target === undefined || target === null) return null
+  const bridge = target.fanheDesktop
+  if (typeof bridge !== 'object' || bridge === null) return null
+  const value = bridge.appVersion
+  if (typeof value !== 'string' || value === '') return null
+  return value
+}
+
+/**
+ * 从全局 `window` 读外壳给的版本号。拿不到（浏览器态、Node 测试）时返回 `null`。
+ *
+ * 与 `lib/host.ts` 的 `currentHost()` 同款：**读全局只是薄薄一层包装**，判断在
+ * `readBridgedAppVersion` 里做。这样「`appVersion` 不是字符串时回落」这条不用改
+ * 全局环境就能测。
+ */
+export function runtimeAppVersion(): string | null {
+  // Node 下没有 `window`，直接读会抛 ReferenceError，而 `src/lib` 下的模块会被
+  // 测试进程直接加载（见文件头关于 `typeof` 守卫的说明）。
+  if (typeof window === 'undefined') return null
+  return readBridgedAppVersion(window as unknown as AppVersionProbeTarget)
+}
+
+/**
+ * 取舍：有运行期值就用它，否则回落构建期常量。
+ *
+ * 单独一个纯函数，是为了让「什么情况下该回落」这件事可测 —— 它是**判定**，
+ * 不是装饰。
+ */
+export function pickAppVersion(runtime: string | null, built: string = APP_VERSION): string {
+  // 空串与 `null` 同等对待：外壳取不到版本号时给的是空串（见 `app-version.ts`），
+  // 而一个空的版本号显示出来比回落更糟 —— 那一行会变成 `v · 2026-10-14 · dd4e9e6`。
+  return runtime === null || runtime === '' ? built : runtime
+}
+
+/**
+ * 界面上该显示的「本机版本」：桌面态用运行期值，其余回落构建期常量。
+ *
+ * **所有面向用户的版本展示都必须走这里**，不要直接用 `APP_VERSION` ——
+ * 那个值只说明这份产物是怎么构建的。
+ */
+export function resolveAppVersion(): string {
+  return pickAppVersion(runtimeAppVersion())
+}
 
 /**
  * 提交短号。
@@ -110,7 +213,7 @@ export function formatBuildStamp(
  * 界面上出现一个空档，看起来像是渲染坏了，而它其实只是那段信息本来就没有。
  */
 export function buildVersionLine(
-  version: string = APP_VERSION,
+  version: string = resolveAppVersion(),
   buildTime: string = BUILD_TIME,
   commit: string = COMMIT_SHA,
   offsetMinutes: number = runtimeOffsetMinutes(),
@@ -130,7 +233,7 @@ export function buildVersionLine(
  * 逐秒对齐时用它；平时不必看。
  */
 export function buildVersionDetail(
-  version: string = APP_VERSION,
+  version: string = resolveAppVersion(),
   buildTime: string = BUILD_TIME,
   commit: string = COMMIT_SHA,
   offsetMinutes: number = runtimeOffsetMinutes(),

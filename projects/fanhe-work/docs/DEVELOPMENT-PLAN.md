@@ -2194,6 +2194,35 @@ Signature validated using only CN Fanhe Work.
 
 **⚠️ 未闭合**：`0.1.2` 已装在用户机器上，而**同版本号重新上传不会产生更新**（electron-updater 比版本号）—— 要让那行字变对只能发下一个版本。**是否为此发 `0.1.3`，待用户裁决。**
 
+### 9.63 界面版本号改为桌面态读运行期值（T7-05 续，2026-10-14）
+
+承接 9.62。用户裁决：**`0.1.3` 暂不发**（等有功能变更一起发），**但把菜单那行改掉**。
+
+**定位**：这是**纵深**，不是给产物陈旧找借口 —— 9.62 那两道机械判据照旧在，它们保证打进包里的产物是新鲜的；这一改保证的是「万一判据又被绕过，界面上至少不显示错的版本号」。
+
+**取值分四层**（与 `lib/host.ts` 的 `detectHost` / `currentHost` 同款结构）：
+
+| 层 | 函数 | 职责 |
+| -- | -- | -- |
+| 形状 | `readBridgedAppVersion(target)` | 从桥的形状里取版本号，**收参数、不读全局** |
+| 全局 | `runtimeAppVersion()` | 读 `window`，只做薄包装 |
+| 取舍 | `pickAppVersion(runtime, built)` | 有运行期值就用它，否则回落 |
+| 出口 | `resolveAppVersion()` | 合成。**所有面向用户的版本展示都必须走这里** |
+
+**跨进程通道**：主进程 `webPreferences.additionalArguments: [appVersionArg(app.getVersion())]` → 预加载 `readAppVersionArg(process.argv)` → `window.fanheDesktop.appVersion`。
+
+**为什么不走 IPC**：预加载脚本要在**页面脚本之前**把值摆到桥上，IPC 是异步的 —— 用它就得让界面先渲染一版没有版本号、再补一版，那正是这个字段要消除的「显示一个不对的值」。
+
+🔴 **前缀常量不能放 `preload.ts` 里导出。** 主进程一旦 `import` 预加载模块，模块体会在**主进程**里再执行一遍，包括末尾 `contextBridge.exposeInMainWorld('fanheDesktop', …)` —— 那是渲染进程才有的 API，而报错位置离起因很远（「主进程启动失败」）。所以抽成独立的 `src/app-version.ts`，两端都引用它。
+
+**`use-version-check.ts` 也跟着改**：本机清单的 `version` 改用 `resolveAppVersion()`。不改会**假提示有更新** —— 服务端报部署版本，客户端拿构建期常量去比，壳里产物陈旧时被判成「服务端更新」，提示一个压根不存在的更新。
+
+**测试**：`apps/web/test/version.test.mjs` 8 → **14**（含 6 条反例：`appVersion` 是 `0` / `null` / 空串 / 桥缺失；挂一个假 `globalThis.window` 后 `buildVersionLine()` 确实输出它，删掉后回落）；`apps/desktop/test/app-version.test.mjs`（新）**7** 项（往返一致、真实 argv 里夹着别的东西、缺参给空串、反例：`--fanhe-app-version-extra=` 与单横线形态都不算）。
+
+**踩坑**：`finally` 里写 `if (hadWindow) return` 被 `no-unsafe-finally` 拦住。那不是风格问题 —— **finally 里的 return 会吞掉断言自身的异常**，让失败变成「用例静默通过」。
+
+**效果与边界**：桌面态从此显示**已装 exe 的版本**；浏览器态回落构建期常量，而它在网页端恰好是对的（网页端没有「安装」这件事）。⚠️ **用户机器上要发一个版本才会生效**（当前 `0.1.2` 的产物里还是旧代码）。
+
 **本计划与实施方案配合使用。** 实施方案中的架构判断、数据模型与界面规格为本计划的依据，本计划中的任务编号可作为后续进度跟踪的锚点。
 
 

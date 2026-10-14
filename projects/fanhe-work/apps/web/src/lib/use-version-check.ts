@@ -21,19 +21,30 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { versionManifestRequest } from './api'
 import { currentHost } from './host'
 import { type UpdateNotice, buildUpdateNotice, startVersionCheck } from './version-check'
-import { APP_VERSION, BUILD_TIME, COMMIT_SHA } from './version'
+import { BUILD_TIME, COMMIT_SHA, resolveAppVersion } from './version'
 
 /**
  * 本机清单的原始三项。
  *
- * **模块加载时取一次而不是每次 refresh 取。** 这三项是构建期常量（`lib/version.ts` 的
- * 文件头解释了它们为什么不变），而它们在 Node 下会退化成 `'0.0.0'` / `''` / `''` ——
- * 那是 `typeof` 守卫的既有行为，本模块不改变它。
+ * **版本号用 `resolveAppVersion()`，不用 `APP_VERSION`。** 后者是构建期常量，回答的是
+ * 「这份前端是哪一版」；而这里要比的是「用户装的是哪一版」—— 若拿前者去比，壳里产物陈旧时
+ * 会被判成「服务端更新」，于是提示一个压根不存在的更新（`v0.1.2` 实测过，包里烧着 `0.1.1`）。
+ * `builtAt` / `commitSha` 仍取构建期值：服务端那侧恒为空与 `'unknown'`，比不到一起，
+ * 所以它们只影响指纹、不影响结论，见 `version-check.ts` 文件头。
+ *
+ * **模块加载时取一次而不是每次 refresh 取。** 这三项里前两项是构建期常量（`lib/version.ts`
+ * 的文件头解释了它们为什么不变），运行期那一项来自预加载桥 —— 预加载脚本在页面脚本之前
+ * 执行，所以到这里时桥已经在了。它们在 Node 下会退化成 `'0.0.0'` / `''` / `''`，那是
+ * `typeof` 守卫的既有行为，本模块不改变它。
  *
  * 在这里读而不是让 `version-check.ts` 自己读：那会让判定层 import 一个相对路径模块，
  * 于是它无法在 Node 里被直接测（理由见 `version-check.ts` 的文件头）。
  */
-const LOCAL = { version: APP_VERSION, builtAt: BUILD_TIME, commitSha: COMMIT_SHA } as const
+const LOCAL = {
+  version: resolveAppVersion(),
+  builtAt: BUILD_TIME,
+  commitSha: COMMIT_SHA,
+} as const
 
 /**
  * 当前宿主，同样在模块加载时取一次。

@@ -29,17 +29,26 @@
  *   判据在主进程的 `isReadyToInstall`，不在这里 —— 这条通道对页面脚本开放，而
  *   `quitAndInstall()` 会让应用退出，不能只信调用方说「准备好了」。
  *
+ * T7-05 再加一个**非函数**字段：
+ * - `appVersion` —— 运行期的应用版本号，由主进程经 `webPreferences.additionalArguments`
+ *   送进来（见 `main.ts` 的 `buildWindow`）。界面上「本机是哪一版」必须用它，而不是
+ *   前端产物里那个构建期常量：后者回答的是「这份前端什么时候构建的」，两者在打包链路
+ *   漏掉一次重建之后就会分叉（`v0.1.2` 实测：包里烧着 `0.1.1`，界面显示成旧版本）。
+ *   `app.getVersion()` 读的是被打包的那份 `package.json`，**恒等于用户装的那一版**。
+ *
  * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
  * 的成对方式追加通道。
  *
  * **不要**直接把 `ipcRenderer` 整个暴露出去。
  *
  * 沙箱（`sandbox: true`）下预加载只能拿到 `electron` 模块与少数几个 Node 垫片，
- * `process.platform` / `process.versions` 在其中可用，因此下面不需要任何额外依赖。
- * 更新状态的那个类型是 `import type`，编译后会被擦掉，不会给预加载引入运行期依赖。
+ * `process.platform` / `process.versions` / `process.argv` 在其中可用，因此下面
+ * 不需要任何额外依赖。更新状态的那个类型是 `import type`，编译后会被擦掉，不会给
+ * 预加载引入运行期依赖。
  */
 import { contextBridge, ipcRenderer } from 'electron'
 
+import { readAppVersionArg } from './app-version.js'
 import type { UpdateStatus } from './update.js'
 
 export type ServiceStatus = {
@@ -101,6 +110,13 @@ export type UpdateInstallResult = { ok: true } | { ok: false; reason: 'not_ready
 const desktopBridge = Object.freeze({
   /** 供界面判定「当前跑在外壳里」。浏览器里这个对象不存在。 */
   isDesktopShell: true as const,
+  /**
+   * 运行期的应用版本号，等于已装 exe 的版本。取不到时是空串（界面据此回落）。
+   *
+   * 读法与理由见 `app-version.ts`。**界面上的「本机是哪一版」必须用这个值** ——
+   * 前端产物里那个构建期常量在打包链路漏掉一次重建之后就会与实际装的版本分叉。
+   */
+  appVersion: readAppVersionArg(process.argv),
   platform: process.platform,
   versions: Object.freeze({
     electron: process.versions.electron,
