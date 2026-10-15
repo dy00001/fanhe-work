@@ -1,6 +1,6 @@
 # P0 更新通道正向验证 · 操作手册
 
-> **这份手册要闭合全项目唯一未闭环的验收**：`安装 A → 发布 B → 检查 → 下载 → 安装 → 重启，版本变 B`（`docs/T6-03-UPDATE-CHANNEL.md` §八 第 4 条）。
+> **这份手册要闭合的验收已于 2026-10-15 由真机闭合**：本机 `v0.1.1` → 真实源（GitHub Release）→ 收到 `0.1.3` → 安装重开后 exe `FileVersion=0.1.3`。以下内容作为判据与操作步骤存档。原任务：
 > 两端已就绪：A = `v0.1.0`（2026-10-13 16:0x 发布）、B = `v0.1.1`（同日 17:4x 发布），GitHub Release 资产齐备。
 > 🔴 **但「B 端是谁」由发布动作决定，不由本手册决定** —— `0.1.2` 一旦发布，`latest.yml` 就指向它。**先读第 0.6 节选路径。**
 > 关联：`docs/WORK-STATUS.md` §4.1、`docs/PHASE-SUMMARY-2026-10-13.md` §4.1。
@@ -136,7 +136,7 @@ env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS "D:/fanhe work/@fanhedesktop/梵禾 
 | 步骤 0 清缓存 | ✅ | 原 `installer.exe`（`v0.1.1` 包）已移出备份；**验证后放回** —— 它是差分下载的「旧文件」 |
 | 步骤 1 装新根 | ✅ 跳过 | 本机 `Root` / `TrustedPublisher` 各 2 条，新旧并存 |
 | 🔴 步骤 2 探针 | ✅ **PASS** | `阶段=downloaded 版本=0.1.2` / `是否可安装=是` / 退出码 0；日志 **`Signature validated using only CN Fanhe Work.`** |
-| 步骤 2′ / 3 / 4 真实路径 | ⏳ **待真人** | 需要「启动 → 下载 → 退出 → 重开 → 验 `FileVersion=0.1.2`」 |
+| 步骤 2′ / 3 / 4 真实路径 | ✅ **2026-10-15 已闭合（真人）** | 用户在本机正常启动已装 `v0.1.1` → 更新提示 `0.1.3` → 下载安装 → 重开，exe `FileVersion=0.1.3`（写入时间 14:53:48）。注：真实取到的是 `0.1.3`（latest.yml 已前移），非 0.1.2；跨身份同 CN 更新（旧身份 0604B238 签的 0.1.1 → 新身份 095CB390 签的 0.1.3）在真实源上成立 |
 
 🔴 **探针为什么用「本地验收台」而不是真源**：**从 agent 沙箱启动的 GUI 进程出网被拦**（直连 `ERR_CONNECTION_RESET`；把 `--proxy-server` 指向不存在的端口，错误**不变成** `ERR_PROXY_CONNECTION_FAILED` ⇒ 开关没被采纳）。做法是把安装目录的 `resources/app-update.yml` 临时改成 `provider: generic` + `http://127.0.0.1:8799/`（**保留 `publisherName`，所以发布者校验照旧生效**），用 `python -m http.server` 提供三个资产，**跑完立刻还原**（已与备份逐字节比对 `IDENTICAL`）。
 

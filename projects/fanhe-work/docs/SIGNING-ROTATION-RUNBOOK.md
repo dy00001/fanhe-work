@@ -19,7 +19,7 @@
 | 验收 | `verify:pack` **PASS，43 项断言全过** |
 | 签名报告 | 四个 exe **全部 `STATUS=Valid VALUE=0`**、`NOT_VALID_COUNT=0`，**横跨两个身份**（新的 `095CB390…` 与旧的 `0604B238…`）—— **新旧两个根在本机共存且各自成立** |
 
-⚠️ **仍未做**：**真实发布源上的端到端更新**（`0.1.2` 已发布，但从本机跑探针出不了网 —— 见第八节末尾的两个环境坑；最后一段「退出应用 → 重开 → 版本变 `0.1.2`」要真人操作）。
+✅ **真实发布源端到端已于 2026-10-15 由真机闭合**：已装 `v0.1.1` 的机器经系统代理从 GitHub Release 收取 `0.1.3`（新身份 `095CB390…` 签的）并安装成功，exe `FileVersion=0.1.3`（写入时间 14:53:48）。详见第八节与第九节第 8 条。
 
 **2026-10-14 后续（`0.1.2` 已发布 + 探针实测通过）**：
 
@@ -267,7 +267,7 @@ certutil -user -addstore -f TrustedPublisher "<路径>\fanhe-work-signing-public
   **那一行日志就是第二节论证的现场证据**：electron-updater 打印的正是「**只用 CN 做的校验**」这句话，与 `windowsExecutableCodeSignatureVerifier.js:70~:84` 的比对路径（取 `Subject` 的 CN、**指纹不参与**）逐字吻合。**跨身份的包被旧客户端接受，第二道门照常通过；第一道门因新根已在本机 `CurrentUser\Root` 而通过。**
 
 - **已实测的还有**：**同一个包、逐字节不变、只把信任根移出 `CurrentUser\Root` → 拒绝；加回 → 通过**（T6-03b 离线验收台，因变量只有信任根）。
-- ⚠️ **仍未实测的一层：真实发布源上的端到端（GitHub → 下载 → 安装 → 重启 → 版本变 `0.1.2`）。** 上面那次实测用的是**本地验收台**，因为**探针从本机跑不通外网**（原因见下）。所以「`0.1.2` 真的能从 GitHub 装到这台机器上」目前只到「资产可下载 + 线上 `latest.yml` 与本地逐字节一致」为止，**最后一段要真人操作**。
+- ✅ **真实发布源端到端已于 2026-10-15 实测通过（真人操作）**：已装 `v0.1.1`（旧身份 `0604B238…` 签的）经系统代理从 GitHub 收取并安装 `0.1.3`（新身份 `095CB390…` 签的），重开后 exe `FileVersion=0.1.3`。此前 2026-10-14 的实测走的是本地验收台（原因：探针从 agent 沙箱出网被拦，见本节末），两者互为补充。
 - 🔴 **本机跑探针的两个环境坑（都记下来，下次不用再试一遍）**：
   1. **从 agent 沙箱启动的 GUI 进程出网被拦。** 直连报 `net::ERR_CONNECTION_RESET`；加 `--proxy-server=http://127.0.0.1:7897` 报 `ERR_CONNECTION_TIMED_OUT`；**把 `--proxy-server` 指向一个不存在的端口 `7999`，错误又回到 `RESET`** —— 若开关真的生效，这里应当是 `ERR_PROXY_CONNECTION_FAILED`。**判据就是这一步：错误类型不随开关改变 ⇒ 开关没被采纳 ⇒ 是沙箱在拦，不是代理配错。**
   2. **`HTTP_PROXY` / `HTTPS_PROXY` 对应用毫无作用。** `electronHttpExecutor` 用的是 `electron.net`（Chromium 网络栈，判据是它监听的 `request.on("login", …)` 事件），而 **Chromium 不读这两个环境变量**，只认系统代理与 `--proxy-server`。**本机系统代理其实是配好的**（`ProxyEnable=1`、`ProxyServer=127.0.0.1:7897`），所以**用户在正常终端里启动应用时，它应当能到达 GitHub** —— 沙箱只是 agent 侧的限制。
@@ -284,4 +284,4 @@ certutil -user -addstore -f TrustedPublisher "<路径>\fanhe-work-signing-public
 5. `apps/desktop/scripts/create-signing-cert.ps1` 头部第 31~36 行：那段以 `0604B238…` 为例的叙述要标明「此身份已于 2026-10-14 轮换」。
 6. ✅ **本手册第八节第一条已改为已验**（2026-10-14，探针实测 `PASS` + `Signature validated using only CN Fanhe Work.`）。
 7. ✅ **`docs/P0-UPDATE-VERIFICATION.md` 新增 §0.6**（`0.1.2` 发布后 B 端会变，两条路径对照）。
-8. ⏳ **仍待回填**：真实发布源上的端到端更新（`FileVersion` 变 `0.1.2`）—— 这一步做完后，`docs/T6-03-UPDATE-CHANNEL.md` §八.1 第 4 条才能由 ⏳ 改 ✅。
+8. ✅ **已回填（2026-10-15）**：真实发布源端到端已闭合（v0.1.1 → 0.1.3，FileVersion 0.1.3），`docs/T6-03-UPDATE-CHANNEL.md` §八.1 第 4 条已由 ⏳ 改 ✅；`docs/P0-UPDATE-VERIFICATION.md` §0.6 路径 B 执行记录同步。
