@@ -30,6 +30,19 @@
 | 🔴 探针（本地验收台） | **PASS**：`阶段=downloaded 版本=0.1.2` / `是否可安装=是` / 退出码 0；日志 **`Signature validated using only CN Fanhe Work.`** —— **第八节第一条由此从「论证」转正为「实测」** |
 | 差分下载 | 计算**正确**（`To download: 2,806.4 KB` / `Full: 109,588.7 KB`，3%）；实际差分传输**未走通**（本地 rig 缺 `Accept-Ranges`，真实源实测支持 `206`）—— 详见第八节 |
 
+**2026-10-15 后续（`0.1.3` 发布，同一身份 `095CB390…` 续签）**：
+
+| 环节 | 结果 |
+| -- | -- |
+| 轮换后自检（发版前复核） | `RESULT=OK`、`CURRENT_DAYS_LEFT=1825`、指纹不变 |
+| 目标机条件（本机作接收机） | `signing:trust-check` `RESULT=OK` 退出码 0，`TRUST_ROOT`/`TRUST_PUBLISHER`/`CHAIN_BUILDS`/`TRUST_CERT_MATCHES_RECORD` 全 `True` |
+| 前端 | `web build` 24.6 s，`check:web` 产物 0.1.3 == 仓库根、烘焙提交 `1fe19fe` |
+| 打包 | `fanhe-work-setup-0.1.3.exe` **112,223,256 字节**，`dist` 6 分 40 秒 exit 0；⚠️ 需走用户系统代理 `http://127.0.0.1:7897`（沙箱代理 58304 对 electron CDN 返 502），且**打包前必须手工删 `release/win-unpacked`**（抬阈值后守卫转回收站，U 盘上 `genie-trash` 5 秒超时） |
+| 签名 | 安装包与四个伴随产物全部 `CN=Fanhe Work` / `095CB390…` store=My |
+| 验收 | `verify:pack` **PASS，47 项断言全过**；签名报告 **5 个 exe 全 `STATUS=Valid VALUE=0`**、`NOT_VALID_COUNT=0`（横跨新旧两个身份，新旧根并存各自成立） |
+| 发布 | GitHub Release **`v0.1.3`**（ID `413502711`，tag → `6152dd3a`(annotated) → `1fe19fe`），三资产齐备，**建时即 draft=false**（未走 electron-builder 内置 publish，用 API 直传；⚠️ `target_commitish` 传 tag 对象 sha 会 422，annotated tag 要省略该字段） |
+| 发布后核对 | 未认证 by-tag **200**；线上 `latest.yml` 与本地**逐字节一致**（sha256 `caf4c1f1…`）；exe size 与 `latest.yml` 声明一致 |
+
 **本机作为「接收机」的条件已实测通过**（`signing:trust-check`，只读）：
 
 | 项 | 实测 |

@@ -539,6 +539,11 @@ try {
     # Measured motivation (2026-10-13): CurrentUser\My was empty and nothing on the
     # machine recorded the identity, yet release\fanhe-work-setup-0.1.{0,1}.exe were
     # both signed by thumbprint 0604B238... -- recoverable only from the artifacts.
+    # NOTE (2026-10-14): that identity 0604B238... was ROTATED the same day (no .pfx
+    # backup existed anywhere; the rotation gate was passed with -AllowRotate). It is
+    # kept in the identity record's history; the current identity is 095CB390...
+    # and v0.1.2/v0.1.3 are signed with it. Adoption still works for either identity
+    # because only the Subject CN (never the thumbprint) is compared downstream.
     if ([string]::IsNullOrEmpty($ArtifactPath)) {
       throw 'AdoptFromArtifact was given but ArtifactPath is empty. Point it at a signed artifact, e.g. release\fanhe-work-setup-0.1.1.exe'
     }

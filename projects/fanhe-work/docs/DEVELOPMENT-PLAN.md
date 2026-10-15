@@ -1923,7 +1923,7 @@ Prisma 7.10 对 `ops: raw(...)` 与 `extensions = [pg_trgm]` 都能通过 `prism
 
 **验证结果（2026-10-13 21:xx）**：四道门禁 **578 项 0 失败**（desktop 99 → 122、web 97 → 116）。端口稳定性实测：dev 外壳连跑两次，第二次 `[shell] 界面来源 http://127.0.0.1:57352（沿用上次；候选 57352 → 49901 → 41873 → … → 0）`，偏好文件为 `{"port": 57352}` —— **首次落进既有来源之一**。离线复刻（用真实 `%APPDATA%` 数据）得 `候选链 = 49901 → 57352 → 41873 → … → 0`、`新版本首次启动会用端口： 49901`、`换分区告警会触发吗： 不会（好）`；`netstat` 显示已装的 `梵禾 Work.exe` 正 LISTENING 在 `49901`，与候选链首选一致。
 
-⚠️ **明确未完成的部分（不得记成已完成）**：`dist:dir` **因证书不在本机而中止**（`⨯ Cannot find certificate CN=Fanhe Work`），产物是「新 web + 新 asar + 未签名 exe」的中间态，`verify:pack` 如实报 1 FAIL。**未执行 `signing:cert`** —— 证书是唯一签名身份，重新生成会让已装 `v0.1.0` / `v0.1.1` 的机器持有旧根、将永久无法更新（机制见 9.56，**不是**「换了签名主体」），影响面覆盖已发布版本，**须由用户裁决**。因此未发新版，§八 第 4 条的正向更新验证仍待真人操作。
+⚠️ **明确未完成的部分（不得记成已完成）**：`dist:dir` **因证书不在本机而中止**（`⨯ Cannot find certificate CN=Fanhe Work`），产物是「新 web + 新 asar + 未签名 exe」的中间态，`verify:pack` 如实报 1 FAIL。**未执行 `signing:cert`** —— 证书是唯一签名身份，重新生成会让已装 `v0.1.0` / `v0.1.1` 的机器持有旧根、将永久无法更新（机制见 9.56，**不是**「换了签名主体」），影响面覆盖已发布版本，**须由用户裁决**。因此未发新版，§八 第 4 条的正向更新验证仍待真人操作。**（2026-10-15 注：已裁决为 (b) 轮换并执行 —— 新身份 `095CB390…`，v0.1.2 / v0.1.3 均已发布，见 9.57 与 `SIGNING-ROTATION-RUNBOOK.md`。）**
 
 
 ### 9.56 T6-03d 签名身份档案（v1 → v2 的工具链升级）
@@ -2017,7 +2017,7 @@ electron-builder 解压 Electron 前要清空 `release/win-unpacked`（80 个条
 
 **实测（2026-10-13 22:5x ~ 23:1x）。** ① 初始：`.cer` 在、`Root` 与 `TrustedPublisher` 均为 0 条 → `TRUST_ROOT=False`、`RESULT=NOT_TRUSTED`、退出码 1；② `-InstallTrustRoot` → `TRUST_PUBLISHER=added`、`TRUST_ROOT_CERTUTIL_EXIT=0 VERIFIED=True`、`RESULT=OK`；③ 复查 → `TRUST_ROOT=True`、`TRUST_PUBLISHER=True`、`CHAIN_BUILDS=True`、`TRUST_CERT_MATCHES_RECORD=True`、`RESULT=OK`；④ 重跑一次 → 两个库都报 `already-present`（幂等）；⑤ `-PublicCertPath` 指向不存在文件 → `RESULT=MISSING` + 指向版本控制内那份的提示，而不是把 override 路径说成「tracked copy」。
 
-**本机现状被这一步改变了。** 装根之后 `fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` 双双从 `UnknownError`(1) 回到 **`STATUS=Valid VALUE=0`**。**但这只修好「验」的那一半，没修「签」的那一半**：私钥仍不在本机，`dist:dir` 依旧报 `Cannot find certificate CN=Fanhe Work`，发版仍阻塞在 9.56 末尾那句裁决上。两件事必须分开记，否则下一次读状态的人会以为证书问题已经解决了。
+**本机现状被这一步改变了。** 装根之后 `fanhe-work-setup-0.1.0.exe` 与 `-0.1.1.exe` 双双从 `UnknownError`(1) 回到 **`STATUS=Valid VALUE=0`**。**但这只修好「验」的那一半，没修「签」的那一半**：私钥仍不在本机，`dist:dir` 依旧报 `Cannot find certificate CN=Fanhe Work`，发版仍阻塞在 9.56 末尾那句裁决上。两件事必须分开记，否则下一次读状态的人会以为证书问题已经解决了。**（2026-10-15 注：已解决，详见 9.57。）**
 
 **顺手修掉三处会致害的内容（都在同一条链上，改完才发现它们互相掩护）。**
 - `electron-builder.yml` 原注「🔴 换机器必须先在目标机跑一次 `signing:cert`…… 证书换了等于换了签名主体」：**两句都错**。前半句会让目标机造出错误的根；后半句是 9.56 已纠正过的因果错误。已改为「两种机器」对照 + 指到 `signing:trust` / `signing:trust-check`。
