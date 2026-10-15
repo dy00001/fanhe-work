@@ -38,5 +38,41 @@ interface Window {
     checkForUpdates: () => Promise<unknown>
     /** 安装已下载的新版并退出应用；没有就绪的包时返回 `not_ready`。 */
     installUpdate: () => Promise<{ ok: true } | { ok: false; reason: string; detail: string }>
+    /**
+     * 启动一条配置（传整条 profile）。结构见 `apps/desktop/src/preload.ts` 的
+     * `LaunchRunResult`：成功时 `data` 的字段与 HTTP 端点返回的 `RunLaunchProfileResponse`
+     * 完全一致，失败时 `reason` 是机器可读码、`detail` 是可展示文案。
+     */
+    runLaunchProfile: (
+      profile: import('@fanhe/shared').LaunchProfile,
+    ) => Promise<
+      | { ok: true; data: { profileId: string; pid: number; startedAt: string; deduplicated: boolean } }
+      | { ok: false; reason: string; detail: string }
+    >
+    /**
+     * 批量启动一组配置（桌面态）。结构见 `apps/desktop/src/preload.ts` 的
+     * `LaunchRunManyResult`：每条独立成功/失败，汇总给成功数与失败数。
+     */
+    runLaunchProfiles: (
+      profiles: import('@fanhe/shared').LaunchProfile[],
+    ) => Promise<{
+      results: { profileId: string; ok: boolean; pid?: number; reason?: string; detail?: string }[]
+      summary: { total: number; success: number; failed: number }
+    }>
+    /**
+     * 一键检测本机路径（2.5，桌面态）。结构见 `apps/desktop/src/preload.ts` 的
+     * `LaunchPathDetectResult`：返回首选命中 + 候选清单。`extraPath` 是用户已填过、想
+     * 顺带校验的路径。浏览器里没有本机文件系统，这条通道只有外壳场景有意义。
+     */
+    detectLaunchPath: (
+      software: string,
+      extraPath?: string,
+    ) => Promise<{
+      software: string
+      preferred: string | null
+      candidates: string[]
+      agentAvailable: boolean
+      detail?: string
+    }>
   }
 }

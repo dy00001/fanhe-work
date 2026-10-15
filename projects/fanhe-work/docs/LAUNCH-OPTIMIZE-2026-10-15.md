@@ -1,0 +1,185 @@
+# 梵禾 Work 桌面端「一键启动」模块适配性改进方案
+
+> 版本草案 v1，2026-10-15。基于 `apps/desktop`、`apps/web`、`apps/api`、`packages/shared` 现有实现撰写，不是泛化建议。
+> 阅读顺序建议先读第 1 节现状盘点与第 2.1 端口一节，其余需求按需查阅。
+
+## 0. 结论先行
+
+七条需求里，真正卡住功能的是两条链路判断，其余多为在既有骨架上补肉。
+
+其一，**桌面端的一键启动当前走错了宿主通道**。网页端 `runLaunchProfile` 打的是 HTTP `POST /api/launch/profiles/:id/run`，该端点被 `isLoopbackAddress` 门守（`apps/api/src/routes/launch.ts` 第 334 行）。安装态默认服务地址是云端 `https://work.fanhe.dpdns.org`（`apps/desktop/src/main.ts` 第 111 行），经 Cloudflare Tunnel 进来的连接 `remoteAddress` 非回环，启动必然返回 404。外壳其实另备了一条 `launch:run` IPC 由主进程在本机 spawn（`preload.ts` 第 168 行），但网页端从未调用它。**需求 1「任意端口、桌面端均可调用」的根因就在这里**，修法是把桌面态的启动改走 IPC，启动便与 shell 服务端口、api 服务端口全部解耦。
+
+其二，**凭据这一步最终定为「唤起 + 点击登录」，工作台不存密码。** 用户已拍板（回填见第 5 节）：QQ 与千牛客户端自带「记住账号密码」，工作台只需唤起客户端并点一下「登录」按钮，凭据全交由客户端自己保存；微信只唤起、走扫码，不多做。这比让工作台代管密码再自动输入机密干净得多：云端库零第三方密码，也不碰自动输入机密那层风控，只保留一次轻量的「点登录」动作。第 4 条需求的实现重心因此从「怎么存密码」转成「怎么可靠地点一下登录按钮」，详见 2.4。
+
+把这两条立住，端口兼容、并发启动、多账号、路径检测、首页重构都能在现有模型上增量落地，且不破坏「只启动配置、不启动命令」「远程不能启动本机进程」两条安全边界。
+
+## 1. 现状盘点：这套模块今天已经有什么
+
+避免重复造轮子之前，先把它已有的能力钉在一处，后续每条需求都对照这里判断「补什么、不改什么」。
+
+**数据模型已是「一条一实例」。** `packages/shared/src/launch.ts` 的 `LaunchProfile` 与 `apps/api/prisma/schema.prisma` 的 `LaunchProfile` 表一一对应。一条配置等于「点一下就拉起某个客户端实例」，字段含 `software`、`name`、`executablePath`、`args`（数组，非待分词字符串）、`icon`、`sortOrder`。软件清单是 `LAUNCH_SOFTWARES = ['wechat','qq','qianniu','custom']`，刻意做成共享包常量而非数据库枚举，加软件不改表结构。**这意味着「2 个微信 + 2 个 QQ + 5 个千牛」在数据层就是 9 条记录，多账号的存储天然成立**（需求 3 的地基已就位）。
+
+**启动链路有两种形态，且当前只用了一种。** 进程创建的唯一实现在 `apps/api/src/launch/agent.ts` 的 `runLaunchProfile`，它先复核路径（`inspectExecutablePath`）再 spawn，且必须等到 `spawn` 事件才算成功、`unref()` 交出子进程、3 秒去重窗口防连点。这份代码被两个宿主共用：
+
+- **HTTP 形态**：`apps/api/src/routes/launch.ts` 挂 `POST /api/launch/profiles/:id/run`，请求体只带 id，路径与参数一律取库。权限用 `write`，且 `isLoopbackAddress(request.socket.remoteAddress)` 必须为真。**这是当前网页端唯一在用的路径**（`apps/web/src/lib/launch.ts` 的 `runLaunchProfile` → `runLaunchProfileRequest`）。
+- **IPC 形态**：外壳主进程 `launch:run`（`apps/desktop/src/main.ts` 第 457 行）经 `paths.ts` 动态 import 同一份 `agent.ts`，在**本机** spawn。入参是整条配置对象，主进程用 `agent.ts`（desktop 侧）的 `normalizeProfile` 复核形态，防 IPC 变成本机任意命令执行入口。**这条通道已就绪，却没有网页调用方**。
+
+**路径自检已成体系。** IPC `launch:diagnostics`（`main.ts` 第 485 行）经 `diagnostics.ts` 对配置数组逐条 `inspectExecutablePath`，返回的报告连「代理不可用」也编码成一条诊断而非错误。这条链路是需求 5「一键检测」的现成地基。
+
+**端口与存储分区强绑定，这是既有铁律。** 界面托管在 `http://127.0.0.1:<端口>`，而 localStorage 与 IndexedDB 按 origin 分区，origin 含端口。`shell-origin.ts` 的 `shellPortCandidates` 按「偏好端口 → 旧端口（按 IndexedDB 目录 mtime 倒序）→ 固定段 41873..41880 → 0」依次试，`server.ts` 只对 `EADDRINUSE`/`EACCES` 顺延。端口稳定的意义是「更新后设置不丢」。
+
+**凭据能力已预留位置但未实现。** `preload.ts` 注释明言「credential 的 safeStorage 迁移会在这里继续按成对方式追加通道」，`schema.prisma` 与实施方案也把「免密登录走 DPAPI / safeStorage」划为阶段四之后的事。即位置留好了，砖还没搬。
+
+## 2. 逐条适配设计
+
+### 2.1 端口兼容性：启动与端口解耦，走 IPC 而非 HTTP
+
+**结论。** 让桌面态一键启动改走外壳 IPC `launch:run`，它由主进程在本机 spawn，与 shell 前端服务端口、api 服务端口均无关系，由此「任意端口、桌面端均可调用」成立。
+
+**根因。** 现在网页端启动打 HTTP run 端点，而该端点要求来源是回环。三种部署下表现分裂：开发态 api 在 `127.0.0.1:8787`，经外壳反代的请求 `remoteAddress` 是回环，能启动；安装态默认指向云端 Tunnel，`remoteAddress` 非回环，启动必 404，而这恰是交付给用户的默认形态。用户感知是「一键启动按钮在安装版里点不动」，排查会先疑心端口，其实与端口无关，是链路选错。
+
+**为什么不能靠「给 HTTP run 端点开放更多端口」来解。** 那道回环门是安全边界，不是Bug。它挡的是「远程 API 不能启动任何人电脑上的进程」。放开它，等于把本机进程创建能力暴露给任何能连到 api 的人。端口放开解决不了这个边界问题，只会把边界拆掉。
+
+**改造点。** `apps/web/src/lib/launch.ts` 的 `runLaunchProfile` 改为宿主分流：检测 `currentHost()`（`lib/host.ts` 已有，判 `window.fanheDesktop.isDesktopShell`）。desktop 态先从列表取到完整 profile，调 `window.fanheDesktop.runLaunchProfile(profile)`，把返回的 `LaunchRunResult` 映射回现有界面需要的形状，错误码沿用 `launchRunRecovery` 的 `relocate`/`retry` 分流（`executable_missing` 归 relocate，其余归 retry）；browser 态维持 HTTP，且只在 api 处于回环环境时有效，UI 上应给出提示。诊断与路径检测（需求 5）同样优先走 IPC。`launchRunRecovery` 目前只认 `error.code === 'executable_missing'`，IPC 侧返回的是 `{ok:false, reason}`，需把判定扩成同时认 reason，否则桌面态路径失效会被误判成「重试」。
+
+**顺带的正交收益。** 端口机制一行不用改。`shellPortCandidates` 继续保存储分区稳定，启动功能走 IPC 本就不依赖端口，两者各司其职，不再互相牵扯。
+
+### 2.2 多软件并发启动：批量 run，独立 spawn，按需串行
+
+**结论。** 新增「批量启动」能力，一次选多个实例同时拉起；默认并行、互斥量客户端可按序、单条失败不影响其余，汇总结果给明细与重试。
+
+**改造点。** 外壳新增 IPC `launch:runMany`（或 HTTP 侧 `POST /api/launch/profiles/run-many`，同样受众号与回环门约束）。入参是一组配置（或 id 组，desktop 态配完整对象）。实现复用 `agent.ts` 的 `runLaunchProfile`，对每条独立调用、`Promise.allSettled` 收集，每条各自 `unref()`。返回聚合结构，例如 `{ results: [{profileId, ok, pid?, reason?}], summary: { success, failed } }`。
+
+**去重窗口不要误伤批量。** `agent.ts` 的 3 秒去重按 `profile.id` 各算，批量里的不同配置互不影响，这条天然满足。但批量接口不应把「整批」当一个整体去重，否则点两次批量会把第二次全判成 deduplicated。
+
+**启动顺序怎么给。** 多数场景并行即可，微信、QQ、千牛之间没有强依赖。但同一软件的多个实例、或共享单例锁的客户端，并行可能互相顶掉窗口。给两档：默认按 `sortOrder` 升序**发起**（不阻塞，只是排个先后）；对标注了「需串行」的软件（互斥量敏感的），逐条 `await` 前一条成功再起下一条。这一档建议在软件元数据上打标，而非对所有软件串行，否则多开千牛要被无谓拖慢。
+
+**异常兜底。** 每条结果独立，`spawn_failed`、`executable_missing` 只落在自己那条上。汇总层对失败项给出可照做的出口，`executable_missing` 直接链到「重新指定路径」。批量启动同样要落启动记录（`history.ts`），真实尝试的成败都记、去重的不记，与单条规则一致。
+
+**并发稳定性的边界要说清。** 主进程 spawn 的是 GUI 客户端，`stdio:'ignore'`、`windowsHide`、`unref` 已在 `agent.ts` 设好，批量只是把同一动作重复若干次，不引入新的进程管理复杂度。真正的commit是「工作台不是进程管理器」：批量拉起的客户端，其生死此后与工作台无关，关掉工作台不连带关掉它们。
+
+### 2.3 多账号实例：存储已就绪，补「分组勾选启动」
+
+**结论。** 数据模型无需改动即可支撑「2 微信 + 2 QQ + 5 千牛 = 9 条实例」，要补的是界面层的分组、勾选与批量启动即可，版本风险不做额外呈现。
+
+**落地。** 每条 `LaunchProfile` 已是一个独立实例，`name` 负责区分（如「微信 · 工作号」）。需要补的是：
+
+- 按 `software` 分组展示，允许勾选若干实例，一键走 2.2 的批量 run。这是「一键同时启动多个第三方软件」在界面上的落点。
+- 是否需要新增 `group` 或 `account` 标签列。权衡是：现在用 `name` 前缀已能管理个位数实例，9 条以内加列的收益不抵一次迁移与校验的成本。建议先不加列，用分组视图 + 命名约定顶住；实例规模上来再议。
+- 微信多开实际依赖客户端私有参数，逐版本变化，稳定性由客户端版本决定；QQ 多实例依赖客户端自身的账号切换行为；千牛原生多账号较稳。`args` 字段已留出填参数的位置。按已定决策，版本风险不在界面上额外提醒、不承诺「一定多开成功」，参数按需在运维侧实测后填入即可。
+
+### 2.4 凭据与自动登录：只唤起 + 点登录，工作台不存密码（已定）
+
+**决策已定（用户拍板，见第 5 节）。** 需求 4 收敛为两点：QQ 与千牛唤起客户端后自动点一下「登录」按钮，凭据由客户端自带的「记住账号密码」保存，工作台全程不碰密码；微信只唤起，扫码登录由用户在客户端完成。因此本方案不为任何第三方账号保存密码，也不向客户端输入机密，踩在既有边界（工作台不代管第三方密码，`schema.prisma` 第 350 行、`IMPLEMENTATION-PLAN.md` 1.2 与 6.1）的稳妥一侧。
+
+**实现重心在「可靠地点一下登录」。** 唤起沿用 2.1 的 IPC spawn。登录点击是一个独立的、按软件开关的启动后置步骤，默认 qq / qianniu 开、wechat 关，全程 best-effort，失败即静默退回「用户手动点」，绝不阻断启动结果。这条步骤不进 `agent.ts` 的零依赖内核（那份要能原样打包随投），由外壳在 spawn 成功后按需加载。
+
+**点登录的手段，按鲁棒性排序。**
+
+- 首选：唤起后把刚起来的登录窗带到前台，向它发一个默认动作键（Enter）。多数登录窗的「登录」按钮正是默认按钮，Enter 等效于点它。这一手段不依赖坐标、不依赖按钮文字，最能抗客户端改版。
+- 次选：窗口定位 + 受控点击（UIA 或坐标）。能精确点到具体按钮，但随客户端改版与分辨率漂移，鲁棒性差，仅当 Enter 触达不到登录时按软件单独开启。
+- 明确不做：不往客户端输入账号密码、不读客户端登录态、不后台静默注入。工作台从头到尾不持有机密。
+
+**按软件分工。** 微信只唤起，不触发登录点击（扫码登录，多点无益）。QQ、千牛走「唤起 + Enter 点登录」。自定义程序默认只唤起，用户可按需自行开启登录点击。
+
+**辩证看待。** 这个决定把「省去每次手动点登录」的体验拿到了，又把风险面压到很小：不存密码，于是没有云端密文、没有本机密钥库要管；不输入机密，于是不触发账号风控；只多发一个按键，即便某次失效，后果仅是用户多点一下，动摇不了任何账号安全。相比早期设想的 safeStorage 存密加自动输入，它让出一点自动化程度，换来了近乎零的安全与合规敞口。
+
+### 2.5 本地路径智能检测：复用自检底层，新增 detect IPC
+
+**结论。** 「一键检测」= 外壳按 `software` 扫本机已知安装位置，命中可执行文件即回填；检测结果写入 `LaunchProfile.executablePath` 入库即长期保存，同类软件新增时从库中带出复用，不必重复检测。
+
+**改造点。** 新增外壳 IPC `launch:detect`（入参 `software`，可选带一个已填路径做校验）。检测逻辑放 `agent.ts` 一侧以便单测，纯用 Node 内建，保持该文件零依赖的现状：
+
+- 扫候选目录：`%ProgramFiles%`、`%ProgramFiles(x86)%`、`%LOCALAPPDATA%`，拼 `Tencent\WeChat\WeChat.exe` 等已知相对路径；对千牛扫 `AliWangWang`/`aliim` 系列目录。
+- 用 `inspectExecutablePath` 复核命中项，返回「首选命中 + 其余候选」列表，让界面回填或让用户从候选里选。
+- 读 Windows 注册表 Uninstall 键能提高命中率，但要引入 `child_process('reg query')` 或 `node-winreg`。权衡是先不上注册表，用目录扫描覆盖绝大多数默认安装；注册表作为后续可选增强，避免为检测引入跨平台依赖污染 `agent.ts`。
+
+**持久化与复用。** 用户点检测、选中候选、保存配置时，命中路径即写入该条 `LaunchProfile.executablePath`，入库即长期生效。所谓「后续直接复用、无需重复检测」，实现为：新增同类 `software` 时，表单的默认路径取该用户库中该 `software` 最近一条有效配置的路径（列表匹配即可，不必另建「检测结果表」）。这样检测只做一次，之后靠库里的历史配置带出。
+
+**与自检的分工。** detect 回答「这个软件大概装在哪、路径填什么」，回答一次配置问题；diagnostics 回答「已存的这条路径此刻还在不在」，回答运行期状态。两者共用 `inspectExecutablePath` 这一条判断，不会出现「检测说在、启动说不在」。
+
+### 2.6 首页 UI 重构：删无效文案，已配置软件改阴影小卡 + 小图标
+
+**结论。** 移除一键启动主卡里对不上真实数据的文案；已配置软件从「chip 选择器」改为「阴影小卡 + 小图标」，图标尺寸与风格对齐现有启动框排版。
+
+**删除的无效文案（`apps/web/src/components/home/LaunchSection.tsx`）：**
+
+- 主卡标题「设计软件一键登录」与副标题「打开软件的同时带过账号与授权，省去每次手动输入。」（约第 179、184 行）。这两句承诺「带过账号与授权」，而项目根本没有第三方授权数据，属于看起来确定的空话，删掉比留着误导好。这与该文件既有取舍一致：拿不到数据处宁可留白。
+- 区块头副标题「授权后直接唤起本地设计软件，无需再单独登录」（约第 157 行），同属无据文案，一并清理或改成中性描述。
+
+**已配置软件的呈现（已定，方案 C）。** 用户已拍板：小图标直接做在主卡上，AI 占位卡保持原位。据此重做主卡内部：把现有底部 chip 选择器（约第 210 行）换成一条小图标托盘，每个已配置实例一枚小图标按钮。图标复用 `lib/launch-icons.ts` 的 `LAUNCH_ICONS`（按 `resolveLaunchIconKey` 解析），容器与尺寸对齐现有 `mod-icon`（约 9x9 容器 + size-18 图标，见第 311 行），保证与整体 UI 同一套明度与圆角语言。每枚图标带三件：软件图标、图标下方小字 `name`、右上角一个路径状态点（复用现有绿/红点：`pathOk` 绿、失效红）。托盘用 `flex-wrap`，实例接近 9 条时自动换行，主卡随之增高。
+
+**与 6 张 AI 占位卡的关系（已定）。** bento 主体结构保持不动：主卡仍跨两列、六张「开发中」AI 占位卡仍占其余格。本次只重做主卡内部（海报帧 + 小图标托盘 + 状态行 + 启动按钮），不动 AI 卡、不动栅格。改动面因此收窄到主卡一个组件，AI 卡后续的 roadmap 不受牵连。
+
+### 2.7 交互与新增入口：小卡点击进配置/详情，末尾「+」进新增
+
+**结论。** 每个小图标可点，进入该实例的配置修改或详情查看；区域末尾放一枚视觉一致的「+」卡，进入新增配置流程。
+
+**改造点。**
+
+- 小图标点击：进入该实例的配置修改 / 详情。可复用 `LaunchPanel.tsx` 已有的 `openEdit`/`handleSubmit` 与其 `LaunchProfileDialog`；但首页 `LaunchSection` 目前是只读 + 选一条启动，需把编辑能力接进来。建议把配置的增删改抽成一个共享 hook（列表加载、create/update/delete、状态刷新），首页与工作台面板两处复用，避免两套提交逻辑各自漂移。主卡大「一键启动」按钮启动当前选中（或首个）实例；批量 / 多选启动引导到工作台面板的 2.2 能力。
+- 详情查看：可加一个轻量详情弹层，展示路径、参数、最近一次启动、路径是否可用，并在其中直接「启动 / 编辑 / 重新指定路径」。工作台行组件 `LaunchProfileRow` 已有这些能力，首页小卡可复用同一套交互文案。
+- 托盘末尾「+」：与其它小图标同尺寸、以虚线边框区分，点击 `openCreate` 进入新增（即走完 2.5 的「一键检测 → 回填 → 保存」）。带 `personal.launch.write` 权限才渲染，只读访客不显示入口（沿用现有「藏起而非置灰」的取舍）。
+- 保留区块头右侧「管理配置」链接，指向 `/workbench/launch` 完整面板，作为小卡操作之外的次级入口。
+
+## 3. 对现有架构的影响面与不改动的地方
+
+| 需求 | 主要落点 | 改动性质 |
+| --- | --- | --- |
+| 2.1 端口 | `apps/web/src/lib/launch.ts` 宿主分流 + `launchRunRecovery` 扩展 | 改行为，端口机制不动 |
+| 2.2 并发 | 新增 IPC `launch:runMany` + HTTP `run-many`，复用 `agent.ts` | 增量，不动 spawn 核心 |
+| 2.3 多账号 | 分组/勾选 UI，复用 2.2；数据模型不动 | 增量视图层 |
+| 2.4 凭据 | 新增按软件开关的「登录点击」后置步骤，独立模块；不存密码 | 增量，云端库零第三方密码 |
+| 2.5 检测 | 新增 IPC `launch:detect`，逻辑入 `agent.ts`，纯 Node | 增量 |
+| 2.6/2.7 UI | `LaunchSection.tsx` 重构 + 抽 launch CRUD hook | 重构前端 |
+
+**明确不改的东西。** `agent.ts` 的 spawn 核心（路径复核在前、等 `spawn` 事件才算成功、`unref`、3 秒去重、失败不进缓存）是 192 项测试钉着的稳定件，只复用不改写。`shell-origin.ts` / `server.ts` 的端口候选链是「更新后设置不丢」的地基，一行不动。两条安全边界（只启动配置不启动命令、远程不能启动本机进程）是红线，本次所有改造都在其内增量，不拆边界换功能。
+
+**需要留意的耦合。** `launchRunRecovery` 当前只认 HTTP 的 `error.code`，接入 IPC 后要同时认 `{ok:false, reason}`，否则桌面态路径失效会被错判成「可重试」，用户被引去反复点一个注定失败的按钮。这是最容易漏、且现场最难解释的一处，改造时要一并覆盖单测。
+
+## 4. 实施优先级与验收
+
+**建议顺序。** 先 2.1（端口/宿主分流）与 2.2（批量 run），它们解锁「安装版真正能一键启动多个客户端」这个核心价值；再 2.5（路径检测）降低配置门槛；再 2.3/2.7（多账号视图与小卡交互）；2.4（唤起 + 点登录）依赖外部客户端行为，随版本迭代发布，默认仅 qq / qianniu 开登录点击、wechat 只唤起；2.6（UI 重构）可与交互改造合并推进。
+
+**验收要点。**
+
+- 2.1：安装态指向云端 api 时，一键启动仍能拉起本机客户端（证明走的是 IPC，绕过了回环门）；换任意 shell 端口重启后启动依旧可用。
+- 2.2：批量启动 N 个不同实例，各自窗口出现；故意把其中一条配成失效路径，仅那一条报错并链到重指定，其余照常。
+- 2.5：一键检测在本机命中微信/千牛默认安装路径并回填；断开/卸载后该条在启动自检里变红。
+- 2.4：QQ / 千牛唤起后登录窗被带到前台并触发登录，微信只唤起不触发；全程无任何第三方密码入库、无任何网络上传凭据。
+
+## 5. 风险与未决（需拍板）
+
+1. **凭据做到哪一层（已定）。** 唤起 + 点击登录。QQ / 千牛唤起后自动点登录，凭据交给客户端自带的「记住账号密码」；微信只唤起。工作台不存密码、不输入机密。
+2. **微信等扫码登录客户端的处理（已定，结合第 1 条）。** 微信只唤起，不触发任何登录点击。
+3. **6 张 AI 占位卡与已配置软件卡的版面归属（已定，用户出图）。** 小图标托盘直接做在主卡上，AI 占位卡保持原位。落定细节见 2.6 方案 C。
+4. **多开的版本风险呈现（已定）。** 不额外呈现，不在界面加版本敏感提示，参数按需在运维侧填入即可。
+5. **凭据同步范围（已定）。** 无独立同步设计，随版本迭代发布；工作台本身不存凭据，故无同步负担。
+
+五项未决至此全部有定论（凭据=唤起+点登录、微信只唤起、AI 卡保持原位 + 小图标上主卡、多开风险不呈现、凭据随版本迭代发布）。可以据此进入拆任务登记与编码。
+
+---
+
+*本方案为设计文档，未改动任何生产代码。落地前建议按第 5 节逐项与需求方确认，再据此拆任务登记。*
+
+---
+
+## 实施进度（2026-10-15）
+
+设计文档已陆续进入编码。下列条目已落地并经类型检查与单测闭环：
+
+- **§2.1 端口/宿主分流（已实施）**：`apps/web/src/lib/launch.ts` 的 `runLaunchProfile(profile)` 改宿主分流，桌面态走既有 `launch:run` IPC；`launchRunRecovery` 与 `LaunchRunError` 抽到纯模块 `apps/web/src/lib/launch-recovery.ts`，HTTP 失败与 IPC 失败共用同一套 `relocate/retry` 分流。web typecheck 绿、单测 126→130 全过。
+- **§2.2 并发批量启动（已实施）**：桌面侧新增 `agent.ts` 的 `runShellLaunchProfiles`（复用 `runShellLaunchProfile`，`Promise.allSettled` 并发、每条独立、单条失败不影响其余、代理不可用逐条报 `agent_unavailable`）+ `main.ts` 的 `launch:runMany` IPC + `preload.ts` 的 `runLaunchProfiles` 桥；web 侧 `runLaunchProfiles` 宿主分流（桌面走 IPC，浏览器逐条走单条 HTTP 端点再经 `summarizeLaunchMany` 聚合，未新开服务端 `run-many` 路由——桌面是主场景，且逐条端点已含历史记录与权限）。desktop 单测 21/21、web 全量单测 130/130 通过。
+
+- **§2.5 本地路径一键检测（已实施）**：桌面侧 `agent.ts` 新增纯函数 `knownExecutableCandidates(software, env?)`（按 `ProgramFiles` / `ProgramFiles(x86)` / `LOCALAPPDATA` 枚举已知相对路径，零依赖、与 `process.env` 解耦以便单测）与 `detectLaunchPaths(software, { extraPath?, inspect, env? })`（注入 `inspect`，复用启动同款路径判断，返回 `preferred` + `candidates`、`extraPath` 优先且去重）；`main.ts` 新增 `launch:detect` IPC（无候选可查时不加载代理，与 `launch:diagnostics` 同取舍）；`preload.ts` 新增 `detectLaunchPath` 桥 + `LaunchPathDetectResult` 类型；web 侧新增纯模块 `lib/launch-detect.ts`（`detectLaunchPath` 宿主分流：桌面走 IPC，浏览器回落空结果）并由 `lib/launch.ts` 再导出，`vite-env.d.ts` 补桥声明，并开启 `allowImportingTsExtensions` 让纯模块能被 Node 单测直接加载。desktop 单测 30/30（含 9 项检测）、web 全量单测 135/135（含 5 项检测分流）通过。持久化与复用（命中写 `executablePath`、新增同类软件带出库内最近有效路径）属后续工作台面板表单的对接，本步只落地检测通道。
+
+- **§2.5 复用（补充，已实施）**：新增纯模块 `apps/web/src/lib/launch-suggest.ts` 的 `buildSuggestedPaths(profiles, statuses)`（同 `software` 优先 `pathState==='ok'`、同状态取 `updatedAt` 最新、全 missing 退回最近一条、best-effort、与 React 解耦以便单测）。`launch:detect` 命中后路径由表单既有保存逻辑写入 `LaunchProfile.executablePath`（保存即入库），而「新增同类软件带出最近有效路径」接在 `LaunchProfileDialog`：新增可选属性 `suggestedPaths`，新增配置且路径框为空时选中某软件即预填其反查表里的路径（编辑态或已手填一律不覆盖）。首页 `LaunchSection` 与工作台 `LaunchPanel`（共用 `useLaunchProfiles`）各自 `useMemo` 现算并传入，两处一份表格。web typecheck 绿、web 全量单测 135→141（含 6 项复用选取规则）通过。
+
+- **§2.3 + §2.7 + §2.6 多账号分组 / 首页 UI 重构（方案 C）/ 小卡交互（已实施）**：抽共享 hook `apps/web/src/lib/use-launch-profiles.ts`（`useLaunchProfiles()` 持有 `profiles` / `statuses` / `loading` / `loadError` / `reload` / `recheckStatuses` / `createProfile` / `updateProfile` / `removeProfile` / `reorder`，列表与状态走两条独立请求——状态失败只不显示标记、不换错误页；增删改/update/reorder 内部顺手重拉状态，首页与工作台面板共用一份数据源，避免两套提交逻辑漂移）。首页 `apps/web/src/components/home/LaunchSection.tsx` 重写为方案 C：标题改「已配置软件」、删除无效「一键登录」文案；芯片选择器换小图标托盘（每实例 `size-[64px]` 卡：`LAUNCH_ICONS[resolveLaunchIconKey(profile)]` + 名称 + 右上角路径状态点、绿可用红失效、`flex-wrap`；悬停小火箭单独启动、整卡点击进编辑、末尾虚线「+」进新增仅 `canWrite` 可见）；大「一键启动」按钮启动当前选中（默认首条）；直接复用 `LaunchProfileDialog` 做新增/编辑。`apps/web/src/components/launch/LaunchPanel.tsx` 同步迁移到该 hook：删掉重复的 `profiles` / `statuses` / `reloadToken` / `statusToken` 两套 state 与模块级 `fetchLaunchProfiles` / `fetchLaunchStatuses`，保留 `LaunchProfileRow`、删除确认 `Dialog`、上移/下移、重新检查路径、顶部提示条、`hasChanges` 守卫（编辑无变化不空写），`handleRetry`→`reload`、`handleRecheck`→`recheckStatuses`、`handleLaunch` 收尾 `recheckStatuses`、`handleMove` 改传完整 id 顺序给 `reorder`、`handleDelete` 走 `removeProfile`。web typecheck 绿、web 全量单测 135/135 通过。
+
+- **§2.4 唤起+点登录（已实施）**：新增桌面侧模块 `apps/desktop/src/launch-login-click.ts`（**不进 `agent.ts` 零依赖内核**，由 `main.ts` 在 spawn 成功后按需加载）。`shouldClickLogin(software)` 纯函数按软件开关（qq / qianniu 开、wechat / custom / 未知关，是「按软件开关」的唯一入口）；`clickLoginAfterLaunch(software, pid)` best-effort：非 Windows 直接拦下、关掉的软件不操作窗口，全程 try/catch 吞异常回报 `failed` 绝不抛、绝不阻断启动结果；`buildLoginClickScript(pid)` 用 PowerShell P/Invoke（按 pid 枚举顶层窗口挑可见首窗 + `AttachThreadInput` 绕前台锁 + `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` + `keybd_event(VK_RETURN=0x0D)`）把登录窗带到前台敲 Enter，经 `-EncodedCommand` 传 base64(UTF-16LE)、5 秒超时；只发按键、不输账号密码、不读登录态、不注入，工作台全程不持机密。`main.ts` 在 `launch:run` 成功返回后 `void clickLoginAfterLaunch(software, pid)`、`launch:runMany` 按 `id` 反查 `software` 为每条成功结果 fire-and-forget。桌面 typecheck 绿、desktop 单测 167→174（含 7 项：开关映射 / 脚本含 pid 与 Enter 键码 / 非 Win 平台守门 / 关掉的软件不点）。「自定义程序用户按需自开」作为已知扩展点留在 `shouldClickLogin`（将来下放到单条 `LaunchProfile` 标志时只改这一处），本步先按软件级默认值落地。
+
+未决/待续：§2.4 的窗口操作依赖外部客户端窗口行为、best-effort，需在真实客户端（qq / qianniu 登录窗）上真机验证 Enter 是否落到默认按钮；其余需求（2.1~2.7）均已实施。
+
+
+

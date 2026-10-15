@@ -35,6 +35,8 @@
  * 的 `GET /api/launch/profiles` 取到再送进来 —— 在远程模式下这条路依然通（配置从
  * 远程 API 取，本机进程由本机外壳起），而外壳不必知道配置存在哪。
  */
+import { join } from 'node:path'
+
 import {
   isAbsoluteExecutablePath,
   LAUNCH_PROFILE_LIMITS,
@@ -191,4 +193,187 @@ export async function runShellLaunchProfile(
     return { ok: false, reason: outcome.reason, detail }
   }
   return { ok: true, data: outcome.data }
+}
+
+/**
+ * 批量启动一组从 IPC 送来的配置。
+ *
+ * 每条独立走 `runShellLaunchProfile`，因此**单条失败不影响其余** —— 某条路径失效只落在
+ * 自己那一项上，其余照常。用 `Promise.allSettled` 并发发起：各条的 3 秒去重按
+ * `profile.id` 各算（见 `apps/api/src/launch/agent.ts` 的 `RUN_DEDUPE_WINDOW_MS`），
+ * 不同配置互不干扰；批量接口**不把整批当一个去重单位**，否则连点两次批量会把第二次
+ * 全判成 deduplicated，用户误以为「都已启动」。
+ *
+ * `agent_unavailable` 不在这里产生：本函数只在代理已加载时被调用。代理加载不出来时，
+ * 主进程在 `launch:runMany` handler 里直接给每条报同一个 `agent_unavailable`，让界面
+ * 去查工作区而不是逐条重配。
+ */
+export type LaunchRunManyItemResult = {
+  profileId: string
+  ok: boolean
+  /** 成功时才有：子进程 id。 */
+  pid?: number
+  /** 失败时才有：机器可读码（invalid_profile / executable_missing / spawn_failed /
+   *  agent_unavailable）。`agent_unavailable` 只由主进程在代理加载失败时给出，逐条同因。 */
+  reason?: ShellLaunchFailureReason | 'agent_unavailable'
+  /** 失败时才有：可展示文案。 */
+  detail?: string
+}
+
+export type LaunchRunManyResult = {
+  results: LaunchRunManyItemResult[]
+  summary: { total: number; success: number; failed: number }
+}
+
+export async function runShellLaunchProfiles(
+  raws: readonly unknown[],
+  agentModule: LaunchAgentModule,
+  logger: ShellLaunchLogger = console,
+): Promise<LaunchRunManyResult> {
+  if (raws.length === 0) {
+    return { results: [], summary: { total: 0, success: 0, failed: 0 } }
+  }
+  // 并发发起、各自独立：一条的去重窗口或失败不会牵连其它条。
+  const settled = await Promise.allSettled(
+    raws.map((raw) => runShellLaunchProfile(raw, agentModule, logger)),
+  )
+  const results: LaunchRunManyItemResult[] = settled.map((settled, index) => {
+    const raw = raws[index]
+    const profileId = typeof (raw as { id?: unknown })?.id === 'string' ? (raw as { id: string }).id : ''
+    if (settled.status === 'rejected') {
+      // `runShellLaunchProfile` 自身不该抛，但防御性地兜底成「进程创建失败」。
+      return { profileId, ok: false, reason: 'spawn_failed', detail: String(settled.reason) }
+    }
+    const outcome = settled.value
+    if (outcome.ok) {
+      return { profileId, ok: true, pid: outcome.data.pid }
+    }
+    return { profileId, ok: false, reason: outcome.reason, detail: outcome.detail }
+  })
+  const success = results.filter((result) => result.ok).length
+  return { results, summary: { total: results.length, success, failed: results.length - success } }
+}
+
+/**
+ * 各软件在本机的已知安装相对路径（2.5）。
+ *
+ * 只列默认安装位置最常见的那一条（或几条）。注册表 / 自定义安装位置不在覆盖范围内 ——
+ * 设计文档 §2.5 明确先不上注册表，用目录扫描覆盖绝大多数默认安装，注册表作为后续
+ * 可选增强，避免为检测引入跨平台依赖污染本文件。
+ *
+ * 相对路径用正斜杠写，下方用 `node:path` 的 `join` 拼到候选根目录上，于是 Windows 上
+ * 自动变成反斜杠、不影响可读。每条软件对应一组「根目录无关」的相对片段，根目录由
+ * `%ProgramFiles%` / `%ProgramFiles(x86)%` / `%LOCALAPPDATA%` 提供。
+ *
+ * - wechat：`Tencent\WeChat\WeChat.exe`（微信默认装进 Program Files）。
+ * - qq：`Tencent\QQ\Bin\QQ.exe` 为主，`Tencent\QQ\QQ.exe` 兜底不同版本布局。
+ * - qianniu：旧名 `AliWangWang\AliWangWang.exe` 与现代 `aliim\aliim.exe` 两条都扫。
+ * - custom：没有「已知位置」，它的路径完全由用户填，检测只能靠传入的 `extraPath`。
+ */
+const KNOWN_EXECUTABLE_RELATIVE_PATHS: Record<string, readonly string[]> = {
+  wechat: ['Tencent/WeChat/WeChat.exe'],
+  qq: ['Tencent/QQ/Bin/QQ.exe', 'Tencent/QQ/QQ.exe'],
+  qianniu: ['AliWangWang/AliWangWang.exe', 'aliim/aliim.exe'],
+  // 与未知 software 同处理：返回空数组，无已知候选。
+  custom: [],
+}
+
+/**
+ * 候选根目录的环境变量名（按优先级）。
+ *
+ * `%ProgramFiles%` 与 `%ProgramFiles(x86)%` 覆盖绝大多数 64 / 32 位默认安装；
+ * `%LOCALAPPDATA%` 兜底一些装进用户目录的客户端（如微信的用户态安装）。
+ */
+const DETECT_ROOT_ENV_VARS = ['ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'] as const
+
+/**
+ * 枚举某软件的已知可执行候选路径（纯函数，不做文件检查）。
+ *
+ * **入参与 `process.env` 解耦**：默认读 `process.env`，但显式传 `env` 让单测能在不碰
+ * 真实系统的前提下断言枚举结果。返回的是绝对路径数组（根目录有效时）；根目录缺失时
+ * 该根下不贡献任何候选，而不是塞一个「`undefined/...`」之类的坏路径。
+ *
+ * `custom` 与未知 software 一律返回空数组：它们没有「已知位置」，检测只能靠用户提供的
+ * `extraPath`。这一条是「检测只回答配置问题、且只覆盖默认安装」在设计上的落点。
+ */
+export function knownExecutableCandidates(
+  software: string,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const relatives = KNOWN_EXECUTABLE_RELATIVE_PATHS[software]
+  if (relatives === undefined || relatives.length === 0) return []
+  const roots = DETECT_ROOT_ENV_VARS.map((name) => env[name]).filter(
+    (root): root is string => typeof root === 'string' && root !== '',
+  )
+  const paths: string[] = []
+  for (const root of roots) {
+    for (const relative of relatives) {
+      paths.push(join(root, relative))
+    }
+  }
+  return paths
+}
+
+/**
+ * 一键检测的结果（核心类型）。
+ *
+ * `preferred` 是界面回填用的首选路径：若用户给了待校验的 `extraPath` 且它确实存在，
+ * 它优先；否则取第一条命中的已知候选。`candidates` 是所有命中（经 `inspect` 复核存在）
+ * 的可选路径，界面可据此给一个下拉让用户从多个安装位置里挑。两者都为空表示本机没找到。
+ */
+export type LaunchPathDetection = {
+  /** 首选可执行路径；一个都没命中为 null。 */
+  preferred: string | null
+  /** 所有命中（经 inspect 复核存在）的候选路径，可空。 */
+  candidates: string[]
+}
+
+/**
+ * 按 `software` 扫本机已知安装位置、用 `inspect` 复核、返回首选命中 + 其余候选（2.5 核心）。
+ *
+ * **刻意做成纯函数 + 注入 `inspect`**：`inspectExecutablePath` 来自那个跨包加载的 api
+ * agent 模块，外壳不在这里另写一份 `stat`（见 `paths.ts` / `main.ts` 的注释：自检与启动
+ * 对「什么算合法路径」必须同一份实现，否则会出现「检测说在、点启动说不在」）。注入让
+ * 它能在单测里被直接驱动，不依赖真实文件系统的存在。
+ *
+ * `extraPath` 是「用户已经填过、想顺带校验一下」的路径：它排在候选最前面，命中即成为
+ * `preferred` —— 这样「保留用户上次填的、再帮我看看还有没有别的」这一体验成立。它必须
+ * 是绝对路径，否则不进候选（相对路径在任何机器都启不动，不该被当成命中）。
+ */
+export async function detectLaunchPaths(
+  software: string,
+  options: {
+    extraPath?: string
+    inspect: (executablePath: string) => Promise<LaunchPathState>
+    env?: Record<string, string | undefined>
+  },
+): Promise<LaunchPathDetection> {
+  const extraPath = options.extraPath
+  const ordered: string[] = []
+  if (typeof extraPath === 'string' && extraPath !== '' && isAbsoluteExecutablePath(extraPath)) {
+    // 用户已填的路径优先校验：它一旦存在就是首选，否则才退到已知候选。
+    ordered.push(extraPath)
+  }
+  for (const candidate of knownExecutableCandidates(software, options.env)) {
+    ordered.push(candidate)
+  }
+
+  // 去重：同一份路径可能同时是 extraPath 与某条已知候选，或不同根目录恰好同名。
+  // 重复只会让用户在下拉里看到两个一模一样的选项，没有信息量。
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const path of ordered) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    unique.push(path)
+  }
+
+  if (unique.length === 0) return { preferred: null, candidates: [] }
+
+  const states = await Promise.all(unique.map((path) => options.inspect(path)))
+  const found: string[] = []
+  unique.forEach((path, index) => {
+    if (states[index] === 'ok') found.push(path)
+  })
+  return { preferred: found[0] ?? null, candidates: found }
 }

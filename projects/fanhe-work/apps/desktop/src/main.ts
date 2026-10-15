@@ -62,7 +62,16 @@ import {
   saveServiceConfig,
   type LoadResult,
 } from './config.js'
-import { runShellLaunchProfile, normalizeProfile, type LaunchAgentModule } from './agent.js'
+import { isAbsoluteExecutablePath } from '@fanhe/shared'
+import {
+  detectLaunchPaths,
+  knownExecutableCandidates,
+  normalizeProfile,
+  runShellLaunchProfile,
+  runShellLaunchProfiles,
+  type LaunchAgentModule,
+} from './agent.js'
+import { clickLoginAfterLaunch } from './launch-login-click.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
@@ -462,13 +471,70 @@ function registerLaunchIpc(): void {
     }
 
     const raw = (payload as { profile?: unknown } | null)?.profile
+    const rawProfile = raw as { software?: unknown } | null
+    const software =
+      typeof rawProfile?.software === 'string' ? (rawProfile.software as string) : ''
     const outcome = await runShellLaunchProfile(raw, loaded.module)
     if (!outcome.ok) {
       console.warn(`[launch] 启动未成功（${outcome.reason}）：${outcome.detail}`)
       return outcome
     }
     console.log(`[launch] 已启动 pid=${outcome.data.pid} 去重=${outcome.data.deduplicated}`)
+    // 唤起后 best-effort 点登录（2.4）：fire-and-forget，绝不阻断启动结果。
+    // 非 Windows 或未开该软件的会被模块内部直接拦下，不发任何窗口操作。
+    void clickLoginAfterLaunch(software, outcome.data.pid)
     return outcome
+  })
+
+  /**
+   * 批量启动（2.2）。
+   *
+   * 与 `launch:run` 共用 `runShellLaunchProfiles`：每条独立走 `runShellLaunchProfile`，
+   * 单条失败不影响其余，`Promise.allSettled` 并发收集。各条的 3 秒去重按 `profile.id`
+   * 各算，批量接口不把整批当一个去重单位（见 `agent.ts` 该函数的注释）。
+   *
+   * 空数组直接返回空结果、不加载代理：与 `launch:diagnostics` 同一条取舍 —— 没有东西
+   * 可启动时，不该把「代理不可用」误报成「批量失败」。
+   */
+  ipcMain.handle('launch:runMany', async (_event, payload: unknown) => {
+    const raws = (payload as { profiles?: unknown } | null)?.profiles
+    if (!Array.isArray(raws) || raws.length === 0) {
+      return { results: [], summary: { total: 0, success: 0, failed: 0 } }
+    }
+
+    const loaded = await loadLaunchAgent()
+    if (!loaded.ok) {
+      // 代理都加载不出来，逐条尝试没有意义，每条直接报同一个原因。
+      return {
+        results: raws.map((raw) => ({
+          profileId:
+            typeof (raw as { id?: unknown })?.id === 'string' ? (raw as { id: string }).id : '',
+          ok: false,
+          reason: 'agent_unavailable',
+          detail: `本机代理不可用：${loaded.detail}`,
+        })),
+        summary: { total: raws.length, success: 0, failed: raws.length },
+      }
+    }
+
+    const manyResult = await runShellLaunchProfiles(raws, loaded.module)
+
+    // 唤起后 best-effort 点登录（2.4）：只为成功的条目、fire-and-forget。
+    // 按 `id` 反查 software（raws 与 manyResult.results 同序，但用 id 配更稳）。
+    const softwareById = new Map<string, string>()
+    for (const raw of raws) {
+      const item = raw as { id?: unknown; software?: unknown }
+      if (typeof item.id === 'string' && typeof item.software === 'string') {
+        softwareById.set(item.id, item.software)
+      }
+    }
+    for (const result of manyResult.results) {
+      if (result.ok && result.pid !== undefined) {
+        void clickLoginAfterLaunch(softwareById.get(result.profileId) ?? '', result.pid)
+      }
+    }
+
+    return manyResult
   })
 
   /**
@@ -511,6 +577,52 @@ function registerLaunchIpc(): void {
         (count === 0 ? '' : ` 问题=${count}`),
     )
     return report
+  })
+
+  /**
+   * 本地路径一键检测（2.5）。
+   *
+   * 入参 `software` 与一个可选的 `extraPath`（用户已经填过、想顺带校验的路径）。返回
+   * 首选命中 + 候选清单。与 `launch:diagnostics` 同源的取舍：**没有可查的东西时不加载
+   * 代理**。`knownExecutableCandidates` 是纯枚举（不碰文件系统），未知 software 或
+   * custom 在没给 `extraPath` 时本来就没有候选，此时加载代理只会引入「代理不可用」这种
+   * 与事实无关的报错。只有真正要校验路径时才去加载 api agent、用它与启动同款的
+   * `inspectExecutablePath` 复核（见 `agent.ts` 的 `detectLaunchPaths` 注释：检测与启动
+   * 必须用同一份路径判断，否则会出现「检测说在、点启动说不在」）。
+   */
+  ipcMain.handle('launch:detect', async (_event, payload: unknown) => {
+    const { software, extraPath } = (payload as { software?: unknown; extraPath?: unknown } | null) ?? {}
+    const softwareStr = typeof software === 'string' ? software : ''
+    const extraPathStr = typeof extraPath === 'string' && extraPath !== '' ? extraPath : ''
+
+    // 没有可查的东西（非字符串 software 且无已知候选，且没给可校验的 extraPath）：
+    // 空结果、不加载代理、不报代理不可用，与 diagnostics 的「空配置先判」同一条取舍。
+    const hasKnown = knownExecutableCandidates(softwareStr).length > 0
+    const hasExtra = extraPathStr !== '' && isAbsoluteExecutablePath(extraPathStr)
+    if (!hasKnown && !hasExtra) {
+      return { software: softwareStr, preferred: null, candidates: [], agentAvailable: true }
+    }
+
+    const loaded = await loadLaunchAgent()
+    if (!loaded.ok) {
+      return {
+        software: softwareStr,
+        preferred: null,
+        candidates: [],
+        agentAvailable: false,
+        detail: `本机代理不可用：${loaded.detail}`,
+      }
+    }
+
+    // `extraPath` 只在确实可校验时传入：`detectLaunchPaths` 的选项是
+    // `exactOptionalPropertyTypes`，显式给 `undefined` 反而不合法（见 tsconfig）。
+    const detection = await detectLaunchPaths(
+      softwareStr,
+      hasExtra
+        ? { extraPath: extraPathStr, inspect: loaded.module.inspectExecutablePath }
+        : { inspect: loaded.module.inspectExecutablePath },
+    )
+    return { software: softwareStr, ...detection, agentAvailable: true }
   })
 }
 

@@ -50,6 +50,12 @@ type LaunchProfileDialogProps = {
    */
   focusPath?: boolean | undefined
   /**
+   * 每个软件「最近有效路径」的反查表（§2.5 持久化与复用）。新增配置、且路径框为空时，
+   * 选到某个软件会自动把它的预填路径带出来，不必重复检测。只读访客也会收到这张表，
+   * 但只读时不显示新增入口，故不影响权限边界。
+   */
+  suggestedPaths?: Readonly<Record<string, string>> | undefined
+  /**
    * 提交。由外层负责真正发请求 —— 新增与编辑走的是不同的接口，而失败后要不要刷新
    * 列表也只有外层知道。这里只把校验通过的值交出去，并等它一个结果。
    *
@@ -115,6 +121,7 @@ export function LaunchProfileDialog({
   onOpenChange,
   profile,
   focusPath,
+  suggestedPaths,
   onSubmit,
 }: LaunchProfileDialogProps) {
   const editing = profile !== null
@@ -154,6 +161,7 @@ export function LaunchProfileDialog({
           profile={profile}
           onSubmit={onSubmit}
           onCancel={() => onOpenChange(false)}
+          suggestedPaths={suggestedPaths}
         />
       </DialogContent>
     </Dialog>
@@ -164,6 +172,8 @@ type LaunchProfileFormProps = {
   profile: LaunchProfile | null
   onSubmit: (values: LaunchFormValues) => Promise<void>
   onCancel: () => void
+  /** 见 `LaunchProfileDialogProps.suggestedPaths`：选软件时为空路径框预填。 */
+  suggestedPaths?: Readonly<Record<string, string>> | undefined
 }
 
 /**
@@ -177,7 +187,12 @@ type LaunchProfileFormProps = {
  * **不查文件是否存在。** 存在性检查要等真正启动的那一刻（见共享包该函数的注释）：
  * 配置创建时文件在、三个月后可能已被卸载，把结论固化下来只会给出一个过期的判断。
  */
-function LaunchProfileForm({ profile, onSubmit, onCancel }: LaunchProfileFormProps) {
+function LaunchProfileForm({
+  profile,
+  onSubmit,
+  onCancel,
+  suggestedPaths,
+}: LaunchProfileFormProps) {
   // 类型收窄成 `LaunchSoftware` 而不是 `string`：软件只能从清单里选，而收窄之后
   // 下面两处图标与名称的查找表都是直接索引，不必再各写一次判空与回落。
   const [software, setSoftware] = useState<LaunchSoftware>(
@@ -191,6 +206,20 @@ function LaunchProfileForm({ profile, onSubmit, onCancel }: LaunchProfileFormPro
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  /**
+   * 选软件时，若路径框还空，带出该软件的预填路径（§2.5 复用）。
+   *
+   * 只在「路径为空」时补：编辑既有配置时路径已非空，不该被覆盖；用户手填了一半也不
+   * 该因为换一下软件而被清掉。预填是「给个起点」，不是「替用户决定」，随时可改。
+   */
+  function selectSoftware(id: LaunchSoftware): void {
+    setSoftware(id)
+    if (executablePath.trim() === '') {
+      const suggested = suggestedPaths?.[id]
+      if (suggested !== undefined) setExecutablePath(suggested)
+    }
+  }
 
   function validate(): LaunchFormValues | null {
     const errors: Record<string, string> = {}
@@ -261,7 +290,7 @@ function LaunchProfileForm({ profile, onSubmit, onCancel }: LaunchProfileFormPro
               size="sm"
               variant={software === id ? 'default' : 'outline'}
               aria-pressed={software === id}
-              onClick={() => setSoftware(id)}
+              onClick={() => selectSoftware(id)}
             >
               {LAUNCH_SOFTWARE_LABELS[id]}
             </Button>

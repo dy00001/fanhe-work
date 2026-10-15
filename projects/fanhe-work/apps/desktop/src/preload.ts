@@ -102,6 +102,24 @@ export type LaunchRunResult =
     }
   | { ok: false; reason: string; detail: string }
 
+/** 批量启动里一条的结果。失败项带 `reason`（机器可读码）与 `detail`（可显示文案）。 */
+export type LaunchRunManyItemResult = {
+  profileId: string
+  ok: boolean
+  /** 成功时才有：子进程 id。 */
+  pid?: number
+  /** 失败时才有：机器可读码（invalid_profile / executable_missing / spawn_failed / agent_unavailable）。 */
+  reason?: string
+  /** 失败时才有：可展示文案。 */
+  detail?: string
+}
+
+/** 批量启动的聚合结果。每条独立成功/失败，汇总给成功数与失败数。 */
+export type LaunchRunManyResult = {
+  results: LaunchRunManyItemResult[]
+  summary: { total: number; success: number; failed: number }
+}
+
 /** 自检里一条问题。`reason` 三类各有不同的引导方向，界面据此决定渲染什么。 */
 export type LaunchDiagnosticResult = {
   /** 该配置在传入数组里的下标。形态不合法时它是唯一可靠的指认依据。 */
@@ -125,6 +143,27 @@ export type LaunchDiagnosticsResult = {
   total: number
   okCount: number
   diagnostics: LaunchDiagnosticResult[]
+}
+
+/**
+ * 一键检测的结果（2.5）。与 `apps/desktop/src/agent.ts` 的 `LaunchPathDetection` 同源，
+ * 这里多包一层 IPC 信封（`software` / `agentAvailable`）。
+ *
+ * `preferred` 是界面回填用的首选路径；`candidates` 是所有本机命中的候选，界面可据此给
+ * 一个下拉让用户从多个安装位置里挑。`agentAvailable` 为 false 时表示本机代理没加载
+ * 出来，此时 `preferred` / `candidates` 一定为空，界面据此提示「检测不可用」而非假装没找到。
+ */
+export type LaunchPathDetectResult = {
+  /** 被检测的软件标识（原样回传，便于界面把结果与请求对上）。 */
+  software: string
+  /** 首选可执行路径；一个都没命中为 null。 */
+  preferred: string | null
+  /** 所有命中（经 inspect 复核存在）的候选路径，可空。 */
+  candidates: string[]
+  /** 本机代理是否可用 —— 检测依赖它与启动同款的 `inspectExecutablePath`。 */
+  agentAvailable: boolean
+  /** 代理不可用时给一句可显示的原因。 */
+  detail?: string
 }
 
 /**
@@ -168,6 +207,15 @@ const desktopBridge = Object.freeze({
   runLaunchProfile: (profile: unknown): Promise<LaunchRunResult> =>
     ipcRenderer.invoke('launch:run', { profile }) as Promise<LaunchRunResult>,
   /**
+   * 批量启动一组配置。
+   *
+   * 与 `runLaunchProfile` 同一条承载：入参是配置数组，主进程不连库、每条重新校验形态。
+   * 返回聚合结果，每条独立成功/失败、互不影响；汇总层给出成功数与失败数。单条失败只
+   * 落在自己那一项上，界面据此给各自可照做的出口。
+   */
+  runLaunchProfiles: (profiles: unknown): Promise<LaunchRunManyResult> =>
+    ipcRenderer.invoke('launch:runMany', { profiles }) as Promise<LaunchRunManyResult>,
+  /**
    * 启动自检。
    *
    * **入参是配置数组**，理由与 `runLaunchProfile` 相同：主进程不连数据库。
@@ -177,6 +225,19 @@ const desktopBridge = Object.freeze({
    */
   checkLaunchProfiles: (profiles: unknown): Promise<LaunchDiagnosticsResult> =>
     ipcRenderer.invoke('launch:diagnostics', { profiles }) as Promise<LaunchDiagnosticsResult>,
+  /**
+   * 一键检测本机路径（2.5）。
+   *
+   * 入参是 `software` 与一个可选的 `extraPath`（用户已经填过、想顺带校验的路径）。
+   * 主进程扫本机已知安装位置、用与启动同款的 `inspectExecutablePath` 复核，返回首选命中
+   * + 候选清单。浏览器里没有本机文件系统，这条通道只有外壳场景有意义，界面对应的
+   * 「一键检测」按钮只在桌面态渲染。
+   */
+  detectLaunchPath: (
+    software: string,
+    extraPath?: string,
+  ): Promise<LaunchPathDetectResult> =>
+    ipcRenderer.invoke('launch:detect', { software, extraPath }) as Promise<LaunchPathDetectResult>,
   /** 更新通道的当前状态。界面挂载时问一次，之后按需要重问。 */
   getUpdateStatus: (): Promise<UpdateStatus> =>
     ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,

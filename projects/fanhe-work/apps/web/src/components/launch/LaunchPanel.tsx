@@ -1,19 +1,12 @@
-import { PERMISSIONS, type LaunchProfile, type LaunchProfileStatus } from '@fanhe/shared'
+import { PERMISSIONS, type LaunchProfile } from '@fanhe/shared'
 import { RefreshCw, Rocket, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { useAuth } from '../../auth/useAuth'
 import { ApiError } from '../../lib/api'
-import {
-  createLaunchProfile,
-  launchRunRecovery,
-  loadLaunchProfiles,
-  loadLaunchStatuses,
-  removeLaunchProfile,
-  reorderLaunchProfiles,
-  runLaunchProfile,
-  updateLaunchProfile,
-} from '../../lib/launch'
+import { launchRunRecovery, LaunchRunError, runLaunchProfile } from '../../lib/launch'
+import { buildSuggestedPaths } from '../../lib/launch-suggest'
+import { useLaunchProfiles } from '../../lib/use-launch-profiles'
 import { cn } from '../../lib/utils'
 import { EmptyState, ErrorState, LoadingState } from '../StateView'
 import { Button } from '../ui/button'
@@ -43,7 +36,10 @@ import { LaunchProfileRow } from './LaunchProfileRow'
  * **路径状态与启动摘要是另一次请求，且它的失败不算加载失败。** 它要查文件系统
  * （最坏等满超时），而列表本身只是想显示用户存了什么 —— 并在一起会让一条不可达的
  * 网络共享把整个板块拖成错误页，而用户想看的那几条配置其实好好地在那儿。因此状态
- * 有自己的加载计数，拿不到时只是不显示标记与摘要，列表照常可用。
+ * 有自己的加载计数，拿不到时只是不显示标记与摘要，列表照常可用。列表加载、状态重查、
+ * 增删改的本地缓存更新都抽进了 `useLaunchProfiles`（首页区块与它共用同一份数据源，
+ * 见 `use-launch-profiles.ts`），本板块只管自己的 UI 状态（对话框开关、提示条、行内
+ * busy）。
  *
  * 操作结果用板块顶部的一条提示呈现（成功与失败共用一处）。没有引入 toast 组件：
  * 这个板块的动作都很短（启动一个进程、保存一条配置），结果紧跟操作出现即可，
@@ -51,58 +47,6 @@ import { LaunchProfileRow } from './LaunchProfileRow'
  */
 
 type Notice = { kind: 'ok' | 'error'; text: string }
-
-/**
- * 拉取列表的结果。
- *
- * 用判别联合而不是「抛出去让调用方接」：失败在这个板块里是一件**正常的分支**
- * （后端没起来、会话刚失效），把它编码进返回值，调用方就不必用 try 包住整段
- * 加载逻辑，也不会漏掉某条路径上的 catch。
- */
-type FetchProfilesResult =
-  { ok: true; profiles: readonly LaunchProfile[] } | { ok: false; message: string }
-
-/**
- * 拉取列表。**不碰组件状态。**
- *
- * 它要在首次加载与重试两条路径上共用，而把 setState 塞进来会让首次加载那一条
- * 触发 `react-hooks/set-state-in-effect`（规则做的是保守的跨函数分析，看不出那些
- * setState 都在 `await` 之后）。返回结果、由调用方决定怎么落，是最省事的写法。
- *
- * 放在模块级而不是组件内：它不依赖任何 props 或 state，每次渲染重建一个闭包只是浪费。
- */
-async function fetchLaunchProfiles(): Promise<FetchProfilesResult> {
-  try {
-    return { ok: true, profiles: await loadLaunchProfiles() }
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof ApiError ? error.message : '加载失败，请稍后重试',
-    }
-  }
-}
-
-/**
- * 拉取每条配置的状态（路径能不能用、上次启动是什么结果）。
- *
- * **失败返回 null，不抛也不设错误态。** 这是它与列表加载刻意不同的一处：路径状态是
- * 附加信息，拿不到时列表照常可用，只是不显示失效标记与启动摘要。把它并进列表的
- * 加载失败里，会让「一次状态查询超时」表现为「整个板块打不开」—— 而用户想看的
- * 那几条配置其实好好地在那儿。
- *
- * 返回一个以 id 为键的普通对象而不是数组：渲染时每一行都要按 id 查一次，用数组就得
- * 每行扫一遍（行数不多，但这是白白多出来的一层），而 `statuses[id]` 在
- * `noUncheckedIndexedAccess` 下天然是 `LaunchProfileStatus | undefined` —— 正好表达
- * 「这一条的状态还没拿到」。
- */
-async function fetchLaunchStatuses(): Promise<Record<string, LaunchProfileStatus> | null> {
-  try {
-    const list = await loadLaunchStatuses()
-    return Object.fromEntries(list.map((item) => [item.profileId, item]))
-  } catch {
-    return null
-  }
-}
 
 /**
  * 判断编辑提交的内容是否真的与原来不同。
@@ -126,35 +70,22 @@ export function LaunchPanel() {
   const { can } = useAuth()
   const canWrite = can(PERMISSIONS.PERSONAL_LAUNCH_WRITE)
 
-  /** `null` 表示还没拿到过数据，与「拿到了但是空的」区分开。 */
-  const [profiles, setProfiles] = useState<readonly LaunchProfile[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  // 列表 / 状态 / 增删改都走共享 hook，与首页区块共用一份数据源（见 use-launch-profiles）。
+  const {
+    profiles,
+    statuses,
+    loading,
+    loadError,
+    reload,
+    recheckStatuses,
+    createProfile,
+    updateProfile,
+    removeProfile,
+    reorder,
+  } = useLaunchProfiles()
 
-  /**
-   * 每条配置的状态，以 id 为键。
-   *
-   * 空对象表示还没拿到。它与列表分两次请求（见 `lib/launch.ts` 的注释），因此
-   * 「列表已经在屏幕上、状态还在路上」是一个正常存在的中间态 —— 那时不显示失效
-   * 标记，也不显示启动摘要，而不是显示一个「尚未启动过」的错误结论。
-   */
-  const [statuses, setStatuses] = useState<Record<string, LaunchProfileStatus>>({})
-
-  /**
-   * 状态的重拉计数。
-   *
-   * 与列表的 `reloadToken` 分开，因为列表只在首次或重试时加载，增删改成功后直接
-   * 更新本地列表；状态则在首次、增删改、启动后及手动「重新检查路径」时独立重查。
-   * 分开之后，一次状态查询失败不会把已经显示出来的列表换成一个错误页。
-   */
-  const [statusToken, setStatusToken] = useState(0)
-
-  /**
-   * 「正在加载」不单独存一个布尔量，而是由「还没有数据」与「还没有错误」推出来。
-   *
-   * 单独存的话就有两个真相：重试成功时忘了把它改回来，界面会一直停在加载态；
-   * 而在这条加载路径上，除了首屏与重试没有第三种入口，推导比维护更省心。
-   */
-  const loading = profiles === null && loadError === null
+  // §2.5 复用：每个软件「最近有效路径」反查表，新增配置选软件时预填路径框。
+  const suggestedPaths = useMemo(() => buildSuggestedPaths(profiles, statuses), [profiles, statuses])
 
   /** 重排或删除在飞。此时整块列表不可操作，避免两处修改互相覆盖顺序。 */
   const [busy, setBusy] = useState(false)
@@ -173,79 +104,8 @@ export function LaunchPanel() {
    */
   const [focusPath, setFocusPath] = useState(false)
 
-  /**
-   * 重载计数。
-   *
-   * 重试走「把它加一」而不是再写一遍加载逻辑：落状态的代码只该存在一处，两边各写
-   * 一份迟早会不一致（例如一边清了错误、另一边没清）。effect 的依赖里带上它，
-   * 值一变就重跑一次。
-   */
-  const [reloadToken, setReloadToken] = useState(0)
-
-  /**
-   * 首次加载与重试共用的一段。
-   *
-   * **状态更新直接写在 effect 里、`await` 之后，不抽成 `load` 函数再调用。**
-   * `react-hooks/set-state-in-effect` 对「effect 同步调用了某个含 setState 的函数」
-   * 会报警 —— 它做的是保守的跨函数分析，看不出那些 setState 其实都发生在请求返回
-   * 之后。写在 effect 内则一目了然：同步部分只有发起请求这一件事。
-   */
-  useEffect(() => {
-    let cancelled = false
-
-    void (async () => {
-      const result = await fetchLaunchProfiles()
-      if (cancelled) return
-      if (result.ok) {
-        setProfiles(result.profiles)
-        setLoadError(null)
-      } else {
-        setLoadError(result.message)
-      }
-    })()
-
-    // 卸载后不再落状态。请求本身无法取消，但结果可以丢弃。
-    return () => {
-      cancelled = true
-    }
-  }, [reloadToken])
-
-  /**
-   * 加载每条配置的状态。
-   *
-   * 与列表分开成一个 effect，因为列表只在首次或重试时加载，增删改成功后更新本地
-   * 列表；状态则按 `statusToken` 独立重查。合并的话，一次只想重查路径或启动摘要的
-   * 动作也会重拉列表，失败时把已有内容换成错误页 —— 附加状态查询不该影响列表可用性。
-   */
-  useEffect(() => {
-    let cancelled = false
-
-    void (async () => {
-      const next = await fetchLaunchStatuses()
-      // null 表示这次没拿到。保留上一次的结果而不是清空：清空会让已经显示出来的
-      // 失效标记与启动摘要在一次偶发失败后一起消失，而它们刚才还是对的。
-      if (cancelled || next === null) return
-      setStatuses(next)
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [statusToken])
-
-  /**
-   * 重新加载。
-   *
-   * 先清掉错误 —— `loading` 是从「没有数据且没有错误」推出来的，清掉它界面立刻回到
-   * 加载态，不需要另设一个「重试中」的开关。
-   */
-  function handleRetry(): void {
-    setLoadError(null)
-    setReloadToken((token) => token + 1)
-  }
-
   function describeError(error: unknown, fallback: string): string {
-    return error instanceof ApiError ? error.message : fallback
+    return error instanceof ApiError || error instanceof LaunchRunError ? error.message : fallback
   }
 
   /**
@@ -256,21 +116,23 @@ export function LaunchPanel() {
    * 而不必改动配置的地方。
    */
   function handleRecheck(): void {
-    setStatusToken((token) => token + 1)
+    recheckStatuses()
   }
 
   async function handleLaunch(profile: LaunchProfile): Promise<void> {
     setLaunchingId(profile.id)
     setNotice(null)
     try {
-      const result = await runLaunchProfile(profile.id)
+      const result = await runLaunchProfile(profile)
       // pid 一并报出来：它不面向日常使用，但出现「启动了却看不到窗口」时，
       // 这是判断进程到底有没有被创建的第一手信息。
       setNotice({ kind: 'ok', text: `已启动「${profile.name}」（进程 ${result.pid}）` })
     } catch (error) {
       // 按服务端给的错误码分流：路径失效与「没预料到的失败」需要用户做的事完全不同，
       // 而它们都会走到这个 catch 里。分流规则见 `lib/launch.ts`。
-      const relocate = error instanceof ApiError && launchRunRecovery(error) === 'relocate'
+      const relocate =
+        (error instanceof ApiError || error instanceof LaunchRunError) &&
+        launchRunRecovery(error) === 'relocate'
       const message = describeError(error, '启动失败，请稍后重试')
       setNotice({
         kind: 'error',
@@ -280,30 +142,21 @@ export function LaunchPanel() {
       setLaunchingId(null)
       // 启动成功与失败都会落一条记录（失败也是一种记录），因此这一次都要重拉状态。
       // 请求根本没到服务端时这次重拉是白做的，但那比「刚点过启动、摘要却没变」要好。
-      setStatusToken((token) => token + 1)
+      recheckStatuses()
     }
   }
 
   async function handleSubmit(values: LaunchFormValues): Promise<void> {
     if (editing === null) {
-      const created = await createLaunchProfile(values)
-      setProfiles((current) => [...(current ?? []), created])
+      const created = await createProfile(values)
       setNotice({ kind: 'ok', text: `已新增「${created.name}」` })
-      // 新条目还没有状态，重拉一次让它立刻显示出来，而不是空着一行。
-      setStatusToken((token) => token + 1)
       return
     }
 
     if (!hasChanges(editing, values)) return
 
-    const updated = await updateLaunchProfile(editing.id, values)
-    setProfiles((current) =>
-      (current ?? []).map((profile) => (profile.id === updated.id ? updated : profile)),
-    )
+    const updated = await updateProfile(editing.id, values)
     setNotice({ kind: 'ok', text: `已保存「${updated.name}」` })
-    // 编辑改的可能正是路径，而路径状态只有服务端查得到 —— 不重拉的话，刚改好的
-    // 那一条会继续带着「路径失效」的标记。
-    setStatusToken((token) => token + 1)
   }
 
   /**
@@ -321,17 +174,19 @@ export function LaunchPanel() {
     const target = index + offset
     if (index < 0 || target < 0 || target >= profiles.length) return
 
-    const reordered = [...profiles]
-    const moving = reordered[index]
-    const displaced = reordered[target]
+    // 提交整个 id 顺序，而不是「把某个 id 挪到某处」：落库后的顺序由服务端回给 hook
+    // （它内部 setProfiles），这里只负责把这一格与相邻格对调。
+    const reorderedIds = [...profiles.map((item) => item.id)]
+    const moving = reorderedIds[index]
+    const displaced = reorderedIds[target]
     if (moving === undefined || displaced === undefined) return
-    reordered[index] = displaced
-    reordered[target] = moving
+    reorderedIds[index] = displaced
+    reorderedIds[target] = moving
 
     setBusy(true)
     setNotice(null)
     try {
-      setProfiles(await reorderLaunchProfiles(reordered.map((item) => item.id)))
+      await reorder(reorderedIds)
     } catch (error) {
       // 失败时不动本地列表：界面仍显示服务端的顺序，用户看到的是「点了没反应 + 一句说明」，
       // 比显示一个没落库的顺序要好。
@@ -348,13 +203,11 @@ export function LaunchPanel() {
     setBusy(true)
     setNotice(null)
     try {
-      await removeLaunchProfile(target.id)
-      setProfiles((current) => (current ?? []).filter((profile) => profile.id !== target.id))
+      await removeProfile(target.id)
       setNotice({ kind: 'ok', text: `已删除「${target.name}」` })
       setDeleting(null)
-      // 状态列表按 id 组织，删掉的那一条不会自己消失；重拉一次让状态与列表对齐。
+      // 状态列表按 id 组织，删掉的那一条不会自己消失；hook 内部已重拉状态让它与列表对齐。
       // 它的历史记录仍在库里（软删除不带走历史），只是不再出现在这个接口的返回里。
-      setStatusToken((token) => token + 1)
     } catch (error) {
       setNotice({ kind: 'error', text: describeError(error, '删除失败，请稍后重试') })
     } finally {
@@ -385,7 +238,13 @@ export function LaunchPanel() {
     if (loading) return <LoadingState variant="plain" label="正在加载启动配置" />
 
     if (loadError !== null) {
-      return <ErrorState variant="plain" description={loadError} onRetry={handleRetry} />
+      return (
+        <ErrorState
+          variant="plain"
+          description={loadError}
+          onRetry={reload}
+        />
+      )
     }
 
     if (profiles === null || profiles.length === 0) {
@@ -500,6 +359,7 @@ export function LaunchPanel() {
         onOpenChange={setDialogOpen}
         profile={editing}
         focusPath={focusPath}
+        suggestedPaths={suggestedPaths}
         onSubmit={handleSubmit}
       />
 

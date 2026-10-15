@@ -15,7 +15,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { normalizeProfile, runShellLaunchProfile } from '../src/agent.ts'
+import {
+  detectLaunchPaths,
+  knownExecutableCandidates,
+  normalizeProfile,
+  runShellLaunchProfile,
+  runShellLaunchProfiles,
+} from '../src/agent.ts'
 
 /**
  * 一条合法的配置。逐个用例只改要验的那一个字段，其余保持合法 ——
@@ -230,4 +236,178 @@ test('额外的未知字段被丢掉，不带进进程创建', async () => {
   )
   assert.equal(outcome.ok, true)
   assert.equal('恶意字段' in calls[0], false)
+})
+
+// ---------------------------------------------------------------- 批量启动（2.2）
+
+/** 按调用下标返回不同结果的假 agent，用来构造「部分成功」的批量场景。 */
+function spyAgentMany(results) {
+  let index = 0
+  return {
+    module: {
+      runLaunchProfile(_profile, _logger) {
+        const result = results[index] ?? { ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } }
+        index += 1
+        return Promise.resolve(result)
+      },
+    },
+  }
+}
+
+test('全部成功时汇总 success 等于条数，每条带 pid', async () => {
+  const { module } = spyAgentMany([])
+  const raws = [validProfile({ id: 'a' }), validProfile({ id: 'b' }), validProfile({ id: 'c' })]
+  const result = await runShellLaunchProfiles(raws, module)
+  assert.equal(result.summary.total, 3)
+  assert.equal(result.summary.success, 3)
+  assert.equal(result.summary.failed, 0)
+  assert.deepEqual(
+    result.results.map((item) => item.profileId),
+    ['a', 'b', 'c'],
+  )
+  assert.equal(
+    result.results.every((item) => item.ok && typeof item.pid === 'number'),
+    true,
+  )
+})
+
+test('单条形态不合法只落在自己那一项，其余照常', async () => {
+  const { module } = spyAgentMany([])
+  // 中间那条缺绝对路径，归一化会拒。
+  const raws = [validProfile({ id: 'a' }), { executablePath: 'app.exe' }, validProfile({ id: 'c' })]
+  const result = await runShellLaunchProfiles(raws, module)
+  assert.equal(result.summary.success, 2)
+  assert.equal(result.summary.failed, 1)
+  const bad = result.results.find((item) => item.profileId === '')
+  assert.equal(bad?.ok, false)
+  assert.equal(bad?.reason, 'invalid_profile')
+})
+
+test('agent 抛错被兜底成 spawn_failed，不影响其余', async () => {
+  let index = 0
+  const { module } = {
+    module: {
+      runLaunchProfile(_profile, _logger) {
+        index += 1
+        if (index === 2) return Promise.reject(new Error('boom'))
+        return Promise.resolve({ ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } })
+      },
+    },
+  }
+  const raws = [validProfile({ id: 'a' }), validProfile({ id: 'b' }), validProfile({ id: 'c' })]
+  const result = await runShellLaunchProfiles(raws, module)
+  assert.equal(result.summary.success, 2)
+  assert.equal(result.summary.failed, 1)
+  const failed = result.results.find((item) => item.profileId === 'b')
+  assert.equal(failed?.ok, false)
+  assert.equal(failed?.reason, 'spawn_failed')
+})
+
+test('空数组直接返回空汇总，不碰进程', async () => {
+  let calls = 0
+  const { module } = {
+    module: {
+      runLaunchProfile() {
+        calls += 1
+        return Promise.resolve({ ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } })
+      },
+    },
+  }
+  const result = await runShellLaunchProfiles([], module)
+  assert.equal(result.summary.total, 0)
+  assert.equal(calls, 0, '空批量不该创建任何进程')
+})
+
+// ---------------------------------------------------------------- 一键检测（2.5）
+
+/** 一份假环境变量，让候选枚举结果可断言、不依赖真实机器。 */
+const DETECT_FAKE_ENV = {
+  ProgramFiles: 'C:\\Program Files',
+  'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+  LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local',
+}
+
+test('knownExecutableCandidates 枚举已知软件的全部根目录×相对路径', () => {
+  const result = knownExecutableCandidates('wechat', DETECT_FAKE_ENV)
+  assert.deepEqual(result, [
+    'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+    'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\WeChat\\WeChat.exe',
+  ])
+})
+
+test('knownExecutableCandidates 多相对路径软件按「根×相对」顺序展开', () => {
+  const result = knownExecutableCandidates('qq', DETECT_FAKE_ENV)
+  // 顺序：先遍历每个根目录，根内再按相对路径顺序。ProgramFiles 在前、LOCALAPPDATA 在后。
+  assert.deepEqual(result, [
+    'C:\\Program Files\\Tencent\\QQ\\Bin\\QQ.exe',
+    'C:\\Program Files\\Tencent\\QQ\\QQ.exe',
+    'C:\\Program Files (x86)\\Tencent\\QQ\\Bin\\QQ.exe',
+    'C:\\Program Files (x86)\\Tencent\\QQ\\QQ.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\QQ\\Bin\\QQ.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\QQ\\QQ.exe',
+  ])
+})
+
+test('custom 与未知 software 返回空数组（无已知位置）', () => {
+  assert.deepEqual(knownExecutableCandidates('custom', DETECT_FAKE_ENV), [])
+  assert.deepEqual(knownExecutableCandidates('not-a-software', DETECT_FAKE_ENV), [])
+})
+
+test('根目录环境变量缺失时不贡献坏路径，而是跳过该根', () => {
+  // 三个根都没给有效值 → 空；不是塞一个「undefined/...」的坏路径。
+  assert.deepEqual(knownExecutableCandidates('wechat', { ProgramFiles: '' }), [])
+})
+
+test('detectLaunchPaths：extraPath 绝对且存在时成为首选', async () => {
+  const result = await detectLaunchPaths('wechat', {
+    extraPath: 'D:\\my\\WeChat.exe',
+    inspect: async (p) => (p === 'D:\\my\\WeChat.exe' ? 'ok' : 'missing'),
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.preferred, 'D:\\my\\WeChat.exe')
+  assert.deepEqual(result.candidates, ['D:\\my\\WeChat.exe'])
+})
+
+test('detectLaunchPaths：无 extraPath 时返回首个命中已知候选', async () => {
+  const result = await detectLaunchPaths('wechat', {
+    inspect: async (p) =>
+      p === 'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe' ? 'ok' : 'missing',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.preferred, 'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe')
+  assert.deepEqual(result.candidates, ['C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe'])
+})
+
+test('detectLaunchPaths：全部缺失返回空', async () => {
+  const result = await detectLaunchPaths('wechat', {
+    inspect: async () => 'missing',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.preferred, null)
+  assert.deepEqual(result.candidates, [])
+})
+
+test('detectLaunchPaths：extraPath 是相对路径时不进候选', async () => {
+  const result = await detectLaunchPaths('wechat', {
+    extraPath: 'relative/app.exe',
+    inspect: async (p) => (p.endsWith('WeChat.exe') ? 'ok' : 'missing'),
+    env: DETECT_FAKE_ENV,
+  })
+  // extraPath 被拒（相对路径在任何机器都启不动），已知候选中只有一个命中。
+  assert.equal(result.preferred, 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe')
+  assert.equal(result.candidates.includes('relative/app.exe'), false)
+})
+
+test('detectLaunchPaths：extraPath 与已知候选重复时只出现一次', async () => {
+  const result = await detectLaunchPaths('wechat', {
+    extraPath: 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+    inspect: async () => 'ok',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(
+    result.candidates.filter((p) => p === 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe').length,
+    1,
+    'extraPath 与第一条已知候选是同一路径时不该重复',
+  )
 })

@@ -6,7 +6,6 @@ import type {
   UpdateLaunchProfileRequest,
 } from '@fanhe/shared'
 
-import { ApiError } from './api'
 import {
   createLaunchProfileRequest,
   deleteLaunchProfileRequest,
@@ -16,6 +15,7 @@ import {
   runLaunchProfileRequest,
   updateLaunchProfileRequest,
 } from './api'
+import { currentHost } from './host'
 import { withAccessToken } from './session'
 
 /**
@@ -78,25 +78,74 @@ export function removeLaunchProfile(id: string): Promise<boolean> {
   return withAccessToken(async (token) => (await deleteLaunchProfileRequest(token, id)).removed)
 }
 
-export function runLaunchProfile(id: string): Promise<RunLaunchProfileResponse> {
-  return withAccessToken((token) => runLaunchProfileRequest(token, id))
+/**
+ * 启动一条配置。
+ *
+ * **宿主分流**是 2.1 的核心：桌面外壳里走 `launch:run` IPC（主进程在本机 spawn，与
+ * shell 前端服务端口、api 服务端口都无关），浏览器里走 HTTP
+ * `POST /api/launch/profiles/:id/run`。两者返回同一份 `RunLaunchProfileResponse`
+ * 形状，界面不感知差异。
+ *
+ * 桌面态为什么要传整条 profile：IPC 端点不连数据库，路径与参数由各端取全了送进去、
+ * 主进程经 `agent.ts` 的 `normalizeProfile` 重新校验（见 preload.ts 注释）。这正比
+ * HTTP 端点安全 —— 后者只认 id（路径取库），前者不认库、只信主进程复核过的整条对象。
+ */
+export function runLaunchProfile(profile: LaunchProfile): Promise<RunLaunchProfileResponse> {
+  if (currentHost() === 'desktop') {
+    const bridge = window.fanheDesktop
+    if (bridge?.runLaunchProfile) {
+      return runLaunchProfileViaShell(bridge, profile)
+    }
+  }
+  return withAccessToken((token) => runLaunchProfileRequest(token, profile.id))
 }
 
 /**
- * 启动失败时，界面该给哪个出口。
+ * 桌面态走 IPC 启动。
  *
- * 分界的依据是「改什么才能成功」：
- *
- *   `relocate`  路径失效（`executable_missing`）。重试一万次也是同一个结果，
- *               唯一的出路是让用户重新指定可执行文件。
- *   `retry`     其余情况。进程创建失败、网络中断、服务端暂时不可用都属于这一类，
- *               再试一次有意义。
- *
- * 这两者的区分写在数据层而不是界面里，是因为它取决于**服务端给的错误码**，而错误码
- * 的取值域由服务端定义。界面只消费结论，不必知道 `executable_missing` 这个字符串。
+ * 成功时把 `LaunchRunResult` 的 `data` 直接当 `RunLaunchProfileResponse` 返回（两者
+ * 字段完全一致）；失败时把 `reason` 翻译成 `LaunchRunError`，让上层用与 HTTP 失败
+ * 同一套 `launchRunRecovery` 分流。`detail` 当作可展示文案 —— 它是主进程给的中文引导，
+ * 比「启动失败」更有用。桥上若没有 `runLaunchProfile`（例如旧版外壳），回落到 HTTP，
+ * 不会因版本错位而整体失效。
  */
-export type LaunchRunRecovery = 'relocate' | 'retry'
-
-export function launchRunRecovery(error: ApiError): LaunchRunRecovery {
-  return error.code === 'executable_missing' ? 'relocate' : 'retry'
+async function runLaunchProfileViaShell(
+  bridge: NonNullable<Window['fanheDesktop']>,
+  profile: LaunchProfile,
+): Promise<RunLaunchProfileResponse> {
+  const result = await bridge.runLaunchProfile(profile)
+  if (result.ok) {
+    return result.data
+  }
+  throw new LaunchRunError(result.reason, result.detail || '启动失败，请稍后重试')
 }
+
+import { LaunchRunError, summarizeLaunchMany, type LaunchRunManyResult } from './launch-recovery'
+export * from './launch-recovery'
+export { detectLaunchPath, type LaunchPathDetectResult } from './launch-detect'
+
+/**
+ * 批量启动一组配置。
+ *
+ * 与单条 `runLaunchProfile` 同一条宿主分流：桌面态走 `launch:runMany` IPC（主进程并发
+ * 拉起、每条独立），浏览器态逐条走现有单条 HTTP 端点再用 `summarizeLaunchMany` 聚合成
+ * 同一份形状。两者都返回 `LaunchRunManyResult`，界面不感知差异。
+ *
+ * 浏览器态为何不复用一条「批量 HTTP 端点」：本项目桌面是主场景，且 `launch:runMany`
+ * IPC 已覆盖；浏览器态用逐条 allSettled 既复用既有单条端点（含其历史记录与权限），
+ * 又不必为服务端新增一条路由。界面拿到的聚合结构一致。
+ */
+export function runLaunchProfiles(profiles: LaunchProfile[]): Promise<LaunchRunManyResult> {
+  if (currentHost() === 'desktop' && window.fanheDesktop?.runLaunchProfiles) {
+    return window.fanheDesktop.runLaunchProfiles(profiles)
+  }
+  // 浏览器态（或桌面态桥缺失时回落）：逐条走单条端点，聚合结果。
+  return runLaunchProfilesViaHttp(profiles)
+}
+
+/** 浏览器态（或桌面态桥缺失时回落）：逐条走单条端点，聚合结果。 */
+async function runLaunchProfilesViaHttp(profiles: LaunchProfile[]): Promise<LaunchRunManyResult> {
+  const settled = await Promise.allSettled(profiles.map((profile) => runLaunchProfile(profile)))
+  return summarizeLaunchMany(profiles, settled)
+}
+

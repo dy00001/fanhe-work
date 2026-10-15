@@ -6,6 +6,11 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "noEmit": true,
+    // 允许相对导入带 `.ts` 扩展名。纯模块（如 `lib/launch-detect.ts`）要能在 Node 的
+    // `--experimental-strip-types` 下被单测直接加载，而 Node ESM 不会自动补 `.ts`，
+    // 于是那些模块里的相对 import 必须写全扩展名。这里显式开启（依赖上面的
+    // `noEmit`，它是开启此项的硬前提），不影响构建：Vite 侧本就按扩展名解析。
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
