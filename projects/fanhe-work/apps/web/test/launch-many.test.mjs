@@ -16,7 +16,17 @@ import { test } from 'node:test'
 import { summarizeLaunchMany } from '../src/lib/launch-recovery.ts'
 
 function profile(id) {
-  return { id, software: 'custom', name: id, executablePath: 'C:/x.exe', args: [], icon: null, sortOrder: 0, createdAt: '', updatedAt: '' }
+  return {
+    id,
+    software: 'custom',
+    name: id,
+    executablePath: 'C:/x.exe',
+    args: [],
+    icon: null,
+    sortOrder: 0,
+    createdAt: '',
+    updatedAt: '',
+  }
 }
 
 test('全部成功 → success 等于条数，每条带 pid', () => {

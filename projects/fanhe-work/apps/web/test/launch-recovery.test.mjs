@@ -21,7 +21,10 @@ function httpError(code) {
 
 test('路径失效归 relocate，与失败来源无关', () => {
   assert.equal(launchRunRecovery(httpError('executable_missing')), 'relocate')
-  assert.equal(launchRunRecovery(new LaunchRunError('executable_missing', '本地路径不在了')), 'relocate')
+  assert.equal(
+    launchRunRecovery(new LaunchRunError('executable_missing', '本地路径不在了')),
+    'relocate',
+  )
 })
 
 test('其余失败归 retry', () => {

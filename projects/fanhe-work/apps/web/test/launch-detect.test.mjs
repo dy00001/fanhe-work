@@ -54,9 +54,14 @@ test('桌面态不传 extraPath 时桥收到 undefined', async () => {
 })
 
 test('浏览器态（isDesktopShell 为假）回落为空结果，不抛错', async () => {
-  globalThis.window = { fanheDesktop: { isDesktopShell: false, detectLaunchPath: async () => {
-    throw new Error('浏览器态不应调用桥')
-  } } }
+  globalThis.window = {
+    fanheDesktop: {
+      isDesktopShell: false,
+      detectLaunchPath: async () => {
+        throw new Error('浏览器态不应调用桥')
+      },
+    },
+  }
   const result = await detectLaunchPath('wechat')
   assert.deepEqual(result, {
     software: 'wechat',

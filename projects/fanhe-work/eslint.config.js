@@ -60,6 +60,24 @@ export default [
     },
   },
 
+  // `_` 前缀 = 「刻意不使用」。这条约定在 ts/tsx 上一直有（见上一段），`.mjs` 测试
+  // 文件却漏了：于是测试里照常写的 `runLaunchProfile(_profile, _logger)` 假 agent 会
+  // 被报成未使用变量（2026-10-16 实测 4 处，全在 apps/desktop/test/agent.test.mjs）。
+  // 应对方式是补这条忽略，而不是删掉形参 —— 形参本身在说明「这个签名有两个参数」。
+  {
+    files: ['**/*.{js,mjs}'],
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+    },
+  },
+
   // Browser code: the web app and the React specific plugins.
   {
     ...reactHooks.configs.flat.recommended,
