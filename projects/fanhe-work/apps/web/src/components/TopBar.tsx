@@ -1,6 +1,7 @@
 import { NAV_CODES, navPath, type AuthenticatedUser } from '@fanhe/shared'
 import {
   CircleQuestionMark,
+  ImageUp,
   LogOut,
   Monitor,
   Moon,
@@ -11,15 +12,18 @@ import {
   Sun,
   type LucideIcon,
 } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import { type ThemePreference, isThemePreference } from '../lib/preferences'
 import { parseDesktopUpdateStatus } from '../lib/desktop-update'
 import { useTheme } from '../lib/theme'
+import { useAvatar } from '../lib/use-avatar'
 import { useVersionCheck } from '../lib/use-version-check'
 import { buildVersionDetail, buildVersionLine } from '../lib/version'
 import { type UpdateNotice } from '../lib/version-check'
-import { Avatar, AvatarFallback } from './ui/avatar'
+import { AvatarDialog } from './account/AvatarDialog'
+import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from './ui/breadcrumb'
 import {
   DropdownMenu,
@@ -77,6 +81,12 @@ type TopBarProps = {
  *
  * **头像菜单按原型补齐为五项**：设置 / 收藏 / 外观（二级三档）/ 帮助中心 / 退出登录。
  * 上一版只有「外观 + 退出登录」，是自作的收敛，与原型不符，这次还原。
+ *
+ * 在此之上加了第六条「**更换头像**」，排在菜单最前（2026-10-15）。原型里的头像是写死的
+ * 首字圆牌，这一条把它变成可自定义：选本机图片、拖动缩放裁剪、保存后立刻生效，实现在
+ * `lib/avatar.ts` + `lib/use-avatar.ts` + `components/account/AvatarDialog.tsx`。
+ * 放在第一条而不是排在末尾，是因为它改的正是它上面那一行里的东西（头像），与身份信息
+ * 同源；排到「退出登录」旁边会让它看起来像一个与账号无关的工具入口。
  *
  * 三处行为差别是刻意的，不是漏做：
  *   - **设置**指向系统设置页。本项目里它真实存在（`/system-settings`），原型只是个
@@ -158,6 +168,14 @@ async function runUpdateNoticeAction(notice: UpdateNotice): Promise<void> {
 export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
   const { preference, setPreference } = useTheme()
   const { notice, refresh } = useVersionCheck()
+  const { avatar, save: saveAvatar, remove: removeAvatar } = useAvatar(user.id)
+  const [avatarDialogOpen, setAvatarDialogOpen] = useState(false)
+
+  // 「更换头像」是从账号菜单里点的，而菜单收起时 Radix 会把焦点还给头像按钮 ——
+  // 那一下和对话框的焦点陷阱会互相抢，症状是「对话框开着，但焦点在它外面、Esc 关不掉」。
+  // 用一个 ref 标记「这次收起是为了开对话框」，在 `onCloseAutoFocus` 里放行即可。
+  // 用 ref 而不是 state：它要在同一次事件里被读到，state 要等下一次渲染。
+  const suppressMenuRefocus = useRef(false)
 
   // 中文取首字、英文取首字母，两种都是「一个字」。不用 split 处理多字节，
   // 展开运算符按码点切分，不会把中文截成半个字符。
@@ -203,6 +221,9 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
               className="rounded-full outline-none hover:opacity-[0.88] focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               <Avatar className="size-8">
+                {/* 自定义头像优先。没有、或者图坏掉时（Radix 会在图片加载失败后
+                    自动把 Fallback 显示回来）落到首字。 */}
+                {avatar !== null && <AvatarImage src={avatar} alt="" />}
                 <AvatarFallback className="bg-primary text-xs font-medium text-primary-foreground">
                   {initial}
                 </AvatarFallback>
@@ -210,7 +231,15 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
             </button>
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent
+            align="end"
+            className="w-56"
+            onCloseAutoFocus={(event) => {
+              if (!suppressMenuRefocus.current) return
+              suppressMenuRefocus.current = false
+              event.preventDefault()
+            }}
+          >
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col gap-0.5">
                 <span className="truncate text-sm font-medium text-foreground">
@@ -222,6 +251,18 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+
+            {/* 更换头像。放在菜单第一条：它改的是上面这一行里的东西（头像），
+                和身份信息同源，比「设置」更贴近用户点开菜单时想找的东西。 */}
+            <DropdownMenuItem
+              onSelect={() => {
+                suppressMenuRefocus.current = true
+                setAvatarDialogOpen(true)
+              }}
+            >
+              <ImageUp className="size-4" />
+              更换头像
+            </DropdownMenuItem>
 
             <DropdownMenuItem asChild>
               <Link to={navPath(NAV_CODES.SYSTEM_SETTINGS)}>
@@ -328,6 +369,17 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* 头像裁剪对话框。**渲染在 `<header>` 里、但在下拉菜单之外**：Dialog 自己
+          portal 到 body，所以放在哪一层都不影响它的定位；但留在菜单内部的话，菜单
+          收起时会把整棵子树一起卸载，对话框刚开就被带走。 */}
+      <AvatarDialog
+        open={avatarDialogOpen}
+        onOpenChange={setAvatarDialogOpen}
+        current={avatar}
+        onSave={saveAvatar}
+        onRemove={removeAvatar}
+      />
     </header>
   )
 }

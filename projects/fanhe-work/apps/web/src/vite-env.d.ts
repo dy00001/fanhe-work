@@ -43,19 +43,18 @@ interface Window {
      * `LaunchRunResult`：成功时 `data` 的字段与 HTTP 端点返回的 `RunLaunchProfileResponse`
      * 完全一致，失败时 `reason` 是机器可读码、`detail` 是可展示文案。
      */
-    runLaunchProfile: (
-      profile: import('@fanhe/shared').LaunchProfile,
-    ) => Promise<
-      | { ok: true; data: { profileId: string; pid: number; startedAt: string; deduplicated: boolean } }
+    runLaunchProfile: (profile: import('@fanhe/shared').LaunchProfile) => Promise<
+      | {
+          ok: true
+          data: { profileId: string; pid: number; startedAt: string; deduplicated: boolean }
+        }
       | { ok: false; reason: string; detail: string }
     >
     /**
      * 批量启动一组配置（桌面态）。结构见 `apps/desktop/src/preload.ts` 的
      * `LaunchRunManyResult`：每条独立成功/失败，汇总给成功数与失败数。
      */
-    runLaunchProfiles: (
-      profiles: import('@fanhe/shared').LaunchProfile[],
-    ) => Promise<{
+    runLaunchProfiles: (profiles: import('@fanhe/shared').LaunchProfile[]) => Promise<{
       results: { profileId: string; ok: boolean; pid?: number; reason?: string; detail?: string }[]
       summary: { total: number; success: number; failed: number }
     }>
@@ -74,5 +73,73 @@ interface Window {
       agentAvailable: boolean
       detail?: string
     }>
+    /**
+     * 按启动同款实现、批量检查一组配置的路径可用性（桌面态）。结构见
+     * `apps/desktop/src/preload.ts` 的 `LaunchDiagnosticsResult`。
+     *
+     * 桌面态下 `loadLaunchStatuses` 用它覆盖服务端算出来的 `pathState` —— 路径是本机
+     * 事实，服务端（容器）看不见本机绝对路径。只取本模块用得到的字段声明。
+     */
+    checkLaunchProfiles: (profiles: unknown) => Promise<{
+      agentAvailable: boolean
+      total: number
+      okCount: number
+      diagnostics: {
+        index: number
+        profileId: string
+        name: string
+        executablePath: string
+        reason: 'agent_unavailable' | 'invalid_profile' | 'path_unavailable'
+        detail: string
+      }[]
+    }>
+    /**
+     * 批量取可执行文件的真实图标（§2.9，桌面态）。结构见 `apps/desktop/src/preload.ts`
+     * 的 `LaunchIconResult`。传绝对路径；`.lnk` 拿不到目标的图标（那是系统的通用快捷
+     * 方式图标），要传快捷方式指向的那个 exe。
+     *
+     * 浏览器里没有本机文件系统，这条通道只有外壳场景有意义 —— 界面据此回落内置图标。
+     */
+    getLaunchIcons: (
+      paths: string[],
+    ) => Promise<{ icons: { path: string; dataUrl: string | null }[] }>
+    /**
+     * 查一组配置的凭据状态（P1，桌面态）。结构见 `apps/desktop/src/preload.ts` 的
+     * `CredentialStatusReply`。
+     *
+     * **没有读取明文密码的姊妹方法，这是刻意的**：密码只在主进程内解密（P2 自动填表
+     * 那一刻），不过 IPC 回传。这里的账号是掩码形式，密码框恒为空，「改没改」由调用方
+     * 意图决定。
+     *
+     * 浏览器里没有本机凭据库，这条通道只有外壳场景有意义 —— 界面对应的输入区在浏览器
+     * 态降级成一句提示（见 `lib/credential.ts`）。
+     */
+    getCredentialStatus: (profileIds: string[]) => Promise<{
+      items: {
+        profileId: string
+        state: 'none' | 'saved' | 'undecryptable'
+        accountMasked: string | null
+        label: string
+      }[]
+      /** 本机系统加密是否可用。不可用时保存必然失败，界面据此决定显不显示密码输入区。 */
+      encryptionAvailable: boolean
+    }>
+    /**
+     * 保存一条凭据（P1，桌面态）。入参同 `apps/desktop/src/preload.ts` 的
+     * `CredentialSaveInput`；同 `profileId` 重复保存是覆盖。加密不可用时返回
+     * `reason: 'encryption_unavailable'` 且不落明文。
+     */
+    saveCredential: (input: {
+      profileId: string
+      account: string
+      password: string
+      label?: string | undefined
+    }) => Promise<{ ok: true } | { ok: false; reason: string; detail: string }>
+    /**
+     * 删掉一条凭据（P1，桌面态）。软删除幂等：本来就没有也返回 `ok`。
+     */
+    deleteCredential: (
+      profileId: string,
+    ) => Promise<{ ok: true } | { ok: false; reason: string; detail: string }>
   }
 }

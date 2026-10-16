@@ -62,10 +62,16 @@ win:
     - target: nsis
       arch:
         - x64
-  # 图标源是 web 的品牌 logo（apps/web/public/brand/logo.png，362×391）。
-  # 它不是方形、也没有透明通道，所以任务栏与开始菜单里会带底色 —— 记为已知限制，
-  # 换成一枚方形带 alpha 的 .ico 即可，本文件改一行，别的都不用动。
-  icon: ../web/public/brand/logo.png
+  # 图标源是 web 产物里的**方形**品牌图标（apps/web/public/brand/app-icon.png，
+  # 256×256，圆角白底 + 四角透明）。它与窗口图标、托盘图标是**同一枚**（路径在
+  # `src/brand-icon.ts` 里定义一次）：任务栏与开始菜单读的是 exe 的图标资源，
+  # 标题栏与托盘读的是同一份 PNG，三处同源，不会出现「任务栏一个样、托盘另一个样」。
+  #
+  # 刻意不用页面里的 `logo.png`（362×391，白底、无 alpha）：那个槽位是方的，非方形图
+  # 会被按方形重排、四周留白，任务栏里看起来像带了一条底色。
+  #
+  # 尺寸下限是 256：低于它 electron-builder 生成不出 256px 那一档，高 DPI 下会糊。
+  icon: ../web/public/brand/app-icon.png
 
   # ── 代码签名（T6-03c）────────────────────────────────────────────────
   # 🔴 **签名相关的键必须写在 `signtoolOptions` 里面**，不能平铺在 `win` 下。
