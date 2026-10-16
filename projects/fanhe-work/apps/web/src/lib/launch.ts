@@ -16,6 +16,7 @@ import {
   updateLaunchProfileRequest,
 } from './api'
 import { currentHost } from './host'
+import { pathStatesFromDiagnostics } from './launch-status-desktop'
 import { withAccessToken } from './session'
 
 /**
@@ -45,9 +46,43 @@ export function loadLaunchProfiles(): Promise<readonly LaunchProfile[]> {
  * 与 `loadLaunchProfiles` 分开调用，且**它的失败不算加载失败**：路径状态是附加信息，
  * 拿不到时列表照常可用（只是不显示失效标记与启动摘要）。把它并进列表那一次请求，
  * 会让一条不可达的网络共享把整个板块拖成「加载失败」。
+ *
+ * ## 宿主分流（与 `runLaunchProfile` 同一套）
+ *
+ * `pathState` 是**客户端本地事实**，而服务端（Docker 容器）看不见本机的绝对路径，
+ * 恒判 `missing` —— 症状是「点启动成功、状态却说路径失效」。因此桌面态**覆盖**这一项：
+ * 拿外壳 `launch:diagnostics`（启动同款的 `inspectExecutablePath`）的本机结果盖掉服务端
+ * 的 `pathState`；`lastRun` / `lastSuccessAt` 仍取服务端（那是它记的启动历史）。
+ *
+ * 服务端请求与本地自检各失败一半时都不该整体崩：服务端失败由调用方兜底（状态是附加
+ * 信息），本地自检失败则**退回服务端原值**（宁可显示一个可能不准的标记，也好过整块
+ * 状态消失）。代理不可用时本机翻译返回空对象，同样退回原值。
  */
-export function loadLaunchStatuses(): Promise<readonly LaunchProfileStatus[]> {
-  return withAccessToken(async (token) => (await launchProfileStatusRequest(token)).statuses)
+export async function loadLaunchStatuses(
+  profiles: readonly LaunchProfile[],
+): Promise<readonly LaunchProfileStatus[]> {
+  const serverStatuses = await withAccessToken(
+    async (token) => (await launchProfileStatusRequest(token)).statuses,
+  )
+
+  if (currentHost() !== 'desktop') return serverStatuses
+  const bridge = window.fanheDesktop
+  if (!bridge?.checkLaunchProfiles) return serverStatuses
+
+  let localStates: Record<string, LaunchProfileStatus['pathState']>
+  try {
+    const report = await bridge.checkLaunchProfiles(profiles)
+    localStates = pathStatesFromDiagnostics(profiles, report)
+  } catch {
+    // 自检本身出错不该把状态整块拖没：退回服务端原值。
+    return serverStatuses
+  }
+  if (Object.keys(localStates).length === 0) return serverStatuses
+
+  return serverStatuses.map((status) => {
+    const local = localStates[status.profileId]
+    return local === undefined ? status : { ...status, pathState: local }
+  })
 }
 
 export function createLaunchProfile(input: CreateLaunchProfileRequest): Promise<LaunchProfile> {
@@ -148,4 +183,3 @@ async function runLaunchProfilesViaHttp(profiles: LaunchProfile[]): Promise<Laun
   const settled = await Promise.allSettled(profiles.map((profile) => runLaunchProfile(profile)))
   return summarizeLaunchMany(profiles, settled)
 }
-

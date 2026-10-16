@@ -1,15 +1,21 @@
 import {
+  LAUNCH_CREDENTIAL_LIMITS,
   LAUNCH_PROFILE_LIMITS,
   LAUNCH_SOFTWARES,
   isAbsoluteExecutablePath,
   isLaunchSoftware,
+  supportsAccountLogin,
   type LaunchProfile,
   type LaunchSoftware,
 } from '@fanhe/shared'
+import { KeyRound, LoaderCircle, Radar } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { ApiError } from '../../lib/api'
+import { decideCredentialAction, type CredentialFormInput } from '../../lib/launch-credentials'
+import { detectLaunchPath } from '../../lib/launch'
 import { LAUNCH_ICONS, LAUNCH_ICON_CHOICES, LAUNCH_SOFTWARE_LABELS } from '../../lib/launch-icons'
+import { useProfileCredential } from '../../lib/use-launch-credential'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -34,6 +40,11 @@ export type LaunchFormValues = {
   executablePath: string
   args: string[]
   icon: string | null
+  /**
+   * 账号密码意图（P1）。**只在账号密码登录的软件上出现**，且只在用户真的动过时才有值 ——
+   * 没动过就不传，主进程据此保持原凭据不动（见 `decideCredentialAction`）。
+   */
+  login?: CredentialFormInput | undefined
 }
 
 type LaunchProfileDialogProps = {
@@ -203,21 +214,110 @@ function LaunchProfileForm({
   const [argsText, setArgsText] = useState(profile === null ? '' : profile.args.join('\n'))
   const [icon, setIcon] = useState<string | null>(profile?.icon ?? null)
 
+  /**
+   * 账号密码（P1）。
+   *
+   * **密码框恒为空，不含已保存的密码** —— 那条密码从不过 IPC 回传（见
+   * `lib/launch-credentials.ts` 文件头）。于是「用户改没改密码」不能靠框里有没有内容推断，
+   * 意图在提交时由 `decideCredentialAction` 按三个显式信号定：没动（keep）、填了（save）、
+   * 勾了清除（delete）。
+   */
+  const [account, setAccount] = useState('')
+  const [password, setPassword] = useState('')
+  const [clearCredential, setClearCredential] = useState(false)
+
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   /**
-   * 选软件时，若路径框还空，带出该软件的预填路径（§2.5 复用）。
+   * 这条配置在本机存着的凭据（P1）。编辑时才查得到东西；新增模式没有 id，`snapshot` 恒空。
    *
-   * 只在「路径为空」时补：编辑既有配置时路径已非空，不该被覆盖；用户手填了一半也不
-   * 该因为换一下软件而被清掉。预填是「给个起点」，不是「替用户决定」，随时可改。
+   * `encryptionAvailable` 在这里被当作「账号密码输入区能不能用」的开关：浏览器态、旧版
+   * 外壳、以及本机系统加密不可用时它都是 false，三种情况下输入区一律禁用并说明原因，
+   * 而不是显示一个能填却永远存不上的表单。
+   */
+  const credential = useProfileCredential(profile?.id ?? null)
+  const credentialUsable = credential.encryptionAvailable
+
+  /** 一键检测（§2.5）的界面状态：是否在跑、命中几个、一句结果说明。 */
+  const [detecting, setDetecting] = useState(false)
+  const [detectCandidates, setDetectCandidates] = useState<readonly string[]>([])
+  const [detectHint, setDetectHint] = useState<{
+    kind: 'error' | 'info' | 'ok'
+    text: string
+  } | null>(null)
+
+  /**
+   * 路径框里的值是不是「自动填的」（预填或检测结果），用户没手输过。
+   *
+   * 用它区分「这串路径属于当前软件」还是「用户自己写的」。切换软件时只替换前者：否则
+   * 会出现「选着 QQ、框里却留着微信的路径」这种张冠李戴（真机实测的截图正是如此），
+   * 用户会以为检测把微信路径当成了 QQ 的。用户手输过的路径一律不动。
+   */
+  const [pathAuto, setPathAuto] = useState(false)
+
+  /**
+   * 选软件。路径框若是「自动填的」或还空着，就换成新软件的预填路径（没有则清空）；
+   * 用户手输过的路径保持不动。
    */
   function selectSoftware(id: LaunchSoftware): void {
     setSoftware(id)
-    if (executablePath.trim() === '') {
+    // 换软件意味着上一次检测的命中属于别的软件，一并清掉，别让候选列表张冠李戴。
+    setDetectCandidates([])
+    setDetectHint(null)
+    if (pathAuto || executablePath.trim() === '') {
       const suggested = suggestedPaths?.[id]
-      if (suggested !== undefined) setExecutablePath(suggested)
+      setExecutablePath(suggested ?? '')
+      setPathAuto(suggested !== undefined)
+    }
+  }
+
+  /**
+   * 一键检测（§2.5）：扫本机常见安装位置，命中即回填路径。
+   *
+   * 把当前框里的值当 `extraPath` 传下去：桌面端会把「已填且确实存在」的那条排在候选
+   * 最前，于是「我填了一半，帮我看看还有没有别的」这个体验成立。命中多个时把清单留
+   * 在下面供切换，首选直接填入。
+   *
+   * 失败只在这一块给一句说明，不动表单其它字段；代理不可用（浏览器态、或本机代理没
+   * 加载出来）要说清「检测需要桌面外壳」，而不是假装「没找到」。
+   */
+  async function handleDetect(): Promise<void> {
+    setDetecting(true)
+    setDetectHint(null)
+    setDetectCandidates([])
+    try {
+      const result = await detectLaunchPath(software, executablePath.trim())
+      setDetectCandidates(result.candidates)
+      if (result.preferred !== null) {
+        setExecutablePath(result.preferred)
+        // 检测结果也归为「自动填的」：它属于当前软件，换软件时该被替换。
+        setPathAuto(true)
+        setDetectHint({
+          kind: 'ok',
+          text:
+            result.candidates.length > 1
+              ? `已填首选，另命中 ${result.candidates.length - 1} 个可切换`
+              : '已检测到路径并填入',
+        })
+        return
+      }
+      if (!result.agentAvailable) {
+        setDetectHint({
+          kind: 'error',
+          text: result.detail ?? '本机代理不可用，一键检测需要桌面外壳环境',
+        })
+        return
+      }
+      setDetectHint({ kind: 'info', text: '常见安装位置未找到该软件，请手动填写路径' })
+    } catch (error) {
+      setDetectHint({
+        kind: 'error',
+        text: error instanceof ApiError ? error.message : '检测失败，请稍后重试',
+      })
+    } finally {
+      setDetecting(false)
     }
   }
 
@@ -249,10 +349,24 @@ function LaunchProfileForm({
       errors.args = `单个参数不能超过 ${LAUNCH_PROFILE_LIMITS.ARG_MAX} 个字符`
     }
 
+    // 账号密码意图在这里解释一次（P1）：半填、清除与填写并存、超长都在这一步拒掉，用户
+    // 当场看到问题，而不是提交后收到一句全局提示。**只有账号密码登录的软件才校验。**
+    let login: CredentialFormInput | undefined
+    if (supportsAccountLogin(software)) {
+      const decision = decideCredentialAction({ account, password, clear: clearCredential })
+      if (decision.action === 'reject') {
+        // 挂在 account 上而不是另起一个字段：账号是这两个框里的第一个，理由也主要是
+        // 「要改账号就得连密码一起重填」。
+        errors.account = decision.message
+      } else if (decision.action !== 'keep') {
+        login = { account, password, clear: clearCredential }
+      }
+    }
+
     setFieldErrors(errors)
     if (Object.keys(errors).length > 0) return null
 
-    return { software, name: trimmedName, executablePath: trimmedPath, args, icon }
+    return { software, name: trimmedName, executablePath: trimmedPath, args, icon, login }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -327,8 +441,62 @@ function LaunchProfileForm({
           placeholder="C:\\Program Files\\Tencent\\WeChat\\WeChat.exe"
           spellCheck={false}
           aria-invalid={fieldErrors.executablePath !== undefined}
-          onChange={(event) => setExecutablePath(event.target.value)}
+          onChange={(event) => {
+            setExecutablePath(event.target.value)
+            // 用户一旦手输，就不再是「自动填的」，切软件时不该被替换。
+            setPathAuto(false)
+          }}
         />
+
+        {/* 一键检测（§2.5）。桌面态扫常见安装位置并回填；浏览器态没有本机文件系统，
+            由 detectLaunchPath 回落到 agentAvailable=false，这里据实说明，不假装没找到。 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label="一键检测可执行文件路径"
+            disabled={detecting}
+            onClick={() => void handleDetect()}
+          >
+            {detecting ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <Radar className="size-3.5" />
+            )}
+            {detecting ? '检测中…' : '一键检测'}
+          </Button>
+          {detectHint !== null && (
+            <span
+              className={[
+                'text-xs',
+                detectHint.kind === 'error' ? 'text-destructive' : 'text-muted-foreground',
+              ].join(' ')}
+            >
+              {detectHint.text}
+            </span>
+          )}
+        </div>
+
+        {/* 命中多个时给一个切换器：点哪条填哪条。首选已在请求返回时自动填入。 */}
+        {detectCandidates.length > 1 && (
+          <div className="flex flex-col gap-1.5">
+            {detectCandidates.map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                onClick={() => {
+                  setExecutablePath(candidate)
+                  setPathAuto(true)
+                }}
+                title={candidate}
+                className="truncate rounded-md border border-border px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {candidate}
+              </button>
+            ))}
+          </div>
+        )}
       </Field>
 
       <Field
@@ -347,6 +515,110 @@ function LaunchProfileForm({
           onChange={(event) => setArgsText(event.target.value)}
         />
       </Field>
+
+      {/* 账号密码（P1）。只对账号密码登录的软件出现 —— 微信是扫码登录，没有可代填的框。 */}
+      {supportsAccountLogin(software) && (
+        <fieldset className="flex flex-col gap-4 rounded-lg border border-border p-3">
+          <legend className="flex items-center gap-1.5 px-1 text-sm font-medium text-foreground">
+            <KeyRound className="size-3.5" />
+            登录账号（可选）
+          </legend>
+
+          {/*
+            本机已存凭据的一行摘要。三个状态三种说法：还没填、已存（给掩码账号）、解不开
+            （换机或换 Windows 用户后 DPAPI 必然解不开，此时要引导重新填）。混成一个
+            「没有密码」会让用户在换机后反复重填、反复失败，而他无法从界面看出问题不在
+            自己身上。
+          */}
+          {credential.snapshot?.state === 'saved' && (
+            <p className="text-xs text-muted-foreground">
+              本机已保存账号{' '}
+              <span className="font-medium text-foreground">
+                {credential.snapshot.accountMasked}
+              </span>
+              ，保存时保持不变，除非在下面重新填写。
+            </p>
+          )}
+          {credential.snapshot?.state === 'undecryptable' && (
+            <p className="text-xs text-destructive">
+              本机保存的密码解不开（换电脑或换 Windows 用户后属正常）。请重新填写账号与密码。
+            </p>
+          )}
+
+          {/*
+            降级说明。浏览器态没有主进程、本机系统加密不可用时同理：**不禁用就显示**，
+            因为那会让用户填完之后才发现存不上；而把字段藏起来又看不出这个功能存在。
+          */}
+          {!credentialUsable && (
+            <p className="text-xs text-muted-foreground-weak">
+              自动登录需要桌面外壳环境，浏览器里无法保存账号密码。
+            </p>
+          )}
+
+          <Field
+            label="账号"
+            htmlFor="launch-account"
+            error={fieldErrors.account}
+            hint="保存在本机，用于启动后自动填写登录框"
+          >
+            <Input
+              id="launch-account"
+              value={account}
+              maxLength={LAUNCH_CREDENTIAL_LIMITS.ACCOUNT_MAX}
+              placeholder={credentialUsable ? 'QQ 号 / 旺旺名' : '需要桌面外壳'}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={!credentialUsable}
+              aria-invalid={fieldErrors.account !== undefined}
+              onChange={(event) => setAccount(event.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="密码"
+            htmlFor="launch-password"
+            error={fieldErrors.password}
+            hint={
+              profile !== null
+                ? '已保存的密码不会被回传；只想改账号时，请把密码一并重填一遍'
+                : '保存在本机，用于启动后自动填写登录框'
+            }
+          >
+            <Input
+              id="launch-password"
+              type="password"
+              value={password}
+              maxLength={LAUNCH_CREDENTIAL_LIMITS.PASSWORD_MAX}
+              placeholder={
+                credentialUsable ? (profile !== null ? '不修改则留空' : '登录密码') : '需要桌面外壳'
+              }
+              autoComplete="new-password"
+              spellCheck={false}
+              disabled={!credentialUsable}
+              aria-invalid={fieldErrors.password !== undefined}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+
+          {/*
+            清除。只在真的有东西可清时出现：一条都没存过时勾它没有意义，而一个永远
+            可勾的复选框会让人以为「存过但界面没显示」。它是三种显式意图里的第三种
+            （不改 / 覆盖 / 清除）。
+          */}
+          {credentialUsable &&
+            (credential.snapshot?.state === 'saved' ||
+              credential.snapshot?.state === 'undecryptable') && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={clearCredential}
+                  onChange={(event) => setClearCredential(event.target.checked)}
+                />
+                清除本机保存的密码
+              </label>
+            )}
+        </fieldset>
+      )}
 
       <Field label="图标（可选）" htmlFor="launch-icon" hint="不选则跟随软件">
         <div id="launch-icon" className="flex flex-wrap gap-2">

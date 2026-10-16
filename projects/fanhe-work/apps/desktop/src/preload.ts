@@ -22,6 +22,11 @@
  * - `checkLaunchProfiles(profiles)` —— 启动自检。**传的是配置数组**，理由同上。
  *   返回一份报告，里面每条问题都带一句能照着做的引导。
  *
+ * §2.9 再加一个：
+ * - `getLaunchIcons(paths)` —— 批量取可执行文件的真实图标。**传的是路径数组**（取图标
+ *   只需要路径，不必知道配置叫什么），返回 `path → dataUrl` 的条目表。走 Electron 内置
+ *   的 `app.getFileIcon`，与系统「图标来源」同一套实现，因此与桌面快捷方式显示的一致。
+ *
  * T6-03b 再加三个，都属更新通道：
  * - `getUpdateStatus()` —— 当前状态（阶段、版本、进度）。界面据此决定那一行说什么。
  * - `checkForUpdates()` —— 主动查一次。**它只检查并下载，不安装。**
@@ -42,6 +47,15 @@
  * T4-03 之后的代理调用与 `credential.ts` 的 `safeStorage` 迁移会在这里继续按同样
  * 的成对方式追加通道。
  *
+ * P1 再添三个，都属本机凭据库（第三方账号密码）：
+ * - `getCredentialStatus(profileIds)` —— 查一组配置的凭据状态与掩码账号。**不返回
+ *    明文密码**，也**刻意没有 `getCredential` 这个口子**：密码只在主进程内解密。
+ * - `saveCredential(input)` —— 存一条（账号 + 密码一起，覆盖同 `profileId` 的旧条目）。
+ * - `deleteCredential(profileId)` —— 删一条。
+ *
+ * 三者的入参都经主进程的归一函数复核（见 `credential-vault.ts`），调用方不必替它担保，
+ * 但**不要**把 `saveCredential` 当成能存任意长字符串的地方 —— 超长会被拒。
+ *
  * **不要**直接把 `ipcRenderer` 整个暴露出去。
  *
  * 沙箱（`sandbox: true`）下预加载只能拿到 `electron` 模块与少数几个 Node 垫片，
@@ -52,6 +66,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import type { UpdateStatus } from './update.js'
+import type { CredentialState, CredentialStatusResult } from './credential-vault.js'
 
 /**
  * 运行期的应用版本号（T7-05）。
@@ -174,6 +189,71 @@ export type LaunchPathDetectResult = {
  */
 export type UpdateInstallResult = { ok: true } | { ok: false; reason: 'not_ready'; detail: string }
 
+/**
+ * 一条程序图标（§2.9）。
+ *
+ * `dataUrl` 是 `data:image/png;base64,…`；取不到时是 null，界面回落内置的通用图标。
+ * `path` 原样回传请求里那一条的写法 —— 同一条 exe 可能被两条配置指向，界面按路径
+ * 把结果配回去，不必依赖数组下标（那样一旦有路径被丢弃就会整体错位）。
+ */
+export type LaunchIconEntry = {
+  path: string
+  dataUrl: string | null
+}
+
+/** 批量取图标的结果。 */
+export type LaunchIconResult = {
+  icons: LaunchIconEntry[]
+}
+
+/**
+ * 一条配置的凭据状态（P1）。
+ *
+ * 详细说明见 `credential-vault.ts` 的 `CredentialStatusResult` —— 这里只补一句与界面
+ * 直接相关的：**`none` 与 `undecryptable` 都要把密码框显示成空的**，但提示文案是两个
+ * 方向（「还没填」对「换机/换用户后本机解不开了，请重新填」）。混成一个是多账号场景下
+ * 最难自查的一类问题：用户在换机后反复重填、反复失败，而界面看不出问题不在他身上。
+ */
+export type CredentialStatusItem = CredentialStatusResult
+
+/** 三态单独再导出一份，便于在主进程侧写 `state === 'saved'` 的分支时不必 import 两个名字。 */
+export type { CredentialState }
+
+/** 查凭据状态的返回。空数组入参时也是空数组，不会报错。 */
+export type CredentialStatusReply = {
+  items: readonly CredentialStatusItem[]
+  /**
+   * 本机系统加密是否可用（Windows 下是 DPAPI 是否就绪）。
+   *
+   * 界面据此决定**要不要把账号密码输入区显示出来**：不可用时保存必然失败（主进程会拒
+   * 绝且不落明文），先摆出来比让用户填完再报错好。它不是机密，只是本机能力的一个事实。
+   */
+  encryptionAvailable: boolean
+}
+
+/**
+ * 保存请求。
+ *
+ * `label` 只是明文外壳里的提示（取配置显示名），非机密：凭据库文件被拷到别的机器上
+ * 解不开时，用户仍能看出「原本存的是哪一条」。**密码只走这条路，没有第二条读的口子。**
+ */
+export type CredentialSaveInput = {
+  profileId: string
+  account: string
+  password: string
+  label?: string | undefined
+}
+
+/**
+ * 写操作的结果。
+ *
+ * `reason` 是机器可读码，界面据此分流：`encryption_unavailable`（本机系统加密不可用，
+ * 重启应用再试）、`vault_corrupt`（文件损坏，按提示里的路径备份后删除）、
+ * `invalid_input`（账号或密码为空 / 超长）、`write_failed`（磁盘或权限）。
+ * **没有「网络错误」这一类** —— 这条通道根本不碰网络。
+ */
+export type CredentialWriteReply = { ok: true } | { ok: false; reason: string; detail: string }
+
 const desktopBridge = Object.freeze({
   /** 供界面判定「当前跑在外壳里」。浏览器里这个对象不存在。 */
   isDesktopShell: true as const,
@@ -233,11 +313,52 @@ const desktopBridge = Object.freeze({
    * + 候选清单。浏览器里没有本机文件系统，这条通道只有外壳场景有意义，界面对应的
    * 「一键检测」按钮只在桌面态渲染。
    */
-  detectLaunchPath: (
-    software: string,
-    extraPath?: string,
-  ): Promise<LaunchPathDetectResult> =>
+  detectLaunchPath: (software: string, extraPath?: string): Promise<LaunchPathDetectResult> =>
     ipcRenderer.invoke('launch:detect', { software, extraPath }) as Promise<LaunchPathDetectResult>,
+  /**
+   * 批量取可执行文件的真实图标（§2.9）。
+   *
+   * 入参是**路径数组**，不是配置数组 —— 取图标只需要路径。传绝对路径；相对路径、空串、
+   * 非字符串会在主进程被丢弃（见 `launch-icon.ts` 的 `normalizeIconPaths`）。
+   *
+   * 传 `.lnk` 拿不到目标的图标：实测 9 个不同的快捷方式返回的 PNG 逐字节相同，都是系统
+   * 那张「快捷方式」通用图标。要的是快捷方式**指向的那个 exe** 的路径。
+   */
+  getLaunchIcons: (paths: string[]): Promise<LaunchIconResult> =>
+    ipcRenderer.invoke('launch:icon', { paths }) as Promise<LaunchIconResult>,
+  /**
+   * 查一组配置的凭据状态（P1）。
+   *
+   * 入参是**配置 id 数组**，与 `getLaunchIcons` 同一条承载：主进程不连数据库，不知道
+   * 配置叫什么，只认 id。每个被问到的 id 都会拿到一条结果（包括「还没填」的那种）——
+   * 这是为了区分 `none` 与 `undecryptable` 所必需的，缺一条就没法判断。
+   *
+   * 返回里的账号是掩码形式。**没有读取明文的姊妹方法**，见 `saveCredential` 的注释。
+   */
+  getCredentialStatus: (profileIds: string[]): Promise<CredentialStatusReply> =>
+    ipcRenderer.invoke('credential:status', { profileIds }) as Promise<CredentialStatusReply>,
+  /**
+   * 保存一条凭据（账号 + 密码，P1）。
+   *
+   * 同 `profileId` 重复保存是覆盖，不是追加 —— 一条配置只对应一个账号密码。加密不可用
+   * 时拒绝写入且**不落明文**，此时 `reason` 是 `encryption_unavailable`。
+   *
+   * 🔴 **没有配对的读取方法，这是刻意的。** 密码从这条路进主进程，被 `safeStorage`
+   * 加密后落盘，此后只在 P2 自动填表那一刻在主进程内被解密。把它送回渲染进程需要多开
+   * 一个口子，而那个口子会让「密码不出主进程」这条约束变成一句空话 —— 一次同源 XSS
+   * 就够把它读走。界面上的密码框恒为空，「改没改」由调用方的意图决定（不调 = 不改，
+   * 调 = 覆盖），不需要先读再比。
+   */
+  saveCredential: (input: CredentialSaveInput): Promise<CredentialWriteReply> =>
+    ipcRenderer.invoke('credential:save', { credential: input }) as Promise<CredentialWriteReply>,
+  /**
+   * 删掉一条凭据（P1）。软删除是幂等的：本来就没有也返回 `ok`。
+   *
+   * 用在两处：用户在对话框里点「清除密码」，以及删除启动配置时顺手清掉它的凭据
+   * （否则 `userData` 里会留下一份再也配不上任何配置的孤儿密文）。
+   */
+  deleteCredential: (profileId: string): Promise<CredentialWriteReply> =>
+    ipcRenderer.invoke('credential:delete', { profileId }) as Promise<CredentialWriteReply>,
   /** 更新通道的当前状态。界面挂载时问一次，之后按需要重问。 */
   getUpdateStatus: (): Promise<UpdateStatus> =>
     ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,

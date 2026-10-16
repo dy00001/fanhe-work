@@ -35,6 +35,7 @@
  * 的 `GET /api/launch/profiles` 取到再送进来 —— 在远程模式下这条路依然通（配置从
  * 远程 API 取，本机进程由本机外壳起），而外壳不必知道配置存在哪。
  */
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
@@ -239,7 +240,8 @@ export async function runShellLaunchProfiles(
   )
   const results: LaunchRunManyItemResult[] = settled.map((settled, index) => {
     const raw = raws[index]
-    const profileId = typeof (raw as { id?: unknown })?.id === 'string' ? (raw as { id: string }).id : ''
+    const profileId =
+      typeof (raw as { id?: unknown })?.id === 'string' ? (raw as { id: string }).id : ''
     if (settled.status === 'rejected') {
       // `runShellLaunchProfile` 自身不该抛，但防御性地兜底成「进程创建失败」。
       return { profileId, ok: false, reason: 'spawn_failed', detail: String(settled.reason) }
@@ -265,14 +267,22 @@ export async function runShellLaunchProfiles(
  * 自动变成反斜杠、不影响可读。每条软件对应一组「根目录无关」的相对片段，根目录由
  * `%ProgramFiles%` / `%ProgramFiles(x86)%` / `%LOCALAPPDATA%` 提供。
  *
- * - wechat：`Tencent\WeChat\WeChat.exe`（微信默认装进 Program Files）。
- * - qq：`Tencent\QQ\Bin\QQ.exe` 为主，`Tencent\QQ\QQ.exe` 兜底不同版本布局。
+ * - wechat：微信 3.x 为 `Tencent\WeChat\WeChat.exe`；微信 4.x 改名 Weixin，目录随之变成
+ *   `Tencent\Weixin\Weixin.exe`。两条都扫。
+ * - qq：老版为 `Tencent\QQ\Bin\QQ.exe`（`Tencent\QQ\QQ.exe` 兜底）；**新版 NT 架构**
+ *   装在 `Tencent\QQNT\Bin\QQ.exe`（`Tencent\QQNT\QQ.exe` 兜底）—— 目录名从 QQ 变成
+ *   QQNT，只认老布局会对现装 QQ 完全失灵。
  * - qianniu：旧名 `AliWangWang\AliWangWang.exe` 与现代 `aliim\aliim.exe` 两条都扫。
  * - custom：没有「已知位置」，它的路径完全由用户填，检测只能靠传入的 `extraPath`。
  */
 const KNOWN_EXECUTABLE_RELATIVE_PATHS: Record<string, readonly string[]> = {
-  wechat: ['Tencent/WeChat/WeChat.exe'],
-  qq: ['Tencent/QQ/Bin/QQ.exe', 'Tencent/QQ/QQ.exe'],
+  wechat: ['Tencent/WeChat/WeChat.exe', 'Tencent/Weixin/Weixin.exe'],
+  qq: [
+    'Tencent/QQ/Bin/QQ.exe',
+    'Tencent/QQ/QQ.exe',
+    'Tencent/QQNT/Bin/QQ.exe',
+    'Tencent/QQNT/QQ.exe',
+  ],
   qianniu: ['AliWangWang/AliWangWang.exe', 'aliim/aliim.exe'],
   // 与未知 software 同处理：返回空数组，无已知候选。
   custom: [],
@@ -286,12 +296,50 @@ const KNOWN_EXECUTABLE_RELATIVE_PATHS: Record<string, readonly string[]> = {
  */
 const DETECT_ROOT_ENV_VARS = ['ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'] as const
 
+/** 每个盘上「程序安装目录」的两个惯用名。 */
+const PROGRAM_FILES_DIR_NAMES = ['Program Files', 'Program Files (x86)'] as const
+
+/** A–Z。用于枚举存在的盘符，见 `windowsProgramFilesRoots`。 */
+const DRIVE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+
+/**
+ * 枚举「所有盘」上的 Program Files 目录（2.5 增强）。
+ *
+ * **这是「明明装了却检测不到」最常见的一种根因。** `%ProgramFiles%` 与
+ * `%ProgramFiles(x86)%` 只指向系统盘（C:），而把软件装到 `D:\Program Files` 在国内
+ * 用户里极为常见。只扫环境变量那三个根，装在非系统盘的软件永远找不到。做法是枚举存在的
+ * 盘符，对每个盘拼上两个惯用目录名。
+ *
+ * 盘符探测与「目录是否存在」都可注入，便于单测在不起真实文件系统的前提下断言枚举结果。
+ * 非 Windows 上这些 `X:\` 一律不存在，函数自然返回空数组。
+ */
+export function windowsProgramFilesRoots(
+  options: { drives?: readonly string[]; exists?: (path: string) => boolean } = {},
+): string[] {
+  const exists = options.exists ?? existsSync
+  const drives = options.drives ?? DRIVE_LETTERS
+  const roots: string[] = []
+  for (const letter of drives) {
+    const driveRoot = `${letter}:\\`
+    if (!exists(driveRoot)) continue
+    for (const name of PROGRAM_FILES_DIR_NAMES) {
+      const dir = join(driveRoot, name)
+      if (exists(dir)) roots.push(dir)
+    }
+  }
+  return roots
+}
+
 /**
  * 枚举某软件的已知可执行候选路径（纯函数，不做文件检查）。
  *
- * **入参与 `process.env` 解耦**：默认读 `process.env`，但显式传 `env` 让单测能在不碰
- * 真实系统的前提下断言枚举结果。返回的是绝对路径数组（根目录有效时）；根目录缺失时
- * 该根下不贡献任何候选，而不是塞一个「`undefined/...`」之类的坏路径。
+ * 根目录来自两处：环境变量那三个（`%ProgramFiles%` / `%ProgramFiles(x86)%` /
+ * `%LOCALAPPDATA%`），以及 `extraRoots`（调用方传入的「所有盘的 Program Files」，见
+ * `windowsProgramFilesRoots`）。两处合并后去重。`extraRoots` 做成入参而不是在这里自己
+ * 枚举盘符，是为了让这个函数保持纯、可单测：盘符枚举涉及真实文件系统，归到单独一处。
+ *
+ * 入参与 `process.env` 解耦：默认读 `process.env`，显式传 `env` 让单测能在不碰真实系统
+ * 的前提下断言枚举结果。根目录缺失时不贡献任何候选，而不是塞一个 `undefined/...` 坏路径。
  *
  * `custom` 与未知 software 一律返回空数组：它们没有「已知位置」，检测只能靠用户提供的
  * `extraPath`。这一条是「检测只回答配置问题、且只覆盖默认安装」在设计上的落点。
@@ -299,16 +347,30 @@ const DETECT_ROOT_ENV_VARS = ['ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA
 export function knownExecutableCandidates(
   software: string,
   env: Record<string, string | undefined> = process.env,
+  options: { extraRoots?: readonly string[] } = {},
 ): string[] {
   const relatives = KNOWN_EXECUTABLE_RELATIVE_PATHS[software]
   if (relatives === undefined || relatives.length === 0) return []
-  const roots = DETECT_ROOT_ENV_VARS.map((name) => env[name]).filter(
+
+  const envRoots = DETECT_ROOT_ENV_VARS.map((name) => env[name]).filter(
     (root): root is string => typeof root === 'string' && root !== '',
   )
+  const seenRoots = new Set<string>()
+  const roots: string[] = []
+  for (const root of [...envRoots, ...(options.extraRoots ?? [])]) {
+    if (seenRoots.has(root)) continue
+    seenRoots.add(root)
+    roots.push(root)
+  }
+
   const paths: string[] = []
+  const seenPaths = new Set<string>()
   for (const root of roots) {
     for (const relative of relatives) {
-      paths.push(join(root, relative))
+      const candidate = join(root, relative)
+      if (seenPaths.has(candidate)) continue
+      seenPaths.add(candidate)
+      paths.push(candidate)
     }
   }
   return paths
@@ -339,13 +401,22 @@ export type LaunchPathDetection = {
  * `extraPath` 是「用户已经填过、想顺带校验一下」的路径：它排在候选最前面，命中即成为
  * `preferred` —— 这样「保留用户上次填的、再帮我看看还有没有别的」这一体验成立。它必须
  * 是绝对路径，否则不进候选（相对路径在任何机器都启不动，不该被当成命中）。
+ *
+ * `extraCandidates` 是**外部来源**（外壳侧从注册表 Uninstall 键读出的自定义安装位置，见
+ * `launch-registry.ts`）给出的完整候选路径。它排在 `extraPath` 之后、目录扫描的已知候选
+ * 之前：注册表读到的是「本机确实登记过的安装」，比「按惯用目录猜」可信，但仍要让用户已填
+ * 的 `extraPath` 优先。这个函数保持纯、零依赖 —— 读注册表那点平台耦合留在外壳侧，不进来。
  */
 export async function detectLaunchPaths(
   software: string,
   options: {
     extraPath?: string
+    /** 外部来源（如注册表）给出的完整候选路径，排在 `extraPath` 之后、已知候选之前。 */
+    extraCandidates?: readonly string[]
     inspect: (executablePath: string) => Promise<LaunchPathState>
     env?: Record<string, string | undefined>
+    /** 环境变量之外的额外根目录（「所有盘的 Program Files」，见 `windowsProgramFilesRoots`）。 */
+    extraRoots?: readonly string[]
   },
 ): Promise<LaunchPathDetection> {
   const extraPath = options.extraPath
@@ -354,7 +425,16 @@ export async function detectLaunchPaths(
     // 用户已填的路径优先校验：它一旦存在就是首选，否则才退到已知候选。
     ordered.push(extraPath)
   }
-  for (const candidate of knownExecutableCandidates(software, options.env)) {
+  for (const candidate of options.extraCandidates ?? []) {
+    // 同样只收绝对路径：注册表里理论上都是绝对的，但坏了的值不该进候选。
+    if (candidate !== '' && isAbsoluteExecutablePath(candidate)) ordered.push(candidate)
+  }
+  const knownCandidates = knownExecutableCandidates(
+    software,
+    options.env,
+    options.extraRoots === undefined ? {} : { extraRoots: options.extraRoots },
+  )
+  for (const candidate of knownCandidates) {
     ordered.push(candidate)
   }
 

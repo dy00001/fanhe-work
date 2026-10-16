@@ -15,6 +15,12 @@
  * 走操作系统凭据接口（Windows DPAPI 或 Electron safeStorage），属阶段四之后的事，
  * 本期不做。因此这里没有任何密码字段，`args` 里若被用户填进密码，那是用户的自主
  * 选择，与「工作台代管密码」是两回事 —— 后者才是需要安全边界的东西。
+ *
+ * **账号密码的本地存储（P1）没有改变上面这条边界**，只是把它说完整：密码不进本模块、
+ * 不进数据库、不进任何接口，它由桌面外壳写在 `userData/credentials.enc` 里，用
+ * `safeStorage` 按当前 Windows 用户加密。本模块为此新增的只有两份**不含密码的事实**
+ * —— 哪些软件的登录窗能代填（`LAUNCH_ACCOUNT_SOFTWARES`）、账号密码的长度上限
+ * （`LAUNCH_CREDENTIAL_LIMITS`）。
  */
 
 /**
@@ -35,6 +41,48 @@ export type LaunchSoftware = (typeof LAUNCH_SOFTWARES)[number]
 export function isLaunchSoftware(value: string): value is LaunchSoftware {
   return (LAUNCH_SOFTWARES as readonly string[]).includes(value)
 }
+
+/**
+ * 账号密码登录的软件清单（P1）。
+ *
+ * **它与桌面外壳的 `shouldClickLogin`、配置页的账号密码字段是同一件事**：哪些软件的
+ * 登录窗能代填账号密码。放共享包是因为两侧都必须知道 —— 各写一份的结果是「外壳替微信
+ * 敲了 Enter，而界面上根本不显示账号密码框」，那种不一致在真机上的表现是「多账号第二个
+ * 没登录」，而两侧各自review都看不出问题。
+ *
+ * **微信不在此列。** 它是扫码登录，没有可代填的账号密码框；多开时该做的是把 N 个登录窗
+ * 排开让用户逐个扫，而不是敲任何键。
+ *
+ * `custom` 也不在：自定义程序的登录方式千差万别，替它按键的命中率无从谈起。让用户自己
+ * 在启动参数里配（例如带上客户端自己的自动登录开关）比代填更可靠。
+ */
+export const LAUNCH_ACCOUNT_SOFTWARES = ['qq', 'qianniu'] as const
+
+/**
+ * 这个软件的登录窗能不能代填账号密码。
+ *
+ * 收窄成 `LaunchSoftware` 而不是返回 `boolean`：调用方拿到 true 之后常常还要按软件分叉
+ * （例如决定提示文案），收窄让那一步不必再写一次判别式。
+ */
+export function supportsAccountLogin(
+  software: string,
+): software is (typeof LAUNCH_ACCOUNT_SOFTWARES)[number] {
+  return (LAUNCH_ACCOUNT_SOFTWARES as readonly string[]).includes(software)
+}
+
+/**
+ * 账号密码的长度上限（P1）。桌面凭据库的形态归一与界面预检共用这一份。
+ *
+ * 界面预检的价值只在「提交前就告诉用户太长了」；真正的门是桌面主进程的
+ * `normalizeCredentialInput` —— 那条通道对渲染进程里的任何脚本开放，不能只信界面。
+ * 两侧不一致时表现为「表单说可以，保存失败」，与 `LAUNCH_PROFILE_LIMITS` 同一条理由。
+ */
+export const LAUNCH_CREDENTIAL_LIMITS = {
+  /** QQ 号 11 位、旺旺名通常更短，64 已远远够。 */
+  ACCOUNT_MAX: 64,
+  /** 覆盖绝大多数密码管理器的上限，再长对本功能没有意义。 */
+  PASSWORD_MAX: 128,
+} as const
 
 /**
  * 字段长度上限。路由 schema 与 service 校验共用一份。

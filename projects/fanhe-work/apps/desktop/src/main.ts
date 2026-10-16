@@ -31,8 +31,22 @@
  * - `launch:diagnostics` —— 启动自检：查每条配置指向的文件还在不在，并把每类失效
  *   配一句能照着做的引导。
  *
+ * 另有一条不依赖 agent 的：
+ *
+ * - `launch:icon` —— 按路径批量取可执行文件的真实图标（§2.9）。走 Electron 内置的
+ *   `app.getFileIcon`，与系统「图标来源」同一套实现，因此与桌面快捷方式显示的一致。
+ *   逻辑在 `launch-icon.ts`，这里只做接线。
+ *
  * **两条通道都不查库**：配置由渲染进程经现有 `GET /api/launch/profiles` 取来再送进来，
  * 因此远程模式下同样通 —— 而外壳不必知道配置存在哪。
+ *
+ * ## 唤起之后的后置动作
+ *
+ * spawn 成功只代表进程建起来了，客户端窗口还没出现。后置动作分两类，编排在
+ * `runPostLaunchBatch`：**扫码登录类（微信）**等各自的登录窗出现后按网格排开，一个键
+ * 都不敲；**账号密码类（QQ / 千牛）**串行地点一下登录。窗口操作的等待与按键原语在
+ * `launch-windows.ts`，软件开关在 `launch-login-click.ts`。两者都 best-effort：
+ * 失败只进日志，绝不改启动结果。
  *
  * ## 冒烟模式
  *
@@ -49,12 +63,27 @@
  *
  * 配合单实例锁（第二个实例会抢不到同一个端口、顺延到一个新分区）。这两件事合起来
  * 才是「更新之后设置与本地数据都还在」的完整实现 —— 改动前先读那两个位置。
+ *
+ * ## 本机凭据库（P1）
+ *
+ * 三条 IPC（`credential:status` / `credential:save` / `credential:delete`）管一件事：
+ * QQ 与千牛多账号时「这条配置该填哪个账号密码」。密码用 `safeStorage`（Windows 下是
+ * DPAPI）加密后落 `userData/credentials.enc`，**只在主进程内解密、绝不过 IPC 回传**，
+ * 因此这里**刻意没有第四条 `credential:get`**。逻辑在 `credential-vault.ts`，本节只做
+ * 接线；详细取舍见 `docs/LAUNCH-LOGIN-DESIGN-2026-10-15.md` §4。
  */
-import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, safeStorage, Tray, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { brandIconPath, TRAY_ICON_WIDTH } from './brand-icon.js'
+import {
+  createCredentialVault,
+  normalizeCredentialInput,
+  normalizeProfileId,
+  normalizeProfileIds,
+} from './credential-vault.js'
 import {
   describeSource,
   findWorkspaceRoot,
@@ -69,9 +98,17 @@ import {
   normalizeProfile,
   runShellLaunchProfile,
   runShellLaunchProfiles,
+  windowsProgramFilesRoots,
   type LaunchAgentModule,
 } from './agent.js'
-import { clickLoginAfterLaunch } from './launch-login-click.js'
+import {
+  clickLoginAfterLaunch,
+  findProcessWindow,
+  shouldClickLogin,
+  tileWindows,
+} from './launch-login-click.js'
+import { createLaunchIconReader, normalizeIconPaths } from './launch-icon.js'
+import { readRegistryInstallHints } from './launch-registry.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
 import { apiLaunchModule, bundledAgentPath, webDistRoot } from './paths.js'
 import { startStaticServer, type StaticServerHandle } from './server.js'
@@ -240,6 +277,15 @@ function buildWindow(visible: boolean): BrowserWindow {
     minHeight: 640,
     show: visible,
     autoHideMenuBar: true,
+    // 窗口图标：**标题栏左上角与任务栏都取它**。
+    //
+    // 不显式设的话，开发态窗口图标是 `electron.exe` 自带的 Electron 默认图标（一个
+    // 深色圆），而打包态才从 exe 的图标资源里取 —— 于是同一个界面在两种形态下顶着
+    // 两个不同的图标，开发时看不出问题，装完才发现。显式指定让两种形态一致。
+    //
+    // 用 `app-icon.png`（方形）而不是 `logo.png`（362×391）：槽位是方的，非方形图
+    // 会被留白。取舍与来源见 `brand-icon.ts` 文件头。
+    icon: brandIconPath(DIST_ROOT),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -346,13 +392,13 @@ function showMainWindow(): void {
  *
  * ## 图标来源
  *
- * 直接复用前端产物里的品牌 logo：`DIST_ROOT/brand/logo.png`（打包态是
- * `resources/web/brand/logo.png`，开发态是 `apps/web/dist/brand/logo.png`）。
- * 它与任务栏图标是同一枚（见 `electron-builder.yml` 的 `win.icon`），托盘不需要
- * 独立资源文件，少一处要维护的二进制。
+ * 与窗口图标、任务栏图标**同一枚**：`DIST_ROOT/brand/app-icon.png`（打包态是
+ * `resources/web/brand/app-icon.png`，开发态是 `apps/web/dist/brand/app-icon.png`）。
+ * 路径与尺寸由 `brand-icon.ts` 定义一次，托盘不需要独立资源文件，少一处要维护的二进制。
  *
- * 🔴 已知限制：logo 非方形、无透明通道，托盘里会带底色 —— 与任务栏图标同一处限制，
- * 换一枚方形带 alpha 的 .ico 即可（改动只在 `electron-builder.yml` 一行，不影响这里）。
+ * 用 `app-icon.png` 而不是页面里那个 `logo.png`：托盘给的是 16px 方形槽位，而
+ * `logo.png` 是 362×391、无 alpha，缩到 16px 会得到一个 16×17 的图并被系统按方形
+ * 重排，托盘里看起来是带底色的糊块。方图缩出来是干净的。
  *
  * ## 为什么不在冒烟/探针模式建托盘
  *
@@ -360,10 +406,10 @@ function showMainWindow(): void {
  * 验收脚本本来也不关心托盘，跳过它对功能无影响。
  */
 function createTray(): void {
-  const iconPath = join(DIST_ROOT, 'brand', 'logo.png')
+  const iconPath = brandIconPath(DIST_ROOT)
   let image = nativeImage.createFromPath(iconPath)
   if (image.isEmpty()) image = nativeImage.createEmpty()
-  else image = image.resize({ width: 16 })
+  else image = image.resize({ width: TRAY_ICON_WIDTH, height: TRAY_ICON_WIDTH })
   tray = new Tray(image)
   tray.setToolTip('梵禾 Work')
   // 左键点击托盘图标：直接恢复窗口（最常见的操作，不该藏进右键菜单）。
@@ -450,6 +496,109 @@ async function loadLaunchAgent(): Promise<
 }
 
 /**
+ * §2.4 best-effort 点登录：fire-and-forget，只把结果写进日志供排障。
+ *
+ * **刻意 await 它再打日志、但绝不 await 它再返回启动结果** —— 登录点击是后置的锦上
+ * 添花，启动通道已在 `runShellLaunchProfile` 返回时给出结论；这里多等一步只为让现场
+ * 能看清「发了没有、等了多久、结果如何」，否则 best-effort 失败时与成功时在界面上
+ * 毫无差别，真机验证也无从判断 Enter 是否落到登录窗。
+ */
+async function runSingleLoginClick(item: PostLaunchItem): Promise<void> {
+  const attempt = await clickLoginAfterLaunch(item.software, item.pid)
+  console.log(
+    `[launch] 登录点击 ${item.software} pid=${item.pid}` +
+      ` 尝试=${attempt.attempted ? '是' : '否'} 结果=${attempt.reason}` +
+      `${attempt.waitedMs === undefined ? '' : ` 等待=${attempt.waitedMs}ms`}` +
+      `${attempt.detail === undefined ? '' : `（${attempt.detail}）`}`,
+  )
+}
+
+/**
+ * 一条待做后置动作的启动结果。
+ *
+ * 只需要三样东西：对回哪个配置（日志与排障）、是什么软件（决定做什么动作）、它的
+ * 进程 id（找窗口的唯一依据）。路径与参数一概不带：后置动作只与「刚起来的那个进程」
+ * 打交道，与用户当初配了什么无关。
+ */
+type PostLaunchItem = { profileId: string; software: string; pid: number }
+
+/**
+ * 扫码登录类的软件。唤起后要做的不是按键，而是「把 N 个登录窗排开」。
+ *
+ * **自定义程序不在此列。** 它的窗口千差万别，可能是一个对话框、一个全屏工具、
+ * 一个会记住自己位置的小窗口，替它改尺寸与位置是无理由的干扰。只有微信这种
+ * 「多开的每一个窗口都要用户亲手扫一次码」的场景，排布才直接决定功能能不能用。
+ */
+const TILE_AFTER_LAUNCH_SOFTWARES: ReadonlySet<string> = new Set(['wechat'])
+
+/**
+ * 批量启动之后的后置编排（P0）。
+ *
+ * ## 两类软件走两条路
+ *
+ * - **扫码登录（微信）**：等每一个实例的登录窗立住，把拿到的句柄按网格平铺。
+ *   等待是并发的（各等各的进程），平铺是一次完成的。**一个键都不敲** —— 扫码登录
+ *   没有可点的默认按钮，敲 Enter 只会干扰用户扫码头。
+ * - **账号密码登录（QQ / 千牛）**：串行执行「点一下登录」。串行的理由不是性能，
+ *   而是**等前一个的登录窗立住并处理完，再动下一个**：并行的两条 Enter 会互相把
+ *   对方窗口带到前台，后敲的那个落在已经处理过的窗口上，表现为「第二个账号没登录」。
+ *   自动填表落地后这里还要再进一步（凭据与窗口的配对只能靠时序保证），届时串行的
+ *   单位会前移到 spawn 上。
+ *
+ * ## 全程 best-effort
+ *
+ * 编排内部任何一步失败都只进日志。返回给界面的启动结果在 `runShellLaunchProfiles`
+ * 那一刻就已经定了，`launch:runMany` 不会等这个函数返回。
+ */
+async function runPostLaunchBatch(items: readonly PostLaunchItem[]): Promise<void> {
+  if (items.length === 0) return
+
+  // 按软件分组：平铺只在同软件的多个实例之间做，不同软件的窗口排到一起没有意义。
+  const tileGroups = new Map<string, PostLaunchItem[]>()
+  for (const item of items) {
+    if (!TILE_AFTER_LAUNCH_SOFTWARES.has(item.software)) continue
+    const group = tileGroups.get(item.software)
+    if (group === undefined) tileGroups.set(item.software, [item])
+    else group.push(item)
+  }
+
+  for (const [software, group] of tileGroups) {
+    // 单个实例没有排布可言：它本就该在客户端的默认位置。
+    if (group.length < 2) continue
+    // 并发等：各等各的进程，总时长取最慢的那一个，不按数量累加。
+    const found = await Promise.all(
+      group.map(async (item) => {
+        const outcome = await findProcessWindow(item.pid)
+        return { item, hwnd: outcome.hwnd, waitedMs: outcome.waitedMs, reason: outcome.reason }
+      }),
+    )
+    const handles: number[] = []
+    for (const entry of found) {
+      if (entry.hwnd === null) {
+        console.log(
+          `[launch] 登录窗未出现 ${software} pid=${entry.item.pid} 原因=${entry.reason}` +
+            `${entry.waitedMs === undefined ? '' : ` 等待=${entry.waitedMs}ms`}`,
+        )
+        continue
+      }
+      handles.push(entry.hwnd)
+    }
+    const tiled = await tileWindows(handles)
+    console.log(
+      `[launch] 登录窗排布 ${software} 实例数=${group.length}` +
+        ` 找到窗口=${handles.length} 已排开=${tiled.moved}` +
+        `${tiled.reason === undefined ? '' : ` 未排开原因=${tiled.reason}`}`,
+    )
+  }
+
+  // 账号密码登录：串行。顺序与用户配的顺序一致，日志也按这个顺序读。
+  for (const item of items) {
+    if (!shouldClickLogin(item.software)) continue
+    await runSingleLoginClick(item)
+  }
+}
+
+/**
  * 注册本机代理的 IPC（T4-03）。
  *
  * **和 `apps/api` 那条 HTTP 路由相比，这里少了权限中间件与用户身份。** 那不是漏掉，
@@ -464,6 +613,24 @@ async function loadLaunchAgent(): Promise<
  * 那一步，这条 IPC 就等于一个本机任意命令执行入口。
  */
 function registerLaunchIpc(): void {
+  /**
+   * 程序图标读取器（§2.9）。**建在模块级而不是每次调用现造** —— 缓存要跨调用活着，
+   * 否则界面每次重渲染都会把 N 个 exe 的图标重新读一遍。
+   *
+   * `size: 'large'` 实测出 48×48（`normal` 32 / `small` 16）。界面按 24 CSS px 渲染，
+   * 2 倍屏上要 48 设备像素，用 `normal` 在大屏上会被放大发虚。
+   *
+   * **不拿 `isEmpty()` 当「没取到」的判据**：实测路径不存在时它返回的仍是「非空」的
+   * 系统通用文件图标。这里只挡真正的空图，其余原样交给界面 —— 路径失效这件事由卡片
+   * 右上角那个红点表达，不该由同一个信号承担（见 `launch-icon.ts` 的形态说明）。
+   */
+  const launchIconReader = createLaunchIconReader({
+    fetchIcon: async (path) => {
+      const image = await app.getFileIcon(path, { size: 'large' })
+      return image.isEmpty() ? null : image.toDataURL()
+    },
+  })
+
   ipcMain.handle('launch:run', async (_event, payload: unknown) => {
     const loaded = await loadLaunchAgent()
     if (!loaded.ok) {
@@ -472,8 +639,7 @@ function registerLaunchIpc(): void {
 
     const raw = (payload as { profile?: unknown } | null)?.profile
     const rawProfile = raw as { software?: unknown } | null
-    const software =
-      typeof rawProfile?.software === 'string' ? (rawProfile.software as string) : ''
+    const software = typeof rawProfile?.software === 'string' ? (rawProfile.software as string) : ''
     const outcome = await runShellLaunchProfile(raw, loaded.module)
     if (!outcome.ok) {
       console.warn(`[launch] 启动未成功（${outcome.reason}）：${outcome.detail}`)
@@ -481,8 +647,7 @@ function registerLaunchIpc(): void {
     }
     console.log(`[launch] 已启动 pid=${outcome.data.pid} 去重=${outcome.data.deduplicated}`)
     // 唤起后 best-effort 点登录（2.4）：fire-and-forget，绝不阻断启动结果。
-    // 非 Windows 或未开该软件的会被模块内部直接拦下，不发任何窗口操作。
-    void clickLoginAfterLaunch(software, outcome.data.pid)
+    void runSingleLoginClick({ profileId: outcome.data.profileId, software, pid: outcome.data.pid })
     return outcome
   })
 
@@ -519,8 +684,10 @@ function registerLaunchIpc(): void {
 
     const manyResult = await runShellLaunchProfiles(raws, loaded.module)
 
-    // 唤起后 best-effort 点登录（2.4）：只为成功的条目、fire-and-forget。
-    // 按 `id` 反查 software（raws 与 manyResult.results 同序，但用 id 配更稳）。
+    // 唤起后的 best-effort 后置动作：扫码登录类排布登录窗、账号密码类点一下登录。
+    // fire-and-forget，只为成功的条目做；按 `id` 反查 software（raws 与
+    // manyResult.results 同序，但用 id 配更稳 —— 顺序一旦因排序变化而错位，
+    // 错误的表现是「按了 A 的按钮、进了 B 的窗口」，那种现场极难解释）。
     const softwareById = new Map<string, string>()
     for (const raw of raws) {
       const item = raw as { id?: unknown; software?: unknown }
@@ -528,11 +695,17 @@ function registerLaunchIpc(): void {
         softwareById.set(item.id, item.software)
       }
     }
+    const postLaunch: PostLaunchItem[] = []
     for (const result of manyResult.results) {
       if (result.ok && result.pid !== undefined) {
-        void clickLoginAfterLaunch(softwareById.get(result.profileId) ?? '', result.pid)
+        postLaunch.push({
+          profileId: result.profileId,
+          software: softwareById.get(result.profileId) ?? '',
+          pid: result.pid,
+        })
       }
     }
+    if (postLaunch.length > 0) void runPostLaunchBatch(postLaunch)
 
     return manyResult
   })
@@ -591,13 +764,23 @@ function registerLaunchIpc(): void {
    * 必须用同一份路径判断，否则会出现「检测说在、点启动说不在」）。
    */
   ipcMain.handle('launch:detect', async (_event, payload: unknown) => {
-    const { software, extraPath } = (payload as { software?: unknown; extraPath?: unknown } | null) ?? {}
+    const { software, extraPath } =
+      (payload as { software?: unknown; extraPath?: unknown } | null) ?? {}
     const softwareStr = typeof software === 'string' ? software : ''
     const extraPathStr = typeof extraPath === 'string' && extraPath !== '' ? extraPath : ''
 
-    // 没有可查的东西（非字符串 software 且无已知候选，且没给可校验的 extraPath）：
-    // 空结果、不加载代理、不报代理不可用，与 diagnostics 的「空配置先判」同一条取舍。
-    const hasKnown = knownExecutableCandidates(softwareStr).length > 0
+    // 「所有盘的 Program Files」—— 环境变量那三个根只覆盖系统盘，装到 D 盘会漏。
+    const extraRoots = windowsProgramFilesRoots()
+
+    // 注册表 Uninstall 键里的自定义安装位置（2.5 增强）。目录扫描原理上覆盖不了用户自选
+    // 的目录名（如 `D:\软件安装目录\`），注册表能。best-effort：读不到就空数组，不阻断检测。
+    const registryCandidates = await readRegistryInstallHints(softwareStr)
+
+    // 没有可查的东西（非字符串 software 且无已知候选、无注册表命中，且没给可校验的
+    // extraPath）：空结果、不加载代理、不报代理不可用，与 diagnostics 的「空配置先判」同取舍。
+    const hasKnown =
+      knownExecutableCandidates(softwareStr, process.env, { extraRoots }).length > 0 ||
+      registryCandidates.length > 0
     const hasExtra = extraPathStr !== '' && isAbsoluteExecutablePath(extraPathStr)
     if (!hasKnown && !hasExtra) {
       return { software: softwareStr, preferred: null, candidates: [], agentAvailable: true }
@@ -616,13 +799,154 @@ function registerLaunchIpc(): void {
 
     // `extraPath` 只在确实可校验时传入：`detectLaunchPaths` 的选项是
     // `exactOptionalPropertyTypes`，显式给 `undefined` 反而不合法（见 tsconfig）。
+    // `extraCandidates` 给数组（可空数组，不是 undefined），不触这条约束。
     const detection = await detectLaunchPaths(
       softwareStr,
       hasExtra
-        ? { extraPath: extraPathStr, inspect: loaded.module.inspectExecutablePath }
-        : { inspect: loaded.module.inspectExecutablePath },
+        ? {
+            extraPath: extraPathStr,
+            extraCandidates: registryCandidates,
+            inspect: loaded.module.inspectExecutablePath,
+            extraRoots,
+          }
+        : {
+            extraCandidates: registryCandidates,
+            inspect: loaded.module.inspectExecutablePath,
+            extraRoots,
+          },
     )
     return { software: softwareStr, ...detection, agentAvailable: true }
+  })
+
+  /**
+   * 取可执行文件的真实图标（§2.9）。
+   *
+   * 入参是**路径数组**而不是配置数组：取图标只需要路径，而主进程不连数据库、也不必
+   * 知道「这条配置叫什么」。批量而不是逐条，是为了让界面一次请求取回整盘图标 —— 托盘
+   * 里十几枚图标逐条往返会在打开首页时明显卡一下。
+   *
+   * **空入参直接返回、不做任何事**：与 `launch:diagnostics` 的「空配置先判」同一条取舍，
+   * 没有东西要取时不该有任何副作用。路径归一（绝对路径、去重、限长）在
+   * `normalizeIconPaths` 里做，它同时是这条通道的形态复核 —— 通道对渲染进程里的任何
+   * 脚本开放，不能只信调用方送来的值。
+   */
+  ipcMain.handle('launch:icon', async (_event, payload: unknown) => {
+    const paths = normalizeIconPaths((payload as { paths?: unknown } | null)?.paths)
+    if (paths.length === 0) return { icons: [] }
+    return { icons: await launchIconReader.read(paths) }
+  })
+}
+
+/**
+ * 凭据库文件名。放在 `userData` 里，与 `shell-origin.json`、服务地址配置同一处
+ * 逐用户目录 —— 换 Windows 用户时那份 DPAPI 密文本来就解不开（密钥按用户派生），
+ * 放在这里正好让「换用户 = 凭据也要重填」这件事在目录层面也是自然成立的。
+ */
+const CREDENTIAL_VAULT_FILE = 'credentials.enc'
+
+/**
+ * 注册第三方账号密码的本机凭据库（P1）。
+ *
+ * ## 它解决的是什么
+ *
+ * QQ 与千牛的「记住密码 + 自动登录」只能记一个账号；多账号时第二个起不来。于是启动
+ * 配置需要一个「这条配置该填哪个账号密码」的地方，而**密码只留在这台机器上**。
+ *
+ * ## 三条通道，刻意没有第四条
+ *
+ * - `credential:status` —— 查一组配置的凭据状态 + 掩码账号。
+ * - `credential:save` —— 存一条（覆盖同 `profileId` 的旧条目）。
+ * - `credential:delete` —— 删一条。
+ *
+ * **没有 `credential:get`。** 明文密码只在主进程内、且只在 P2 自动填表那一刻被读出来；
+ * 这条 IPC 一律不回传。渲染进程拿到的账号是掩码形式（`maskAccount`），编辑态密码框恒为
+ * 空，「用户改没改密码」这件事靠三个显式信号表达（不改 / 覆盖 / clear），不靠「回传一次
+ * 再比对」—— 后者等于把密码送出了主进程。
+ *
+ * ## 为什么形态复核在通道里再做一次
+ *
+ * `credential-vault.ts` 的归一函数被搬到这里用了：这条通道对渲染进程里的任何脚本开放，
+ * 与 `launch:run` 同一条理由（那边复核 `executablePath`，这边复核 id / 账号 / 密码的形态
+ * 与长度）。**归一函数本身是被单测覆盖的**，两处用的是同一份实现，不会分叉。
+ *
+ * ## 日志纪律
+ *
+ * 只记 `profileId` 与成败。**账号与密码一律不进日志** —— 排障日志会被截图、会被打包
+ * 发走，那是这套方案里最容易失守的一处。`label`（配置显示名）也不记：它对排障没有
+ * 额外价值，而多记一个字段就多一个抄漏的地方。
+ */
+function registerCredentialIpc(): void {
+  const vaultPath = join(app.getPath('userData'), CREDENTIAL_VAULT_FILE)
+  const vault = createCredentialVault(vaultPath, {
+    // 读不到一律按「没有库」处理（第一次用就是这个状态）。读失败（权限、被占用）与
+    // 文件不存在在这条路径上不可区分，也不需要区分：两者的下一步都是「保存时新建」。
+    readFile: async (path) => {
+      try {
+        return await readFile(path, 'utf8')
+      } catch {
+        return null
+      }
+    },
+    writeFile: async (path, content) => {
+      await writeFile(path, content, 'utf8')
+    },
+    rename: async (from, to) => {
+      await rename(from, to)
+    },
+    unlink: async (path) => {
+      await unlink(path)
+    },
+    // Windows 下是 DPAPI，密钥由 OS 按当前用户派生，主进程拿不到密钥本身。
+    // 这两条只在 `credential-vault.ts` 内部被调，抛不抛都由那边兜住转成状态。
+    encrypt: (plaintext) => safeStorage.encryptString(plaintext),
+    decrypt: (ciphertext) => safeStorage.decryptString(ciphertext),
+    isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  })
+
+  ipcMain.handle('credential:status', async (_event, payload: unknown) => {
+    const profileIds = normalizeProfileIds((payload as { profileIds?: unknown } | null)?.profileIds)
+    // 空查询直接返回、不读文件：与 `launch:diagnostics` 的「空配置先判」同一条取舍。
+    if (profileIds.length === 0) return { items: [] }
+    const items = await vault.status(profileIds)
+    // 注意：**凭据库损坏时这里全部报 `none`**（读不出来就没有条目）。那种状态会在
+    // 用户点保存时由 `vault_corrupt` 明确报出来并给出文件路径，因此不在这里单独
+    // 造一个状态 —— 界面要处理的状态越少，越不会把「损坏」误显示成「还没填」。
+    // `encryptionAvailable` 随车带回，界面据此决定「要不要把账号密码输入区显示出来」：
+    // 系统加密不可用时保存必然失败，先摆出来比让用户填完再报错好。
+    console.log(`[credential] 查状态 条数=${profileIds.length}`)
+    return { items, encryptionAvailable: safeStorage.isEncryptionAvailable() }
+  })
+
+  ipcMain.handle('credential:save', async (_event, payload: unknown) => {
+    const input = normalizeCredentialInput((payload as { credential?: unknown } | null)?.credential)
+    if (input === null) {
+      return {
+        ok: false as const,
+        reason: 'invalid_input',
+        detail: '账号与密码都不能为空，且长度要在上限之内。',
+      }
+    }
+    const result = await vault.save(input)
+    if (result.ok) {
+      console.log(`[credential] 已保存 profileId=${input.profileId}`)
+    } else {
+      console.warn(`[credential] 保存失败 profileId=${input.profileId} 原因=${result.reason}`)
+    }
+    return result
+  })
+
+  ipcMain.handle('credential:delete', async (_event, payload: unknown) => {
+    const profileId = normalizeProfileId((payload as { profileId?: unknown } | null)?.profileId)
+    if (profileId === null) {
+      return { ok: false as const, reason: 'invalid_profile_id', detail: '配置 id 不合法。' }
+    }
+    const result = await vault.remove(profileId)
+    if (result.ok) {
+      console.log(`[credential] 已删除 profileId=${profileId}`)
+    } else {
+      console.warn(`[credential] 删除失败 profileId=${profileId} 原因=${result.reason}`)
+    }
+    return result
   })
 }
 
@@ -992,6 +1316,9 @@ async function bootstrap(): Promise<void> {
   registerAppVersionIpc()
   registerServiceIpc()
   registerLaunchIpc()
+  // 凭据库要在界面挂载之前就位：配置对话框打开时会问一次「这条配置存的是哪个账号」，
+  // 与更新通道同一条理由（晚注册会让那一次拿到「通道不存在」）。
+  registerCredentialIpc()
   // 更新通道的 IPC 在窗口之前注册：界面挂载时就会问一次当前状态（见 T6-02 的
   // 「挂载时查一次」），晚注册会让那一次拿到「通道不存在」。
   registerUpdateIpc()
@@ -1061,8 +1388,10 @@ async function runSmoke(): Promise<void> {
   const rendered = probe.rendered > 0
   const upstreamReachable = await probeUpstream()
   const diagnostics = await probeDiagnostics(window)
+  const credentials = await probeCredentials(window)
 
-  const ok = rendered && consoleErrors.length === 0 && diagnostics.reachable
+  const ok =
+    rendered && consoleErrors.length === 0 && diagnostics.reachable && credentials.reachable
   console.log(
     `[smoke] 渲染元素=${probe.rendered} 标题=${probe.title} 路径=${probe.path} ` +
       `预加载桥=${probe.bridge ? '有' : '无'} console错误=${consoleErrors.length}`,
@@ -1078,6 +1407,11 @@ async function runSmoke(): Promise<void> {
     `[smoke] 启动自检=${diagnostics.reachable ? '可用' : '不可用'} ` +
       `代理=${diagnostics.agentAvailable ? '可用' : '不可用'} ` +
       `配置=${diagnostics.total}条 可用=${diagnostics.okCount}条`,
+  )
+  // 凭据通道同理：只看通不通、结构完整不完整，不看本机到底存了哪些账号。
+  console.log(
+    `[smoke] 凭据通道=${credentials.reachable ? '可用' : '不可用'}` +
+      `${credentials.reachable ? ` 加密=${credentials.encryptionAvailable ? '可用' : '不可用'}` : ''}`,
   )
   for (const message of consoleErrors) console.error(`[smoke] console.error: ${message}`)
   console.log(`[smoke] ${ok ? 'PASS' : 'FAIL'}`)
@@ -1133,6 +1467,61 @@ async function probeDiagnostics(window: BrowserWindow): Promise<{
   } catch (error) {
     console.error(
       `[smoke] 自检通道不可用：${error instanceof Error ? error.message : String(error)}`,
+    )
+    return empty
+  }
+}
+
+/**
+ * 从**渲染进程里**查一次凭据状态。
+ *
+ * 与 `probeDiagnostics` 同一条理由走 `executeJavaScript`：这条链路有四段（预加载桥、
+ * 通道名、`contextBridge` 结构克隆、主进程里的 `safeStorage` + 文件读取），主进程自己
+ * 调自己只能验到最后一段。
+ *
+ * **用一个本机不可能存在的配置 id**，于是拿到的一定是 `none`，断言就与这台机器上到底
+ * 存了哪些凭据无关 —— 冒烟的成败不允许随用户数据变化。它同时真的走了一遍
+ * `readVault`（读文件、解析、按 id 查表），因此「文件读不出来」这类问题会在这里现形。
+ *
+ * 顺带取回 `encryptionAvailable`：**DPAPI 不可用时冒烟仍然算 PASS** —— 那是本机环境的
+ * 事实而不是外壳的缺陷，把它算进成败会让同一份产物在无密钥环的机器上恒失败。只打出来
+ * 供排障。
+ */
+async function probeCredentials(window: BrowserWindow): Promise<{
+  reachable: boolean
+  encryptionAvailable: boolean
+}> {
+  const empty = { reachable: false, encryptionAvailable: false }
+  try {
+    const report = (await window.webContents.executeJavaScript(
+      `(async () => {
+         const bridge = window.fanheDesktop
+         if (typeof bridge?.getCredentialStatus !== 'function') return null
+         const result = await bridge.getCredentialStatus(['__smoke_probe__'])
+         const item = Array.isArray(result?.items) ? result.items[0] : undefined
+         return {
+           hasItems: Array.isArray(result?.items) && result.items.length === 1,
+           stateKnown:
+             item?.state === 'none' ||
+             item?.state === 'saved' ||
+             item?.state === 'undecryptable',
+           encryptionAvailable: result?.encryptionAvailable === true,
+         }
+       })()`,
+      true,
+    )) as null | {
+      hasItems: boolean
+      stateKnown: boolean
+      encryptionAvailable: boolean
+    }
+
+    if (report === null || !report.hasItems || !report.stateKnown) {
+      return empty
+    }
+    return { reachable: true, encryptionAvailable: report.encryptionAvailable }
+  } catch (error) {
+    console.error(
+      `[smoke] 凭据通道不可用：${error instanceof Error ? error.message : String(error)}`,
     )
     return empty
   }

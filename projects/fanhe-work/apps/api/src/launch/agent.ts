@@ -138,6 +138,62 @@ export function buildLaunchCommand(profile: LaunchProfile): LaunchCommand {
 }
 
 /**
+ * 启动外部客户端时，**从继承的环境里剔掉**的变量名（精确匹配）。
+ *
+ * ## 为什么必须剔（真机事故）
+ *
+ * 这几项不是「传给子进程的普通配置」，而是**会改变子进程运行方式、甚至注入代码**的开关：
+ * 它们由「启动方自己的运行时」设置，对启动方有意义，对被启动的客户端毫无意义、只会出事。
+ *
+ * 事故现场：本机跑在 WorkBuddy 宿主里，宿主给进程注入了
+ * `NODE_OPTIONS=--require=<宿主自己的 fs 劫持 shim>`。工作台照搬 `process.env` 去
+ * `spawn` 客户端，而 **QQNT 本身就是 Electron 应用** —— Electron 主进程会执行
+ * `NODE_OPTIONS` 里的 `--require`，于是 QQ 在自己进程里加载了宿主的 shim，启动即崩
+ * （QQ 自带的错误报告，模块 `QQNT.dll`）。实测对照：同一 Electron 二进制，不带
+ * `NODE_OPTIONS` 时 `shimLoaded=undefined`、带它时 `shimLoaded=true`。微信是原生程序、
+ * 不读 `NODE_OPTIONS`，所以同一套启动机制下它没事 —— 这正是「只有部分客户端崩」的来源。
+ *
+ * ## 取舍：黑名单，不是白名单
+ *
+ * 没做成「只传一份最小环境」的白名单：客户端千奇百怪，`PATH` / `APPDATA` / `TEMP` /
+ * `SystemRoot` 之类少一个都可能起不来，白名单要穷举的系统变量太多、漏一个就是「某些机器
+ * 上点启动没反应」。黑名单只针对**已知会注入代码或改变运行模式**的那几项，改错的面小、
+ * 且每一条都能说清它坏在哪。
+ */
+const LAUNCH_ENV_STRIP_NAMES: ReadonlySet<string> = new Set([
+  // Node 的代码注入与模块解析入口：`--require` 会在子进程里执行任意脚本。
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'NODE_REPL_EXTERNAL_MODULE',
+])
+
+/** 前缀匹配的剔除项。`ELECTRON_*` 都是 Electron 自己的运行控制开关（`ELECTRON_RUN_AS_NODE` 等）。 */
+const LAUNCH_ENV_STRIP_PREFIXES: readonly string[] = ['ELECTRON_']
+
+/**
+ * 该环境变量是否不该传给被启动的客户端（纯函数，便于单测）。
+ */
+export function shouldStripFromLaunchEnv(name: string): boolean {
+  if (LAUNCH_ENV_STRIP_NAMES.has(name)) return true
+  return LAUNCH_ENV_STRIP_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
+/**
+ * 造一份「交给被启动客户端」的环境：继承启动方的环境，但剔掉会改变子进程运行方式的那些
+ * （见 `LAUNCH_ENV_STRIP_NAMES` / `LAUNCH_ENV_STRIP_PREFIXES`）。
+ *
+ * 纯函数、入参可注入，便于单测在不依赖真实 `process.env` 的前提下断言剔了哪些、留了哪些。
+ */
+export function buildLaunchEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [name, value] of Object.entries(source)) {
+    if (shouldStripFromLaunchEnv(name)) continue
+    env[name] = value
+  }
+  return env
+}
+
+/**
  * 已启动的配置。只记成功的结果。
  *
  * **失败不进缓存**，这一点是刻意的：用户看到「路径不存在」之后最自然的动作就是
@@ -213,6 +269,9 @@ async function startProcess(
         // 丢弃子进程的三路标准流。用管道的话，工作台退出后管道关闭，子进程再往
         // stdout 写就会拿到 EPIPE；而且没人读的管道写满之后会阻塞子进程本身。
         stdio: 'ignore',
+        // 继承环境，但剔掉会改变子进程运行方式的变量（见 `buildLaunchEnv` 的注释：
+        // 不剔的话，`NODE_OPTIONS` 会被 Electron 系的客户端执行，直接把它启动崩）。
+        env: buildLaunchEnv(),
       })
     } catch (error) {
       logger.error({ err: error, profileId: profile.id }, '启动配置的进程创建调用失败')

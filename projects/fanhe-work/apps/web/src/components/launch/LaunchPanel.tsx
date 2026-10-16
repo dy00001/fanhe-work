@@ -4,6 +4,12 @@ import { useMemo, useState } from 'react'
 
 import { useAuth } from '../../auth/useAuth'
 import { ApiError } from '../../lib/api'
+import {
+  applyCredentialIntent,
+  deleteProfileCredential,
+  describeCredentialOutcome,
+  type CredentialApplyOutcome,
+} from '../../lib/launch-credentials'
 import { launchRunRecovery, LaunchRunError, runLaunchProfile } from '../../lib/launch'
 import { buildSuggestedPaths } from '../../lib/launch-suggest'
 import { useLaunchProfiles } from '../../lib/use-launch-profiles'
@@ -54,6 +60,9 @@ type Notice = { kind: 'ok' | 'error'; text: string }
  * 没有任何变化时不发请求：服务端的修改接口要求至少一个字段（`minProperties: 1`），
  * 而它写入后会把 `updatedAt` 一起刷新 —— 那会让「这一行什么时候被改过」这条信息
  * 失真。直接关闭对话框比默默接受一次空写入更诚实。
+ *
+ * **只看配置本身，不看 `login`**：账号密码存在本机凭据库里，与服务端那份配置无关，
+ * 改了它不算「配置有变化」。调用方因此要单独判断凭据意图（见 `handleSubmit`）。
  */
 function hasChanges(profile: LaunchProfile, values: LaunchFormValues): boolean {
   return (
@@ -64,6 +73,18 @@ function hasChanges(profile: LaunchProfile, values: LaunchFormValues): boolean {
     profile.args.length !== values.args.length ||
     profile.args.some((arg, index) => arg !== values.args[index])
   )
+}
+
+/**
+ * 把一次凭据写入的结果接在配置保存提示后面。
+ *
+ * `keep` 时原样返回，不多一个空段。失败那句要能读成一句话：「已新增「QQ · 工作号」，
+ * 配置已保存，但密码没能保存到本机：……」—— 它必须让用户明白**配置是存上了的**，否则
+ * 他会去重填一遍路径。
+ */
+function joinNotice(base: string, outcome: CredentialApplyOutcome): string {
+  const extra = describeCredentialOutcome(outcome)
+  return extra === '' ? base : `${base}，${extra}`
 }
 
 export function LaunchPanel() {
@@ -85,7 +106,10 @@ export function LaunchPanel() {
   } = useLaunchProfiles()
 
   // §2.5 复用：每个软件「最近有效路径」反查表，新增配置选软件时预填路径框。
-  const suggestedPaths = useMemo(() => buildSuggestedPaths(profiles, statuses), [profiles, statuses])
+  const suggestedPaths = useMemo(
+    () => buildSuggestedPaths(profiles, statuses),
+    [profiles, statuses],
+  )
 
   /** 重排或删除在飞。此时整块列表不可操作，避免两处修改互相覆盖顺序。 */
   const [busy, setBusy] = useState(false)
@@ -146,17 +170,36 @@ export function LaunchPanel() {
     }
   }
 
+  /**
+   * 保存。配置与账号密码是**两件事，分两步落**。
+   *
+   * 新增时配置还没有 id，必须先建配置再存凭据（凭据按 `profileId` 关联，拿不到 id 就无从
+   * 下手）。凭据失败**不回滚配置**：回滚会连带丢掉用户刚填的路径与参数，代价远大于收益；
+   * 提示里说明「配置已保存，但密码没能保存到本机（原因）」即可。
+   *
+   * 编辑时两者独立判断：配置没变就不发那个请求（服务端要求至少一个字段，且空写入会刷新
+   * `updatedAt`），而凭据有动就要动 —— 它们存在不同的地方，互不牵连。
+   */
   async function handleSubmit(values: LaunchFormValues): Promise<void> {
     if (editing === null) {
       const created = await createProfile(values)
-      setNotice({ kind: 'ok', text: `已新增「${created.name}」` })
+      const outcome =
+        values.login === undefined
+          ? ({ action: 'keep' } as const)
+          : await applyCredentialIntent(created.id, values.login, created.name)
+      setNotice({ kind: 'ok', text: joinNotice(`已新增「${created.name}」`, outcome) })
       return
     }
 
-    if (!hasChanges(editing, values)) return
+    if (!hasChanges(editing, values) && values.login === undefined) return
 
-    const updated = await updateProfile(editing.id, values)
-    setNotice({ kind: 'ok', text: `已保存「${updated.name}」` })
+    const target = editing
+    const updated = hasChanges(editing, values) ? await updateProfile(target.id, values) : target
+    const outcome =
+      values.login === undefined
+        ? ({ action: 'keep' } as const)
+        : await applyCredentialIntent(updated.id, values.login, updated.name)
+    setNotice({ kind: 'ok', text: joinNotice(`已保存「${updated.name}」`, outcome) })
   }
 
   /**
@@ -204,6 +247,9 @@ export function LaunchPanel() {
     setNotice(null)
     try {
       await removeProfile(target.id)
+      // 顺手清掉它的本机凭据（P1）。**fire-and-forget**：凭据删不掉不影响删除配置本身，
+      // 而孤儿条目永远不会被读到（它只在用户重新填同一条配置时才可能被覆盖）。
+      void deleteProfileCredential(target.id).catch(() => undefined)
       setNotice({ kind: 'ok', text: `已删除「${target.name}」` })
       setDeleting(null)
       // 状态列表按 id 组织，删掉的那一条不会自己消失；hook 内部已重拉状态让它与列表对齐。
@@ -238,13 +284,7 @@ export function LaunchPanel() {
     if (loading) return <LoadingState variant="plain" label="正在加载启动配置" />
 
     if (loadError !== null) {
-      return (
-        <ErrorState
-          variant="plain"
-          description={loadError}
-          onRetry={reload}
-        />
-      )
+      return <ErrorState variant="plain" description={loadError} onRetry={reload} />
     }
 
     if (profiles === null || profiles.length === 0) {

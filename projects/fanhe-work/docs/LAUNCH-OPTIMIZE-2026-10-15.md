@@ -94,6 +94,13 @@
 - 用 `inspectExecutablePath` 复核命中项，返回「首选命中 + 其余候选」列表，让界面回填或让用户从候选里选。
 - 读 Windows 注册表 Uninstall 键能提高命中率，但要引入 `child_process('reg query')` 或 `node-winreg`。权衡是先不上注册表，用目录扫描覆盖绝大多数默认安装；注册表作为后续可选增强，避免为检测引入跨平台依赖污染 `agent.ts`。
 
+**注册表增强（真机反馈后补上，已实施）。** 真机实测暴露了目录扫描的原理性缺口：用户把 QQ / 微信 / 千牛 全装在自选的 `D:\软件安装目录\` 下，任何「已知路径」清单都猜不到这种目录名，于是「软件明明装了，一键检测却说没找到」。补上当时留作后续的注册表来源，且**刻意落在外壳侧独立模块 `apps/desktop/src/launch-registry.ts`**，`agent.ts` 那份零依赖内核一处不动（与 §2.4 的 `launch-login-click.ts` 同一处置思路）：
+
+- 读三个卸载 hive（`HKLM` / `HKLM\WOW6432Node` / `HKCU` 的 `...\CurrentVersion\Uninstall\*`），取每条记录的 `DisplayName` / `InstallLocation` / `DisplayIcon`（PowerShell `ConvertTo-Json` 导出，强制 UTF-8，兼容中文 `DisplayName` 与中文路径）。
+- 按软件识别：`DisplayName` 命中该软件（`QQ` / `微信|WeChat|Weixin` / `千牛|旺旺|AliWang`），主程序名精确匹配（`QQ.exe` / `Weixin.exe` / `AliWorkbench.exe` 等）从 `DisplayIcon`（可能带 `,0` 尾缀或引号）与 `InstallLocation` 根下推出候选。千牛的 `DisplayIcon` 指向卸载器、QQ 的 `InstallLocation` 为空 —— 两种形态都覆盖到。
+- `agent.ts` 的 `detectLaunchPaths` 加一个通用入参 `extraCandidates`（外部来源的完整候选路径），排序为 `extraPath > extraCandidates > 目录扫描已知候选`；读注册表那点平台耦合留在外壳，不进内核。
+- best-effort：非 Windows、未知 software、读不到、解析失败一律空数组，绝不抛异常，不阻断检测。
+
 **持久化与复用。** 用户点检测、选中候选、保存配置时，命中路径即写入该条 `LaunchProfile.executablePath`，入库即长期生效。所谓「后续直接复用、无需重复检测」，实现为：新增同类 `software` 时，表单的默认路径取该用户库中该 `software` 最近一条有效配置的路径（列表匹配即可，不必另建「检测结果表」）。这样检测只做一次，之后靠库里的历史配置带出。
 
 **与自检的分工。** detect 回答「这个软件大概装在哪、路径填什么」，回答一次配置问题；diagnostics 回答「已存的这条路径此刻还在不在」，回答运行期状态。两者共用 `inspectExecutablePath` 这一条判断，不会出现「检测说在、启动说不在」。
@@ -121,6 +128,125 @@
 - 详情查看：可加一个轻量详情弹层，展示路径、参数、最近一次启动、路径是否可用，并在其中直接「启动 / 编辑 / 重新指定路径」。工作台行组件 `LaunchProfileRow` 已有这些能力，首页小卡可复用同一套交互文案。
 - 托盘末尾「+」：与其它小图标同尺寸、以虚线边框区分，点击 `openCreate` 进入新增（即走完 2.5 的「一键检测 → 回填 → 保存」）。带 `personal.launch.write` 权限才渲染，只读访客不显示入口（沿用现有「藏起而非置灰」的取舍）。
 - 保留区块头右侧「管理配置」链接，指向 `/workbench/launch` 完整面板，作为小卡操作之外的次级入口。
+
+### 2.8 主卡托盘换行时的显示缺陷（2026-10-15 真机反馈，已修）
+
+**现象。** 配置到 7 个启动程序时，主卡标题「已配置软件」整块消失、托盘首行 6 枚图标的**上沿被切平**，底部状态行与「一键启动」按钮挤在一起。
+
+**根因（两处）。**
+
+1. **行高写死（主因）。** 栅格写成 `grid grid-cols-4 grid-rows-[200px_128px] gap-4`，把主卡所在行锁在 200px；主卡自身是 `flex flex-col justify-end overflow-hidden`。托盘 `flex-wrap` 换到第二行后内容总高 216（标题 24 + gap 8 + 托盘 136 + gap 8 + 状态行 40）> 可用 152（200 − `py-6`×2），溢出 64px。**`justify-end` 把溢出全部推向上方**，于是 `overflow-hidden` 从**顶部**裁：标题（落在卡片上沿之上 40px）整块不可见，首行图标上沿被切平。注意诊断方向 —— 不是「内容太高被压扁」，是「顶部被切掉」。
+2. **「+」卡与实例卡盒模型不一致。** 实例卡内容 = 36 图标盒 + 4 gap + 14 行高 = 54；「+」卡内容 = 18 裸 `<svg>` + 4 + `text-xs` 默认行高 16 = 38。并排时「+」的图标中线低 8px、名称高 10px（实测 `Δicon=-8`、`Δname=10`）。
+
+**触发条件。** 托盘项数超过一行容量即触发。默认 1280 窗口 → 侧栏 240、内容区 `px-12` 96 → 栅格 944、主卡 464、内宽 432 → 一排 **6 枚 64px 卡**（`floor((432+8)/72)`）。故**第 6 个启动程序**（+「新增」= 7 项）即换行触发；窄窗口更早（`minWidth` 960 → 一排 3 枚）。§2.6 写的「实例接近 9 条时自动换行」与实际不符，已按实测改为「默认 1280 窗口下一排 6 枚」。
+
+**修复（`apps/web/src/components/home/LaunchSection.tsx`，两处）。**
+
+1. `grid-rows-[200px_128px]` → **`grid-rows-[minmax(200px,auto)_128px]`**：该行随内容长高，200px 只作下限。这正是 §2.6 与组件注释里「主卡随之增高」的原意 —— 原注释这么说，实现却没做到。同排两张单元卡随行拉伸，Bento 的矩形关系不变。
+2. 「+」卡内层套 `<span className="grid size-9 place-items-center">` 包住 `Plus`，名称补 `leading-[14px]`，与实例卡逐值对齐（实测 `Δicon=0`、`Δname=0`，上下留白同为 5px）。
+
+**实测对照**（Electron 无头 `capturePage` + `executeJavaScript` 量取，复现工程在 `.tmp/repro/`，未入库）：
+
+| 档位 | 修复前 heroH / 标题 | 修复后 heroH / 标题 |
+| --- | --- | --- |
+| 5 程序 + 新增（6 项，一行） | 200 / 可见 | 200 / 可见 |
+| 6 程序 + 新增（7 项，两行） | **200 / 整块消失**（托盘顶部被裁） | **264 / 可见** |
+| 13 程序 + 新增（14 项，三行） | **200 / 整块消失** | **336 / 可见** |
+
+**验收。** `@fanhe/web` typecheck ✅；单测 146/146 ✅；`@fanhe/desktop check:web`（产物版本闸门）✅；`@fanhe/shared`、`@fanhe/desktop` typecheck ✅。`pnpm lint`（5 个 `react-hooks/set-state-in-effect`）与 `pnpm format:check`（16 个文件）在本轮之前即为红，已用 `HEAD` 版本复现确认与本改动无关，未处理。
+
+### 2.9 实例卡图标改为「程序自己的图标」（2026-10-15 追加，已实施）
+
+**结论。** 首页一键启动实例卡的图标，从 `lib/launch-icons.ts` 那套通用 lucide 图标改为
+**程序自己的图标** —— 外壳经 Electron 内置的 `app.getFileIcon` 取回（与系统「图标来源」
+同一套实现，因此与桌面快捷方式显示的一致），底衬按品牌色配浅底。
+
+**为什么推翻 §2.6 那句「不引品牌图标」。** 原取舍的理由是商标约束，代价是**每枚图标都
+认不出是哪个软件**：配了 7 条就是 7 枚形状各异的通用图标，只有下面那行小字能区分。
+用户已拍板改为取真实图标。
+
+**为什么是取 exe 的图标、而不是内置一套品牌 SVG。** 覆盖面：真图标从 exe 里取，
+**自定义程序也有图可出**，不依赖我们预先认识它 —— 预置品牌资源给不了这个（而且会把
+商标资源引进仓库）。通用图标那套因此**保留为回落层**：浏览器态、或图标没取到
+（路径失效、文件被占用）时用它。
+
+**三条实测形态（决定了实现怎么写，都是踩过的）：**
+
+1. **必须传 exe 路径，不能传 `.lnk`。** 实测 9 个不同快捷方式（GitHub / Docker Desktop /
+   Cloudflare…）返回的 PNG **逐字节相同**（md5 一致）—— 那是系统的「快捷方式」通用图标，
+   不是目标的图标。
+2. **`size: 'large'` 出 48×48**（`normal` 32 / `small` 16）。界面按 24 CSS px 渲染，
+   2 倍屏上要 48 设备像素，正好一对一。
+3. **路径不存在时返回的仍是「非空」图标**（系统的通用文件图标），`isEmpty()` 区分不出来
+   → **不用它判「取没取到」**。路径失效这件事由卡片右上角那个红点表达，不该由同一个
+   信号承担。
+
+**落点。**
+
+| 层 | 文件 | 做什么 |
+| --- | --- | --- |
+| 外壳 | `apps/desktop/src/launch-icon.ts`（新） | 路径归一（只收绝对路径、去重、限长）+ 带缓存的取图器（**成功才缓存**、LRU 淘汰） |
+| 外壳 | `apps/desktop/src/main.ts` | 新增 IPC `launch:icon`（批量；空入参直接返回，不做任何事） |
+| 桥 | `apps/desktop/src/preload.ts` | 暴露 `getLaunchIcons(paths)`；`vite-env.d.ts` 补 web 侧声明 |
+| 前端 | `apps/web/src/lib/launch-app-icon.ts`（新） | 品牌色表 + 查找表归一 + 查询（纯函数） |
+| 前端 | `apps/web/src/lib/use-launch-app-icons.ts`（新） | 批量取、按小写路径去重缓存、**只请求没拿到的那几条** |
+| 前端 | `apps/web/src/components/home/LaunchSection.tsx` | 图标位：品牌浅底 + `<img object-contain>`；取不到回落通用图标 |
+
+**边界与取舍。**
+
+- **一次请求取回整盘**：十几枚逐条 `await` 会在打开首页时明显卡一下；外壳那条通道本来就
+  按路径数组收。**只请求「还没拿到的那几条」**，所以新增一条配置不会把已有的十几条重取。
+- **失败静默回落，不弹提示**：用户不需要知道「图标没取到」，他需要的是这一行仍然可读。
+- **品牌色取「压深到与 `--m-teal` / `--m-blue` 同明度档」的值**，因为它同时承担
+  **回落图标的前景色** —— 直接用官方原色（如微信 `#07c160`）在浅色主题下当文字色对比度
+  不够。`custom` 没有品牌色，给中性灰蓝。
+- **浅底用与右侧模块卡同一条配方**（`--hue` + `--wash`，见 `.mod-icon`），明度语言两处一致。
+- **`<img>` 用 `object-contain` + 定宽定高**：源图 48、显示 24，长宽比不是 1:1 的图标按
+  比例缩放并居中，**不会被拉伸**（用户明确要求「保持原始长宽比不失真」）。
+
+**验收。** `@fanhe/desktop` 单测 **210/210** ✅（新增 `test/launch-icon.test.mjs` 10 例）；
+`@fanhe/web` 单测 **155/155** ✅（新增 `test/launch-app-icon.test.mjs` 9 例）；
+`shared` / `web` / `desktop` 三包 typecheck ✅；`check:web` 产物版本闸门 ✅。
+
+真机图标实测（本机）：QQ / 微信 / 千牛 / 记事本 / AutoCAD / 命令提示符 / 计算器 均取到
+48×48 真图；无内嵌图标的 exe（`accoreconsole.exe`）回落 32×32 系统通用图；9 个 `.lnk`
+的图标 md5 全同（证实「必须传 exe」这条）。
+
+### 2.10 「一键登录」两个新需求的设计分析（2026-10-15 追加，**仅设计未实施**）
+
+用户新增两条需求：**微信**扫码登录、不做账号密码，要求「配几个微信启动项就拉起几个」；
+**QQ / 千牛**支持账号密码，客户端自带的「记住密码」只能记一个账号，因此要在配置页新增
+账号密码记录与存储（**仅本地**），多账号时用内置脚本在相应位置自动填写并登录。
+
+完整设计分析见 **`docs/LAUNCH-LOGIN-DESIGN-2026-10-15.md`**。这里只记与本文档直接相关的
+四条结论：
+
+1. **§2.4 的结论修正**：「只唤起 + 点登录，工作台不存密码」这条**没有被推翻**，而是把
+   「工作台」的所指**收窄为「服务端 / 共享包 / 数据库」**（那是它原本就在约束的东西）。
+   本机凭据库不在此列 —— 共享包原话紧跟着就写了「免密只能走 OS 凭据接口（Windows DPAPI
+   或 Electron safeStorage）」，新需求正是这条被预告过的路径到了该走的时刻。**共享包与
+   Prisma 均零改动**（不加密码字段、不加列），配置与凭据用本地 `profileId` 映射关联。
+2. **§2.4 未闭环的「等窗口 + 有限次重试」被提升为必做项**。填表比敲 Enter 更依赖窗口
+   存在，而现实现是 spawn 后立刻执行（实测恒 `no-window`）。新流程是四段：等窗口 →
+   判定是登录窗 → 填表 → 等窗关闭。
+3. **「密码打进聊天框」是唯一会造成真实泄露的风险点**：客户端「已登录、免登录直进主界面」
+   时，填表序列会把账号密码打进聊天输入框并回车发出。必须实现「这确实是登录窗」的保守
+   判据（窗口标题白名单 + UIA 密码控件，**至少命中一条**；不确定就只敲 Enter）。这是
+   §8.2 的第一项，也是 P2 优先实现项。
+4. **多账号的唯一正确形态是串行**，且**串行的单位是整条流水线而不是 spawn**：N 个登录窗
+   同时开着时，「哪个窗口对应哪份凭据」没有可靠答案；对单实例客户端，并发 spawn 还会
+   让第二条只激活第一条的窗口。千牛原生支持多开（双击即新窗口新账号），微信有互斥量，
+   QQNT 待探针。3 秒去重窗口按 `profile.id` 各算，因此「配几个拉几个」天然满足。
+5. **安全关键取舍**：机密**从子进程 stdin 读**，不用 `-EncodedCommand`（base64 会被
+   `Win32_Process.CommandLine` 读出，且 base64 不是加密）；输入用 `SendInput` +
+   `KEYEVENTF_UNICODE`，**不碰剪贴板**（避免 `Win+V` 历史持久化）也不用 UIA 定位
+   （QQNT 是 Electron 应用，UIA 常是空树）；CDP 注入与驱动级模拟**明确否决**。
+6. **头号风险是账号风控，无法用技术手段消除**。设计上的应对是：默认关闭、首次开启明确
+   告知、失败绝不重试（`maybe-captcha` 是终态）、单次批量超过 3 条要确认。
+
+未决项与真机探针清单见该文档 §9.2 / §10。
+
+**P0 已实施（2026-10-15）**：用户拍板「需要自动填表」+「微信快速点击下确定可多开」，据此落地了窗口原语与批量后置编排，详见 `docs/LAUNCH-LOGIN-DESIGN-2026-10-15.md` §9.1b。要点三条：① 等窗口进脚本（带超时轮询 + 稳定期复查），「实测恒 `no-window`」随此闭环；② 微信多开后把 N 个登录窗按网格平铺（不动 z 序、不抢焦点），一个键都不敲；③ QQ / 千牛的「点登录」改为串行（并发的两条 Enter 会互相抢前台）。desktop 单测 210→243 全过，三包 typecheck 与 web/shared 单测无回归。
 
 ## 3. 对现有架构的影响面与不改动的地方
 
@@ -179,7 +305,30 @@
 
 - **§2.4 唤起+点登录（已实施）**：新增桌面侧模块 `apps/desktop/src/launch-login-click.ts`（**不进 `agent.ts` 零依赖内核**，由 `main.ts` 在 spawn 成功后按需加载）。`shouldClickLogin(software)` 纯函数按软件开关（qq / qianniu 开、wechat / custom / 未知关，是「按软件开关」的唯一入口）；`clickLoginAfterLaunch(software, pid)` best-effort：非 Windows 直接拦下、关掉的软件不操作窗口，全程 try/catch 吞异常回报 `failed` 绝不抛、绝不阻断启动结果；`buildLoginClickScript(pid)` 用 PowerShell P/Invoke（按 pid 枚举顶层窗口挑可见首窗 + `AttachThreadInput` 绕前台锁 + `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` + `keybd_event(VK_RETURN=0x0D)`）把登录窗带到前台敲 Enter，经 `-EncodedCommand` 传 base64(UTF-16LE)、5 秒超时；只发按键、不输账号密码、不读登录态、不注入，工作台全程不持机密。`main.ts` 在 `launch:run` 成功返回后 `void clickLoginAfterLaunch(software, pid)`、`launch:runMany` 按 `id` 反查 `software` 为每条成功结果 fire-and-forget。桌面 typecheck 绿、desktop 单测 167→174（含 7 项：开关映射 / 脚本含 pid 与 Enter 键码 / 非 Win 平台守门 / 关掉的软件不点）。「自定义程序用户按需自开」作为已知扩展点留在 `shouldClickLogin`（将来下放到单条 `LaunchProfile` 标志时只改这一处），本步先按软件级默认值落地。
 
-未决/待续：§2.4 的窗口操作依赖外部客户端窗口行为、best-effort，需在真实客户端（qq / qianniu 登录窗）上真机验证 Enter 是否落到默认按钮；其余需求（2.1~2.7）均已实施。
+- **§2.5 检测增强（多盘 + 注册表，已实施）**：真机反馈「软件装了却检测不到」后逐条取证，落成三件事。① 目录扫描补「所有盘的 Program Files」：新增 `windowsProgramFilesRoots()`（枚举 A–Z 盘符 × `Program Files` / `Program Files (x86)`，`existsSync` 过滤，非 Windows 天然空），`knownExecutableCandidates` / `detectLaunchPaths` 加 `extraRoots`；原来只扫环境变量那三个根（都指向系统盘 C:），装到 `D:\Program Files` 的软件永远找不到。② 候选表补版本布局：`qq` 加 `Tencent\QQNT\Bin\QQ.exe`（新版 NT 架构），`wechat` 加 `Tencent\Weixin\Weixin.exe`（4.x 改名）。③ **注册表来源**（新增模块 `apps/desktop/src/launch-registry.ts`，见上文 2.5「注册表增强」）：读三个卸载 hive 的 `DisplayName` / `InstallLocation` / `DisplayIcon`，按软件识别规则推出自定义安装目录下的主程序路径；`detectLaunchPaths` 加通用入参 `extraCandidates`（排序 `extraPath > extraCandidates > 已知候选`），`main.ts` 的 `launch:detect` 把注册表候选并入 `hasKnown` 判定与检测调用。**真机端到端实测**：QQ → `D:\软件安装目录\QQ\QQ.exe`、微信 → `D:\软件安装目录\微信\Weixin\Weixin.exe`、千牛 → `D:\软件安装目录\千牛\AliWorkbench.exe` 全部命中（此前三者均为「未找到」）。desktop typecheck 绿、desktop 单测 181→199（含 14 项注册表解析/推导/降级 + 4 项 `extraCandidates` 排序与去重）。
+- **真机反馈的两处 UI 修复（已实施）**：① 「一键检测」此前只有数据通道（`detectLaunchPath` + `launch:detect` IPC + preload 桥）而 UI 层零调用 —— 补在 `LaunchProfileDialog` 路径字段下的「一键检测」按钮（`Radar` 图标 / 检测中 `LoaderCircle` 转动），命中多个时列候选切换器，`agentAvailable=false` 据实说明「需要桌面外壳」。② 首页零配置时整块托盘不渲染（`LaunchSection` 把托盘放进「有配置」分支，零配置只剩一行文字、末尾「+」与整卡点击入口整块消失）—— 改为零配置也渲染托盘（空列表 + `canWrite` 时托盘里只有那枚虚线「+」）。另修 `selectSoftware` 只在路径框为空时预填、换软件残留旧路径的「张冠李戴」（加 `pathAuto` 状态：自动填过或空则随软件换、手输过不动）。
+
+- **路径状态改由客户端判定（已实施）**：真机症状是「同一条配置点启动成功、卡片却显示『路径失效』」。根因：`LaunchProfileStatus.pathState` 一直由**服务端**算（`apps/api` 的 `listProfileStatuses` → `inspectExecutablePath`），而服务端跑在 Linux 容器里，看不见客户端的 `D:\软件安装目录\...`，恒判 `missing`。修法与 `runLaunchProfile` 同一套宿主分流：`loadLaunchStatuses(profiles)` 在桌面态用本机自检（既有 `launch:diagnostics` IPC，用的正是**启动同款** `inspectExecutablePath`）**覆盖** `pathState`，`lastRun`/`lastSuccessAt` 仍取服务端；翻译逻辑抽成纯模块 `apps/web/src/lib/launch-status-desktop.ts` 的 `pathStatesFromDiagnostics`（代理不可用时不判断、退回服务端原值，避免把环境问题误报成路径问题）。真机日志 `自检完成 可用=2/2`。web 单测 141→146。
+- **§2.4 脚本兼容 Windows PowerShell 5.1（已实施）**：`buildLoginClickScript` 里用了 `0u`（无符号整数字面量后缀，**PS 7 才支持**），系统自带的 5.1 会报 `无法将"0u"识别为 cmdlet`，脚本在 `EnumWindows` 回调里直接终止，真机表现为「登录点击 尝试=是 结果=failed」。改为 `[uint32]$x = 0`，并补回归用例断言脚本不含 `0u`/`0ul`。真机 PS `5.1.26100.9711` 复验通过。desktop 单测 199→200。
+
+- **QQ 启动崩溃归因：与本次改动无关，系 agent 进程上下文所致（已查清）**：真机反馈「启动 QQ 报错」，QQ 自带崩溃报告（模块 `QQNT.dll`，`call_stack_hash=80000003-aa82f54b142f17ecf623bf6d2294a65d`）。逐条取证后确认**崩溃不由本模块引起**。判据是「同机、同 QQ、同环境变量，只换启动上下文」：
+
+  | 启动上下文 | 环境 | 结果 |
+  |---|---|---|
+  | 我方 `spawn`（外壳主进程 / 探针，位于 agent 进程树内） | 完整 agent 环境 | **崩**（可复现） |
+  | 我方 `spawn` | 最小环境（18 项） | **崩** |
+  | 资源管理器双击等价（`explorer.exe <exe>`） | 正常 | **稳**（3/3） |
+  | WMI `Win32_Process.Create` | 正常 | **稳**（3/3） |
+  | **WMI 启动的 Node 探针 → spawn QQ** | **完整 agent 环境（193 项，含 `NODE_OPTIONS`）** | **稳** |
+  | WMI 启动的最小 Electron 探针 → spawn QQ | 正常 | **稳** |
+
+  关键对照是第 5 行：**同一份完整 agent 环境**，只要把启动上下文移出 agent 进程树，QQ 就稳定 —— 故**环境变量被排除，`NODE_OPTIONS` 不是 QQ 崩溃的原因**。真正的差异是**进程上下文**：agent 把其子进程放进了一个 Job Object（环境变量 `WORKBUDDY_APP_LIFETIME_JOB=Local\WBAppJob-…` 即其名字），QQNT 自身是 Electron 应用，其进程模型与该 Job 冲突而崩（微信是原生程序、不建 Electron 进程树，故同套 spawn 下正常）。**结论：这是开发态的产物（外壳由 agent 拉起、落在 agent 的 Job 内）；正式版由用户双击启动、不在该 Job 内，不受影响。**
+
+  - 已排除项（逐条实测）：`NODE_OPTIONS`/`NODE_PATH`/`ELECTRON_*` 注入、`windowsHide`、`stdio:'ignore'`、`cwd`、工具沙箱（关掉沙箱仍崩）、环境变量（最小环境仍崩；而完整 agent 环境在外部上下文稳定）。
+  - 附带保留的加固：`apps/api/src/launch/agent.ts` 仍新增 `buildLaunchEnv()` / `shouldStripFromLaunchEnv()` 并在 `spawn` 传 `env: buildLaunchEnv()`（剔除 `NODE_OPTIONS` / `NODE_PATH` / `NODE_REPL_EXTERNAL_MODULE` 与 `ELECTRON_*`）。这条**不是 QQ 崩溃的修因**（已证伪），但本身是正确的卫生习惯：宿主注入的 `NODE_OPTIONS=--require=<fs 劫持 shim>` 确实会被 Electron 系客户端执行（最小 Electron 探针实测 `shimLoaded=true`，剔除后 `undefined`），留着以防其它客户端踩同一坑。api 单测 232 pass / 0 fail（新增 4 项）。
+  - 排查方法论（值钱）：① 崩溃判据用 **Crashpad `reports/*.dmp` 新增数**（QQ 转储在 `%APPDATA%\QQ\Crashpad\reports\`），配合进程数时间线；② 本沙箱 `spawnSync('tasklist')` 返回 **EBUSY**（同步 spawn 被拦），**必须用异步 `spawn`** 抓进程表，否则每次都得「0 行」，把「存活」误报成「崩溃」——本轮第一版结论正栽在此；③ Bash 里 `tasklist /FO CSV /NH` 会被 MSYS 路径转换把 `/FO` 当路径而报错，进程查询改用 PowerShell 或异步 spawn；④ 用 `explorer.exe <exe>` / WMI `Win32_Process.Create` 制造「脱离本进程树」的对照，是区分「我方上下文」与「客户端自身」的关键手段；⑤ 崩溃是否可复现要重复测（QQ 崩溃有概率性，单次结果不可作数）。
+
+未决/待续：§2.4 的窗口操作依赖外部客户端窗口行为、best-effort，需在真实客户端（qq / qianniu 登录窗）上真机验证 Enter 是否落到默认按钮；**当前登录点击在 spawn 后立即执行、客户端窗口往往尚未出现，实测恒 `no-window`，要真正生效需「等窗口出现 + 有限次重试」，属待定的设计取舍**；QQ 启动崩溃已归因为 agent 进程上下文（见上），**其真机复验须在非 agent 上下文里做**（由用户从自己的终端启动开发外壳，或装正式版双击启动），agent 拉起的开发外壳里 QQ 必崩、不代表正式版；其余需求（2.1~2.7）均已实施。
 
 
 

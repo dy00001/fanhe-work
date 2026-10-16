@@ -21,6 +21,7 @@ import {
   normalizeProfile,
   runShellLaunchProfile,
   runShellLaunchProfiles,
+  windowsProgramFilesRoots,
 } from '../src/agent.ts'
 
 /**
@@ -246,7 +247,10 @@ function spyAgentMany(results) {
   return {
     module: {
       runLaunchProfile(_profile, _logger) {
-        const result = results[index] ?? { ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } }
+        const result = results[index] ?? {
+          ok: true,
+          data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false },
+        }
         index += 1
         return Promise.resolve(result)
       },
@@ -290,7 +294,10 @@ test('agent 抛错被兜底成 spawn_failed，不影响其余', async () => {
       runLaunchProfile(_profile, _logger) {
         index += 1
         if (index === 2) return Promise.reject(new Error('boom'))
-        return Promise.resolve({ ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } })
+        return Promise.resolve({
+          ok: true,
+          data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false },
+        })
       },
     },
   }
@@ -309,7 +316,10 @@ test('空数组直接返回空汇总，不碰进程', async () => {
     module: {
       runLaunchProfile() {
         calls += 1
-        return Promise.resolve({ ok: true, data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false } })
+        return Promise.resolve({
+          ok: true,
+          data: { profileId: 'x', pid: 1, startedAt: '', deduplicated: false },
+        })
       },
     },
   }
@@ -329,23 +339,35 @@ const DETECT_FAKE_ENV = {
 
 test('knownExecutableCandidates 枚举已知软件的全部根目录×相对路径', () => {
   const result = knownExecutableCandidates('wechat', DETECT_FAKE_ENV)
+  // 微信两条相对路径：旧版 WeChat.exe 在前，4.x 的 Weixin.exe 在后；
+  // 每个根目录内先展开完这两条，再进入下一个根。
   assert.deepEqual(result, [
     'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
+    'C:\\Program Files\\Tencent\\Weixin\\Weixin.exe',
     'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
+    'C:\\Program Files (x86)\\Tencent\\Weixin\\Weixin.exe',
     'C:\\Users\\x\\AppData\\Local\\Tencent\\WeChat\\WeChat.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\Weixin\\Weixin.exe',
   ])
 })
 
 test('knownExecutableCandidates 多相对路径软件按「根×相对」顺序展开', () => {
   const result = knownExecutableCandidates('qq', DETECT_FAKE_ENV)
   // 顺序：先遍历每个根目录，根内再按相对路径顺序。ProgramFiles 在前、LOCALAPPDATA 在后。
+  // QQ 四条相对路径：旧版 QQ\Bin、QQ\、新版 QQNT\Bin、QQNT\。
   assert.deepEqual(result, [
     'C:\\Program Files\\Tencent\\QQ\\Bin\\QQ.exe',
     'C:\\Program Files\\Tencent\\QQ\\QQ.exe',
+    'C:\\Program Files\\Tencent\\QQNT\\Bin\\QQ.exe',
+    'C:\\Program Files\\Tencent\\QQNT\\QQ.exe',
     'C:\\Program Files (x86)\\Tencent\\QQ\\Bin\\QQ.exe',
     'C:\\Program Files (x86)\\Tencent\\QQ\\QQ.exe',
+    'C:\\Program Files (x86)\\Tencent\\QQNT\\Bin\\QQ.exe',
+    'C:\\Program Files (x86)\\Tencent\\QQNT\\QQ.exe',
     'C:\\Users\\x\\AppData\\Local\\Tencent\\QQ\\Bin\\QQ.exe',
     'C:\\Users\\x\\AppData\\Local\\Tencent\\QQ\\QQ.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\QQNT\\Bin\\QQ.exe',
+    'C:\\Users\\x\\AppData\\Local\\Tencent\\QQNT\\QQ.exe',
   ])
 })
 
@@ -410,4 +432,111 @@ test('detectLaunchPaths：extraPath 与已知候选重复时只出现一次', as
     1,
     'extraPath 与第一条已知候选是同一路径时不该重复',
   )
+})
+
+test('windowsProgramFilesRoots：枚举存在盘符上的 Program Files 两个目录', () => {
+  const existing = new Set([
+    'C:\\',
+    'D:\\',
+    'C:\\Program Files',
+    'C:\\Program Files (x86)',
+    'D:\\Program Files',
+  ])
+  const roots = windowsProgramFilesRoots({
+    drives: ['C', 'D', 'E'],
+    exists: (p) => existing.has(p),
+  })
+  assert.deepEqual(roots, ['C:\\Program Files', 'C:\\Program Files (x86)', 'D:\\Program Files'])
+})
+
+test('windowsProgramFilesRoots：不存在的盘符与目录都不贡献根', () => {
+  const roots = windowsProgramFilesRoots({ drives: ['Z'], exists: () => false })
+  assert.deepEqual(roots, [])
+})
+
+test('knownExecutableCandidates：extraRoots 让装在 D 盘的软件也能枚举到', () => {
+  const paths = knownExecutableCandidates('qq', DETECT_FAKE_ENV, {
+    extraRoots: ['D:\\Program Files'],
+  })
+  assert.ok(
+    paths.includes('D:\\Program Files\\Tencent\\QQNT\\Bin\\QQ.exe'),
+    '应包含 D 盘的 QQNT 候选',
+  )
+})
+
+test('knownExecutableCandidates：新版 QQ 的 QQNT 布局在候选里', () => {
+  const paths = knownExecutableCandidates('qq', DETECT_FAKE_ENV)
+  assert.ok(paths.includes('C:\\Program Files\\Tencent\\QQNT\\Bin\\QQ.exe'))
+  assert.ok(paths.includes('C:\\Program Files\\Tencent\\QQ\\Bin\\QQ.exe'))
+})
+
+test('knownExecutableCandidates：微信 4.x 的 Weixin 布局在候选里', () => {
+  const paths = knownExecutableCandidates('wechat', DETECT_FAKE_ENV)
+  assert.ok(paths.includes('C:\\Program Files\\Tencent\\Weixin\\Weixin.exe'))
+})
+
+test('knownExecutableCandidates：env 根与 extraRoots 重复时去重', () => {
+  const paths = knownExecutableCandidates('wechat', DETECT_FAKE_ENV, {
+    extraRoots: ['C:\\Program Files'],
+  })
+  const dup = paths.filter((p) => p === 'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe')
+  assert.equal(dup.length, 1)
+})
+
+test('detectLaunchPaths：extraRoots 命中 D 盘安装即可回填', async () => {
+  const target = 'D:\\Program Files\\Tencent\\QQNT\\Bin\\QQ.exe'
+  const result = await detectLaunchPaths('qq', {
+    inspect: async (p) => (p === target ? 'ok' : 'missing'),
+    env: DETECT_FAKE_ENV,
+    extraRoots: ['D:\\Program Files'],
+  })
+  assert.equal(result.preferred, target)
+})
+
+// ---------------------------------------------------------- 注册表候选（2.5 增强）
+
+test('detectLaunchPaths：extraCandidates（注册表）能命中自定义安装目录', async () => {
+  // 真机场景：QQ 装在 D:\软件安装目录\QQ\QQ.exe，目录扫描永远找不到。
+  const target = 'D:\\软件安装目录\\QQ\\QQ.exe'
+  const result = await detectLaunchPaths('qq', {
+    extraCandidates: [target],
+    inspect: async (p) => (p === target ? 'ok' : 'missing'),
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.preferred, target)
+  assert.deepEqual(result.candidates, [target])
+})
+
+test('detectLaunchPaths：extraCandidates 排在 extraPath 之后、已知候选之前', async () => {
+  // 三路来源都存在时，顺序应为：extraPath > extraCandidates > 已知候选（后者还有一长串）。
+  const userPath = 'E:\\user\\QQ.exe'
+  const registryPath = 'D:\\软件安装目录\\QQ\\QQ.exe'
+  const knownPath = 'C:\\Program Files\\Tencent\\QQ\\Bin\\QQ.exe'
+  const result = await detectLaunchPaths('qq', {
+    extraPath: userPath,
+    extraCandidates: [registryPath],
+    inspect: async () => 'ok',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.deepEqual(result.candidates.slice(0, 3), [userPath, registryPath, knownPath])
+  assert.ok(result.candidates.length > 3, '已知候选应排在后面一并带出')
+})
+
+test('detectLaunchPaths：extraCandidates 里的相对路径被拒（不该被当成命中）', async () => {
+  const result = await detectLaunchPaths('qq', {
+    extraCandidates: ['relative\\QQ.exe'],
+    inspect: async () => 'ok',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.candidates.includes('relative\\QQ.exe'), false)
+})
+
+test('detectLaunchPaths：extraCandidates 与已知候选重复时只出现一次', async () => {
+  const knownPath = 'C:\\Program Files\\Tencent\\QQ\\Bin\\QQ.exe'
+  const result = await detectLaunchPaths('qq', {
+    extraCandidates: [knownPath],
+    inspect: async () => 'ok',
+    env: DETECT_FAKE_ENV,
+  })
+  assert.equal(result.candidates.filter((p) => p === knownPath).length, 1)
 })

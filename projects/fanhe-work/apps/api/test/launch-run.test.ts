@@ -32,7 +32,8 @@ if (databaseUrl !== null) {
 }
 
 const { isLoopbackAddress } = await import('../src/launch/loopback.js')
-const { buildLaunchCommand } = await import('../src/launch/agent.js')
+const { buildLaunchCommand, buildLaunchEnv, shouldStripFromLaunchEnv } =
+  await import('../src/launch/agent.js')
 const { prisma } = await import('../src/db/prisma.js')
 const { hashPassword } = await import('../src/auth/password.js')
 const { login } = await import('../src/auth/login.js')
@@ -125,6 +126,53 @@ describe('启动命令组装', () => {
     const command = buildLaunchCommand(profile)
     command.args.push('--b')
     assert.deepEqual(profile.args, ['--a'])
+  })
+})
+
+/**
+ * 交给被启动客户端的环境。
+ *
+ * 钉的是真机事故：宿主注入的 `NODE_OPTIONS=--require=<fs 劫持 shim>` 被原样传给客户端，
+ * 而 Electron 系的客户端（QQNT）会执行 `--require`，启动即崩。这几条用例守住「注入通道
+ * 一律剔掉、普通变量一律保留」这条边界。
+ */
+describe('buildLaunchEnv（交给被启动客户端的环境）', () => {
+  test('剔掉 Node 的代码注入入口', () => {
+    assert.equal(shouldStripFromLaunchEnv('NODE_OPTIONS'), true)
+    assert.equal(shouldStripFromLaunchEnv('NODE_PATH'), true)
+    assert.equal(shouldStripFromLaunchEnv('NODE_REPL_EXTERNAL_MODULE'), true)
+  })
+
+  test('剔掉所有 ELECTRON_ 前缀的运行控制开关', () => {
+    assert.equal(shouldStripFromLaunchEnv('ELECTRON_RUN_AS_NODE'), true)
+    assert.equal(shouldStripFromLaunchEnv('ELECTRON_NO_ATTACH_CONSOLE'), true)
+    // 前缀判定不误伤「只是名字里含 electron」的普通变量。
+    assert.equal(shouldStripFromLaunchEnv('MY_ELECTRON_THING'), false)
+  })
+
+  test('真机事故复现：--require 注入被剔掉，普通变量照常保留', () => {
+    const env = buildLaunchEnv({
+      NODE_OPTIONS: '--require="D:/host/shim/node-language-shim.cjs"',
+      ELECTRON_RUN_AS_NODE: '1',
+      PATH: 'C:\\Windows',
+      APPDATA: 'C:\\Users\\x\\AppData\\Roaming',
+      TEMP: 'C:\\Temp',
+      SystemRoot: 'C:\\Windows',
+    })
+    assert.equal('NODE_OPTIONS' in env, false, '注入通道必须被剔掉')
+    assert.equal('ELECTRON_RUN_AS_NODE' in env, false)
+    // 客户端要用的系统变量一个都不能少，否则「某些机器上点启动没反应」。
+    assert.equal(env.PATH, 'C:\\Windows')
+    assert.equal(env.APPDATA, 'C:\\Users\\x\\AppData\\Roaming')
+    assert.equal(env.TEMP, 'C:\\Temp')
+    assert.equal(env.SystemRoot, 'C:\\Windows')
+  })
+
+  test('不改动入参对象（不就地删调用方的 process.env）', () => {
+    const source: NodeJS.ProcessEnv = { NODE_OPTIONS: '--require=x', PATH: 'p' }
+    const env = buildLaunchEnv(source)
+    assert.equal(source.NODE_OPTIONS, '--require=x', '源对象不该被改动')
+    assert.equal('NODE_OPTIONS' in env, false)
   })
 })
 

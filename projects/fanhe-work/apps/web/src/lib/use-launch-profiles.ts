@@ -85,10 +85,13 @@ export function useLaunchProfiles(): UseLaunchProfiles {
   }, [reloadToken])
 
   useEffect(() => {
+    // 状态要按 profile 逐条判路径（桌面态用本机自检覆盖服务端的 pathState，见
+    // `loadLaunchStatuses`），所以必须先有列表。列表没到位时不发这次请求。
+    if (profiles === null) return
     let cancelled = false
     void (async () => {
       try {
-        const list = await loadLaunchStatuses()
+        const list = await loadLaunchStatuses(profiles)
         if (cancelled) return
         setStatuses(Object.fromEntries(list.map((item) => [item.profileId, item])))
       } catch {
@@ -98,7 +101,7 @@ export function useLaunchProfiles(): UseLaunchProfiles {
     return () => {
       cancelled = true
     }
-  }, [statusToken])
+  }, [statusToken, profiles])
 
   const reload = useCallback(() => {
     setLoadError(null)
@@ -119,7 +122,9 @@ export function useLaunchProfiles(): UseLaunchProfiles {
 
   const updateProfile = useCallback(async (id: string, input: UpdateLaunchProfileRequest) => {
     const updated = await updateLaunchProfile(id, input)
-    setProfiles((current) => (current ?? []).map((profile) => (profile.id === updated.id ? updated : profile)))
+    setProfiles((current) =>
+      (current ?? []).map((profile) => (profile.id === updated.id ? updated : profile)),
+    )
     // 改的可能正是路径，而路径状态只有服务端查得到 —— 不重拉会带着旧标记。
     setStatusToken((token) => token + 1)
     return updated
