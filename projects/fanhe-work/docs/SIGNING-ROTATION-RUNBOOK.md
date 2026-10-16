@@ -43,6 +43,21 @@
 | 发布 | GitHub Release **`v0.1.3`**（ID `413502711`，tag → `6152dd3a`(annotated) → `1fe19fe`），三资产齐备，**建时即 draft=false**（未走 electron-builder 内置 publish，用 API 直传；⚠️ `target_commitish` 传 tag 对象 sha 会 422，annotated tag 要省略该字段） |
 | 发布后核对 | 未认证 by-tag **200**；线上 `latest.yml` 与本地**逐字节一致**（sha256 `caf4c1f1…`）；exe size 与 `latest.yml` 声明一致 |
 
+**2026-10-16 后续（`0.1.4` 发布，同一身份 `095CB390…` 续签）**：
+
+| 环节 | 结果 |
+| -- | -- |
+| 轮换后自检（发版前复核） | `RESULT=OK`、`CURRENT_DAYS_LEFT=1824`、指纹不变（`095CB390…`） |
+| 目标机条件（本机作接收机） | `signing:trust` `RESULT=OK` |
+| 前端 | `web build` 21.67 s，`check:web` 产物 0.1.4 == 仓库根、烘焙提交 `b6187c6` |
+| 打包 | `fanhe-work-setup-0.1.4.exe` **112,319,176 字节**，`dist` 6 分 4 秒 exit 0；⚠️ 仍需走用户系统代理 `http://127.0.0.1:7897`，**打包前必须手工删 `release/win-unpacked`**（372 M） |
+| 签名 | `verify:sign` 报告 6 个 exe 全 `STATUS=Valid VALUE=0`、`NOT_VALID_COUNT=0`、`CN=Fanhe Work` / `095CB390…`（`0.1.0`/`0.1.1` 仍是旧身份 `0604B238…`，新旧根并存各自成立） |
+| 验收 | `verify:sign` + `verify:pack` **PASS，47 项断言全过**，含「产物实际指纹与身份档案一致」；setup 与 `梵禾 Work.exe` 双 `FileVersion=0.1.4`、`Get-AuthenticodeSignature` 均 `Valid` |
+| 哈希 | 线上/本地双 sha512(base64) **MATCH**：`IYLgVckOrHkh3QZ5wCBJMpR+DkpvpoIJOmgH+7qiWcXB2/rjPU/scj5jTdm6UOEs2R0SFyogjb0jmdcW+Ho+QA==` |
+| 发布 | GitHub Release **`v0.1.4`**（ID `415080709`，tag → `v0.1.4`(annotated) → `b6187c6`），三资产齐备，**建时即 draft=false**（API 直传，annotated tag 仍省略 `target_commitish`）；资产 id：exe `647663191` / blockmap `647663871` / latest.yml `647663945` |
+| 发布后核对 | 未认证 by-tag **200**（size 8890）；线上 `latest.yml` 与本地**逐字节一致**（349 字节）；线上 exe size 112,319,176 且 **sha512 与 `latest.yml` 声明 MATCH** |
+| 提交流水 | `fe26f28`(lint) → `58387db`(图标/头像) → `d20f81f`(§2.x 复验修复 + P1 凭据层) → `b6187c6`(提号，**被烘焙**) → `d4c1bc3`(sync-version 同步 apps/desktop) |
+
 **本机作为「接收机」的条件已实测通过**（`signing:trust-check`，只读）：
 
 | 项 | 实测 |
