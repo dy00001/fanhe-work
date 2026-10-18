@@ -181,24 +181,28 @@ export function LaunchPanel() {
    * `updatedAt`），而凭据有动就要动 —— 它们存在不同的地方，互不牵连。
    */
   async function handleSubmit(values: LaunchFormValues): Promise<void> {
+    // `login` 属于本机加密凭据，不属于服务端启动配置 schema，分别走本地凭据通道。
+    const { login, ...profileValues } = values
     if (editing === null) {
-      const created = await createProfile(values)
+      const created = await createProfile(profileValues)
       const outcome =
-        values.login === undefined
+        login === undefined
           ? ({ action: 'keep' } as const)
-          : await applyCredentialIntent(created.id, values.login, created.name)
+          : await applyCredentialIntent(created.id, login, created.name)
       setNotice({ kind: 'ok', text: joinNotice(`已新增「${created.name}」`, outcome) })
       return
     }
 
-    if (!hasChanges(editing, values) && values.login === undefined) return
+    if (!hasChanges(editing, values) && login === undefined) return
 
     const target = editing
-    const updated = hasChanges(editing, values) ? await updateProfile(target.id, values) : target
+    const updated = hasChanges(editing, values)
+      ? await updateProfile(target.id, profileValues)
+      : target
     const outcome =
-      values.login === undefined
+      login === undefined
         ? ({ action: 'keep' } as const)
-        : await applyCredentialIntent(updated.id, values.login, updated.name)
+        : await applyCredentialIntent(updated.id, login, updated.name)
     setNotice({ kind: 'ok', text: joinNotice(`已保存「${updated.name}」`, outcome) })
   }
 

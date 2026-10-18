@@ -77,12 +77,13 @@ import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
 import { readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { brandIconPath, TRAY_ICON_WIDTH } from './brand-icon.js'
+import { brandIconPath, TRAY_ICON_WIDTH, windowIconPath } from './brand-icon.js'
 import {
   createCredentialVault,
   normalizeCredentialInput,
   normalizeProfileId,
   normalizeProfileIds,
+  type CredentialVault,
 } from './credential-vault.js'
 import {
   describeSource,
@@ -102,7 +103,7 @@ import {
   type LaunchAgentModule,
 } from './agent.js'
 import {
-  clickLoginAfterLaunch,
+  fillLoginFieldsAfterLaunch,
   findProcessWindow,
   shouldClickLogin,
   tileWindows,
@@ -277,15 +278,15 @@ function buildWindow(visible: boolean): BrowserWindow {
     minHeight: 640,
     show: visible,
     autoHideMenuBar: true,
-    // 窗口图标：**标题栏左上角与任务栏都取它**。
+    // 窗口图标：供 Windows 标题栏左上角使用。
     //
     // 不显式设的话，开发态窗口图标是 `electron.exe` 自带的 Electron 默认图标（一个
     // 深色圆），而打包态才从 exe 的图标资源里取 —— 于是同一个界面在两种形态下顶着
     // 两个不同的图标，开发时看不出问题，装完才发现。显式指定让两种形态一致。
     //
-    // 用 `app-icon.png`（方形）而不是 `logo.png`（362×391）：槽位是方的，非方形图
-    // 会被留白。取舍与来源见 `brand-icon.ts` 文件头。
-    icon: brandIconPath(DIST_ROOT),
+    // 标题栏尺寸很小，使用简化后的多尺寸 ICO，避免完整印章缩小后糊成一团。
+    // 任务栏和托盘继续使用品牌 PNG，见 `brand-icon.ts`。
+    icon: windowIconPath(DIST_ROOT),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -495,6 +496,9 @@ async function loadLaunchAgent(): Promise<
   }
 }
 
+/** 本机凭据库只由主进程持有，启动后的登录自动填写直接调用，不经过 IPC 回传明文。 */
+let credentialVaultForLaunch: CredentialVault | null = null
+
 /**
  * §2.4 best-effort 点登录：fire-and-forget，只把结果写进日志供排障。
  *
@@ -504,13 +508,30 @@ async function loadLaunchAgent(): Promise<
  * 毫无差别，真机验证也无从判断 Enter 是否落到登录窗。
  */
 async function runSingleLoginClick(item: PostLaunchItem): Promise<void> {
-  const attempt = await clickLoginAfterLaunch(item.software, item.pid)
-  console.log(
-    `[launch] 登录点击 ${item.software} pid=${item.pid}` +
-      ` 尝试=${attempt.attempted ? '是' : '否'} 结果=${attempt.reason}` +
-      `${attempt.waitedMs === undefined ? '' : ` 等待=${attempt.waitedMs}ms`}` +
-      `${attempt.detail === undefined ? '' : `（${attempt.detail}）`}`,
+  if (!shouldClickLogin(item.software)) return
+  const credential = await credentialVaultForLaunch?.getForLaunch(item.profileId)
+  if (credential === undefined || credential === null) {
+    console.log(
+      `[launch] 登录凭据不可用 ${item.software} profileId=${item.profileId} 原因=未保存或无法解密`,
+    )
+    return
+  }
+
+  const filled = await fillLoginFieldsAfterLaunch(
+    item.software,
+    item.pid,
+    credential.account,
+    credential.password,
   )
+  if (!filled.ok) {
+    console.warn(
+      `[launch] 登录框填写失败 ${item.software} pid=${item.pid} 原因=${filled.reason}` +
+        `${filled.detail === undefined ? '' : `（${filled.detail}）`}`,
+    )
+    return
+  }
+
+  console.log(`[launch] 自动登录 ${item.software} pid=${item.pid} 填写与提交=已执行`)
 }
 
 /**
@@ -591,7 +612,7 @@ async function runPostLaunchBatch(items: readonly PostLaunchItem[]): Promise<voi
     )
   }
 
-  // 账号密码登录：串行。顺序与用户配的顺序一致，日志也按这个顺序读。
+  // 账号密码登录：逐条解密并填入对应进程的窗口，再提交登录。串行保证焦点与凭据配对。
   for (const item of items) {
     if (!shouldClickLogin(item.software)) continue
     await runSingleLoginClick(item)
@@ -902,11 +923,14 @@ function registerCredentialIpc(): void {
     decrypt: (ciphertext) => safeStorage.decryptString(ciphertext),
     isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
   })
+  credentialVaultForLaunch = vault
 
   ipcMain.handle('credential:status', async (_event, payload: unknown) => {
     const profileIds = normalizeProfileIds((payload as { profileIds?: unknown } | null)?.profileIds)
-    // 空查询直接返回、不读文件：与 `launch:diagnostics` 的「空配置先判」同一条取舍。
-    if (profileIds.length === 0) return { items: [] }
+    // 空查询不读凭据文件，但仍返回系统加密能力，供新增配置判断账号密码输入区是否可用。
+    if (profileIds.length === 0) {
+      return { items: [], encryptionAvailable: safeStorage.isEncryptionAvailable() }
+    }
     const items = await vault.status(profileIds)
     // 注意：**凭据库损坏时这里全部报 `none`**（读不出来就没有条目）。那种状态会在
     // 用户点保存时由 `vault_corrupt` 明确报出来并给出文件路径，因此不在这里单独

@@ -24,6 +24,7 @@ import { test } from 'node:test'
 import { platform } from 'node:os'
 
 import {
+  buildFillLoginScript,
   buildFindWindowScript,
   buildPressEnterScript,
   buildTileWindowsScript,
@@ -382,4 +383,68 @@ test('clickLoginAfterLaunch：未知软件按关处理，不碰窗口', async ()
   const result = await clickLoginAfterLaunch('something-new', 1234)
   assert.equal(result.attempted, false)
   assert.equal(result.reason, 'disabled')
+})
+
+/* ---------------- 登录框代填（P1 续） ---------------- */
+
+test('buildFillLoginScript：凭据只从 stdin 读，脚本正文不含账号密码', () => {
+  const script = buildFillLoginScript('qq', 4321)
+  // 凭据必须从 stdin 反序列化进来。若改成拼进命令行，密码会出现在进程列表与
+  // 命令行审计里 —— 这是这个功能唯一不能退让的一条。
+  assert.ok(script.includes('[Console]::In.ReadToEnd()'), '凭据应从 stdin 读入')
+  assert.ok(script.includes('ConvertFrom-Json'), 'stdin 内容应按 JSON 解析')
+  // 正文只允许出现「占位读取」，不允许出现赋值字面量。
+  assert.ok(script.includes('$credential.account'), '账号应取自 stdin 反序列化结果')
+  assert.ok(script.includes('$credential.password'), '密码应取自 stdin 反序列化结果')
+  assert.equal(/\$credential\s*=\s*'/i.test(script), false, '不得在脚本里写死凭据')
+  assert.equal(/account\s*=\s*"/i.test(script), false, '不得在脚本里写死账号')
+})
+
+test('buildFillLoginScript：目标窗口句柄进脚本', () => {
+  const script = buildFillLoginScript('qianniu', 987654)
+  assert.ok(script.includes('[IntPtr]987654'), '应把目标 hwnd 注入脚本')
+})
+
+test('buildFillLoginScript：QQ 与千牛用各自的宽高比门', () => {
+  const readRatio = (software) => {
+    const match = /\$expectedRatio = ([0-9.]+)/.exec(buildFillLoginScript(software, 1))
+    assert.ok(match !== null, `${software} 的脚本里应有 expectedRatio`)
+    return Number(match[1])
+  }
+  const qq = readRatio('qq')
+  const qianniu = readRatio('qianniu')
+  // 两个登录页的形状差一倍以上，同一个比值不可能同时覆盖；这正是分叉的意义。
+  assert.ok(Math.abs(qq - 320 / 460) < 1e-6, `QQ 比值应为 320/460，实际 ${qq}`)
+  assert.ok(Math.abs(qianniu - 760 / 540) < 1e-6, `千牛比值应为 760/540，实际 ${qianniu}`)
+  assert.ok(qianniu / qq > 1.8, '两个比值应显著不同')
+  // 不匹配时只回报、不输入：`window-mismatch` 必须出现在第一次填之前。
+  const mismatchAt = buildFillLoginScript('qq', 1).indexOf('window-mismatch')
+  const firstFillAt = buildFillLoginScript('qq', 1).indexOf('Fill-Ratio 0.')
+  assert.ok(
+    mismatchAt !== -1 && firstFillAt !== -1 && mismatchAt < firstFillAt,
+    '尺寸不匹配时应先退出、不输入',
+  )
+})
+
+test('buildFillLoginScript：前台校验先于任何输入', () => {
+  const script = buildFillLoginScript('qq', 1)
+  const foregroundAt = script.indexOf('GetForegroundWindow() -ne $hwnd')
+  const firstClickAt = script.indexOf('Click-Ratio 0.')
+  assert.ok(foregroundAt !== -1, '应有「目标窗口是否在前台」的校验')
+  assert.ok(firstClickAt !== -1, '应有点击动作')
+  // 顺序错了等于「先敲密码，再检查敲到了哪」。
+  assert.ok(foregroundAt < firstClickAt, '前台校验必须早于第一次点击')
+})
+
+test('buildFillLoginScript：不使用 PS7 专有语法（系统自带的是 5.1）', () => {
+  const script = buildFillLoginScript('qq', 1)
+  assert.equal(/\b0u\b/.test(script), false, '不得出现 0u 字面量（PS 5.1 不认）')
+  assert.equal(/\?\?/.test(script), false, '不得使用 ?? 空合并（PS 7 才有）')
+  assert.ok(script.includes('[uint32]'), '无符号初值应显式声明 [uint32]')
+})
+
+test('buildFillLoginScript：Add-Type 的 here-string 首尾换行必须保留', () => {
+  const script = buildFillLoginScript('qianniu', 1)
+  assert.ok(script.includes('Add-Type -TypeDefinition @"\n'), '@" 之后必须紧跟换行')
+  assert.ok(/\n"@/.test(script), '"@ 必须独占一行')
 })

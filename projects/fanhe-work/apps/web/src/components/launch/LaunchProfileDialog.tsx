@@ -140,7 +140,7 @@ export function LaunchProfileDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-lg"
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain sm:max-w-lg"
         /**
          * 把初始焦点改到路径字段上。
          *
@@ -530,18 +530,23 @@ function LaunchProfileForm({
             「没有密码」会让用户在换机后反复重填、反复失败，而他无法从界面看出问题不在
             自己身上。
           */}
-          {credential.snapshot?.state === 'saved' && (
-            <p className="text-xs text-muted-foreground">
-              本机已保存账号{' '}
-              <span className="font-medium text-foreground">
-                {credential.snapshot.accountMasked}
-              </span>
-              ，保存时保持不变，除非在下面重新填写。
+          {credential.loading ? (
+            <p className="text-xs text-muted-foreground">正在检查本机加密存储…</p>
+          ) : credential.snapshot?.state === 'saved' ? (
+            <p className="text-xs text-emerald-700">
+              ✓ 密码已加密保存在本机，账号{' '}
+              <span className="font-medium">{credential.snapshot.accountMasked}</span>
+              。留空表示保持已保存内容。
             </p>
-          )}
-          {credential.snapshot?.state === 'undecryptable' && (
+          ) : credential.snapshot?.state === 'undecryptable' ? (
             <p className="text-xs text-destructive">
               本机保存的密码解不开（换电脑或换 Windows 用户后属正常）。请重新填写账号与密码。
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {credentialUsable
+                ? '当前尚未保存账号密码。填写账号和密码并保存配置后，将加密保存在本机。'
+                : '账号密码尚未保存。请在梵禾 Work 桌面版中使用本机加密存储。'}
             </p>
           )}
 

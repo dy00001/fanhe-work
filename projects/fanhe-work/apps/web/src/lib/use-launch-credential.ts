@@ -55,17 +55,19 @@ export function useProfileCredential(profileId: string | null): UseProfileCreden
   }, [])
 
   useEffect(() => {
-    // 新增模式没有 id，也就不存在「这条配置存了哪个账号」这回事。此时上面那段渲染期
-    // 调整已经把状态清空了，这里直接返回即可。
-    if (profileId === null) return
-
     let cancelled = false
     void (async () => {
       try {
         setLoading(true)
-        const reply = await fetchCredentialStatus([profileId])
+        // 新增模式没有凭据条目，但仍需向桌面主进程查询系统加密能力，否则输入区会
+        // 因为默认 false 一直禁用。空 profileIds 只查能力状态，不读取凭据文件。
+        const reply = await fetchCredentialStatus(profileId === null ? [] : [profileId])
         if (cancelled) return
-        setSnapshot(reply.items.find((item) => item.profileId === profileId) ?? null)
+        setSnapshot(
+          profileId === null
+            ? null
+            : (reply.items.find((item) => item.profileId === profileId) ?? null),
+        )
         setEncryptionAvailable(reply.encryptionAvailable)
       } catch {
         // 查询失败按「没有凭据」处理，`encryptionAvailable` 保持 false：输入区被禁用，

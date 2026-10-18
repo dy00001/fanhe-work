@@ -39,7 +39,7 @@
  * 初值一律写成 `[uint32]$x = 0`。拼脚本时有单测钉着这几条，改之前先看测试文件。
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 
 import { supportsAccountLogin } from '@fanhe/shared'
@@ -69,7 +69,7 @@ public class Win32LoginClick {
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-  [DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -632,6 +632,203 @@ export async function findProcessWindow(
       (stdout) => finish(parseFindWindowOutput(stdout)),
       (detail) => finish({ hwnd: null, reason: 'failed', detail }),
     )
+  })
+}
+
+export type FillLoginFieldsResult =
+  | { ok: true; hwnd: number }
+  | {
+      ok: false
+      reason: 'unsupported-platform' | 'no-window' | 'window-mismatch' | 'failed'
+      detail?: string
+    }
+
+/**
+ * 拼「在登录窗里填账号密码」那段 PowerShell。
+ *
+ * 单独抽出来是为了让它可被单测钉住。这段脚本有三条不能破的性质，而它们在真机上
+ * 坏了只会表现为「有时登不上去」：
+ *   ① 凭据只从 **stdin** 进来，脚本正文里不含任何账号密码（否则会进命令行、进
+ *      进程列表、进日志）；
+ *   ② 填之前必须核对窗口宽高比，不匹配就**不输入**（登录页改版后坐标会指到别处）；
+ *   ③ 只有目标窗口确实在前台才继续（否则密码会被敲进别的窗口）。
+ *
+ * `hwnd` 只用于拼 `[IntPtr]` 字面量，不参与任何字符串插值以外的用途。
+ */
+export function buildFillLoginScript(software: string, hwnd: number): string {
+  const isQq = software === 'qq'
+  const expectedRatio = isQq ? 320 / 460 : 760 / 540
+  return `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+$credential = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32CredentialInput {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public MOUSEINPUT mi; }
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool attachState);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
+  public static void Click(IntPtr hWnd, int x, int y) {
+    POINT p = new POINT { X=x, Y=y };
+    if (!ClientToScreen(hWnd, ref p)) throw new Exception("ClientToScreen failed");
+    SetCursorPos(p.X, p.Y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero);
+  }
+  static void Key(ushort vk, ushort scan, uint flags) {
+    INPUT item = new INPUT { type=1, U=new INPUTUNION { ki=new KEYBDINPUT { wVk=vk, wScan=scan, dwFlags=flags, dwExtraInfo=UIntPtr.Zero } } };
+    if (SendInput(1, new INPUT[] { item }, Marshal.SizeOf(typeof(INPUT))) != 1) throw new Exception("SendInput failed");
+  }
+  public static void ClearField() { Key(0x11, 0, 0); Key(0x41, 0, 0); Key(0x41, 0, 2); Key(0x11, 0, 2); }
+  public static void TypeText(string text) { foreach (char c in text) { Key(0, c, 4); Key(0, c, 6); } }
+}
+"@
+$hwnd = [IntPtr]${String(hwnd)}
+$rect = New-Object Win32CredentialInput+RECT
+if (-not [Win32CredentialInput]::GetClientRect($hwnd, [ref]$rect)) { throw '无法读取登录窗口尺寸' }
+$width = $rect.Right - $rect.Left
+$height = $rect.Bottom - $rect.Top
+$ratio = $width / [double]$height
+$expectedRatio = ${String(expectedRatio)}
+if ($width -lt 250 -or $height -lt 350 -or [Math]::Abs($ratio - $expectedRatio) -gt 0.18) {
+  Write-Output ('{"ok":false,"reason":"window-mismatch","width":' + $width + ',"height":' + $height + '}')
+  exit 0
+}
+[uint32]$targetProcess = 0
+$targetThread = [Win32CredentialInput]::GetWindowThreadProcessId($hwnd, [ref]$targetProcess)
+$currentThread = [Win32CredentialInput]::GetCurrentThreadId()
+[Win32CredentialInput]::AttachThreadInput($targetThread, $currentThread, $true) | Out-Null
+[Win32CredentialInput]::ShowWindow($hwnd, 9) | Out-Null
+[Win32CredentialInput]::SetForegroundWindow($hwnd) | Out-Null
+[Win32CredentialInput]::AttachThreadInput($targetThread, $currentThread, $false) | Out-Null
+if ([Win32CredentialInput]::GetForegroundWindow() -ne $hwnd) { throw '登录窗口无法置于前台，为避免把密码发往其他窗口，已停止输入' }
+Start-Sleep -Milliseconds 300
+function Click-Ratio([double]$x, [double]$y) {
+  [Win32CredentialInput]::Click($hwnd, [int]($width * $x), [int]($height * $y))
+  Start-Sleep -Milliseconds 180
+}
+function Fill-Ratio([double]$x, [double]$y, [string]$value) {
+  Click-Ratio $x $y
+  [Win32CredentialInput]::ClearField()
+  [Win32CredentialInput]::TypeText($value)
+  Start-Sleep -Milliseconds 160
+}
+if (${String(isQq ? '$true' : '$false')}) {
+  # QQ 初始页需先切到账号登录。协议复选框由用户自行确认，不由程序代勾。
+  Click-Ratio 0.375 0.918
+  Start-Sleep -Milliseconds 700
+  Fill-Ratio 0.50 0.378 ([string]$credential.account)
+  Fill-Ratio 0.50 0.490 ([string]$credential.password)
+  Click-Ratio 0.50 0.713
+} else {
+  # 千牛登录页直接显示账号、密码与登录按钮。
+  Fill-Ratio 0.70 0.465 ([string]$credential.account)
+  Fill-Ratio 0.70 0.565 ([string]$credential.password)
+  Click-Ratio 0.70 0.750
+}
+Write-Output ('{"ok":true,"width":' + $width + ',"height":' + $height + ',"submitted":true}')
+`.trim()
+}
+
+/**
+ * 在目标进程自己的登录窗中填账号和密码。
+ * 凭据通过子进程 stdin 传递，不放进 PowerShell 命令行、日志或临时文件。
+ * 根据截图中确认的 QQ 与千牛登录页布局定位输入框。
+ */
+export async function fillLoginFieldsAfterLaunch(
+  software: string,
+  pid: number,
+  account: string,
+  password: string,
+  options: WindowWaitOptions = {},
+): Promise<FillLoginFieldsResult> {
+  if (platform() !== 'win32') return { ok: false, reason: 'unsupported-platform' }
+  const window = await findProcessWindow(pid, options)
+  if (window.hwnd === null) {
+    return {
+      ok: false,
+      reason: 'no-window',
+      ...(window.detail === undefined ? {} : { detail: window.detail }),
+    }
+  }
+
+  const script = buildFillLoginScript(software, window.hwnd)
+
+  return new Promise<FillLoginFieldsResult>((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    // 计时器要等 spawn 成功才能建，而 `finish` 又要能清掉它 —— 顺序上没法用 `const`
+    // 直接持有，因此用一个不可重绑定的容器持可变字段（`let` 在「只赋值一次」时会被
+    // `prefer-const` 判红）。
+    const deadline: { id?: ReturnType<typeof setTimeout> } = {}
+    const finish = (result: FillLoginFieldsResult): void => {
+      if (settled) return
+      settled = true
+      if (deadline.id !== undefined) clearTimeout(deadline.id)
+      resolve(result)
+    }
+    let child
+    try {
+      child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+    } catch (error) {
+      return finish({
+        ok: false,
+        reason: 'failed',
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    }
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    child.on('error', (error) => finish({ ok: false, reason: 'failed', detail: error.message }))
+    child.on('close', (code) => {
+      let parsed: { ok?: unknown; reason?: unknown; width?: unknown; height?: unknown }
+      try {
+        parsed = JSON.parse(stdout.trim()) as typeof parsed
+      } catch {
+        return finish({
+          ok: false,
+          reason: 'failed',
+          detail: stderr.trim() || `PowerShell exit ${code}`,
+        })
+      }
+      if (parsed.ok === true) return finish({ ok: true, hwnd: window.hwnd as number })
+      if (parsed.reason === 'window-mismatch') {
+        return finish({
+          ok: false,
+          reason: 'window-mismatch',
+          detail: `窗口尺寸 ${String(parsed.width ?? '?')}×${String(parsed.height ?? '?')} 与 ${software} 登录页布局不匹配`,
+        })
+      }
+      finish({ ok: false, reason: 'failed', detail: stderr.trim() || `PowerShell exit ${code}` })
+    })
+    deadline.id = setTimeout(() => {
+      child.kill()
+      finish({ ok: false, reason: 'failed', detail: '填写登录框超时' })
+    }, 38000)
+    child.stdin.end(JSON.stringify({ account, password }), 'utf8')
   })
 }
 

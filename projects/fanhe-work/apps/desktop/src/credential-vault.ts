@@ -317,6 +317,8 @@ export type CredentialVaultDeps = {
 export type CredentialVault = {
   /** 查一组配置的凭据状态。不返回任何明文。 */
   status: (profileIds: readonly string[]) => Promise<readonly CredentialStatusResult[]>
+  /** 仅供主进程启动后自动填写使用。明文不得通过 IPC、日志或网络传递。 */
+  getForLaunch: (profileId: string) => Promise<StoredCredential | null>
   /** 保存一条。加密不可用时拒绝，并给出可展示的原因。 */
   save: (input: CredentialInput) => Promise<CredentialWriteResult>
   /** 删掉一条。软删除是幂等的：本来就没有也返回 ok。 */
@@ -498,6 +500,15 @@ export function createCredentialVault(
     return { ok: true }
   }
 
+  async function getForLaunch(profileId: string): Promise<StoredCredential | null> {
+    const normalized = normalizeProfileId(profileId)
+    if (normalized === null) return null
+    const read = await readVault(vaultPath, deps)
+    if (read.kind !== 'ok') return null
+    const item = read.file.items.find((entry) => entry.profileId === normalized)
+    return item === undefined ? null : decryptCredential(item.blob, deps)
+  }
+
   async function remove(profileId: string): Promise<CredentialWriteResult> {
     const normalized = normalizeProfileId(profileId)
     if (normalized === null) {
@@ -524,5 +535,5 @@ export function createCredentialVault(
     )
   }
 
-  return { status, save, remove }
+  return { status, getForLaunch, save, remove }
 }
