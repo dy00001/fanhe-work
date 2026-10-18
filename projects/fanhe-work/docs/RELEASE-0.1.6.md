@@ -69,4 +69,10 @@
 | 产物 | `fanhe-work-setup-0.1.6.exe` 112,381,544 字节；`.blockmap` 118,748 字节；`latest.yml` 349 字节 |
 | 版本号 | `梵禾 Work.exe` 与安装包双 `FileVersion=0.1.6` |
 
-GitHub Release 尚未创建。发布是不可逆的外部动作，需确认后再打 tag、建 Release 并上传三个资产。
+已发布。GitHub Release ID `416546342`，tag `v0.1.6` 指向 `76cf82a`，`draft=false`，三资产均为 `uploaded`。发布后三项核对全部通过。
+
+| 核对项 | 结果 |
+| --- | --- |
+| 未认证 by-tag | **200**，`draft=false`、`prerelease=false` |
+| 线上 `latest.yml` 与本地 | **逐字节一致**（349 字节） |
+| 线上 exe 的 sha512 与 `latest.yml` 声明 | **MATCH**（`3Z0sBrml…`，下载 112,381,544 字节后计算） |
