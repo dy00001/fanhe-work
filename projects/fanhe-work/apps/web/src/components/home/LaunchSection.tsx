@@ -24,7 +24,12 @@ import { Link } from 'react-router'
 import { useAuth } from '../../auth/useAuth'
 import { ApiError } from '../../lib/api'
 import { applyCredentialIntent, describeCredentialOutcome } from '../../lib/launch-credentials'
-import { launchRunRecovery, LaunchRunError, runLaunchProfile } from '../../lib/launch'
+import {
+  launchRunRecovery,
+  LaunchRunError,
+  runLaunchProfile,
+  runLaunchProfiles,
+} from '../../lib/launch'
 import {
   LAUNCH_APP_ICON_SIZE,
   pickLaunchIconUrl,
@@ -76,10 +81,9 @@ const AI_MODULES: readonly { title: string; desc: string; hue: string; Icon: Luc
  * `lib/launch-icons.ts` 那套通用图标。原先那套通用图标当年写的是「不引品牌图标：商标有
  * 额外约束」，代价是每枚图标都认不出是哪个软件 —— 用户已拍板改为取真实图标。
  *
- * 主卡大「一键启动」按钮启动当前选中（或首个）实例（§2.7）；勾选多条、批量启动的入口
- * 在工作台面板的 2.2 能力里，本区块只做「选一条 + 启动 + 管理」的缩略视图。管理入口
- * （新增 / 编辑 / 排序 / 删除）仍在完整面板上，地址 `/workbench/launch`；区块头右侧
- * 的「管理配置」是它的入口。
+ * 主卡大「一键启动」按钮启动全部已配置实例；每枚托盘图标上的小火箭仍可单独启动该实例。
+ * 管理入口（新增 / 编辑 / 排序 / 删除）仍在完整面板上，地址 `/workbench/launch`；
+ * 区块头右侧的「管理配置」是它的入口。
  */
 export function LaunchSection() {
   const { can } = useAuth()
@@ -123,7 +127,7 @@ export function LaunchSection() {
   const selectedId = userSelectedId ?? profiles?.[0]?.id ?? null
 
   async function handleLaunch(profile: LaunchProfile): Promise<void> {
-    // 点托盘里某条的火箭，也把它标成「当前选中」，让大按钮落到同一条上。
+    // 点托盘里某条的火箭，也把它标成「当前选中」，便于查看该软件的状态。
     setUserSelectedId(profile.id)
     setLaunching(true)
     setNotice(null)
@@ -151,18 +155,61 @@ export function LaunchSection() {
     }
   }
 
+  async function handleLaunchAll(): Promise<void> {
+    const targets = [...(profiles ?? [])]
+    if (targets.length === 0) return
+
+    setLaunching(true)
+    setNotice(null)
+    try {
+      const result = await runLaunchProfiles(targets)
+      const nameById = new Map(targets.map((profile) => [profile.id, profile.name]))
+      if (result.summary.failed === 0) {
+        setNotice({ kind: 'ok', text: `已启动全部 ${result.summary.success} 个软件` })
+      } else {
+        const failures = result.results
+          .filter((item) => !item.ok)
+          .map(
+            (item) =>
+              `${nameById.get(item.profileId) ?? '未命名配置'}：${item.detail ?? '启动失败'}`,
+          )
+        setNotice({
+          kind: 'error',
+          text: `已启动 ${result.summary.success}/${result.summary.total} 个，失败 ${failures.join('；')}`,
+        })
+      }
+    } catch (error) {
+      const relocate =
+        (error instanceof ApiError || error instanceof LaunchRunError) &&
+        launchRunRecovery(error) === 'relocate'
+      const message =
+        error instanceof ApiError || error instanceof LaunchRunError
+          ? error.message
+          : '启动失败，请稍后重试'
+      setNotice({
+        kind: 'error',
+        text: relocate ? `${message}。请到「管理配置」里重新指定路径。` : message,
+      })
+    } finally {
+      setLaunching(false)
+      recheckStatuses()
+    }
+  }
+
   /**
    * 保存。与 `LaunchPanel` 同一套两步：先落配置（新增时配置还没有 id，凭据按 id 关联），
    * 再落本机凭据。两处各自写一遍迟早有一处忘了处理「清除」，因此这句话在两边都引
    * `applyCredentialIntent`。
    */
   async function handleSubmit(values: LaunchFormValues): Promise<void> {
+    // `login` 属于本机加密凭据，不属于服务端启动配置 schema，分别走本地凭据通道。
+    const { login, ...profileValues } = values
     if (editing === null) {
-      const created = await createProfile(values)
+      const created = await createProfile(profileValues)
       const outcome =
-        values.login === undefined
+        login === undefined
           ? ({ action: 'keep' } as const)
-          : await applyCredentialIntent(created.id, values.login, created.name)
+          : await applyCredentialIntent(created.id, login, created.name)
       const extra = describeCredentialOutcome(outcome)
       setNotice({
         kind: 'ok',
@@ -171,11 +218,11 @@ export function LaunchSection() {
       return
     }
 
-    const updated = await updateProfile(editing.id, values)
+    const updated = await updateProfile(editing.id, profileValues)
     const outcome =
-      values.login === undefined
+      login === undefined
         ? ({ action: 'keep' } as const)
-        : await applyCredentialIntent(updated.id, values.login, updated.name)
+        : await applyCredentialIntent(updated.id, login, updated.name)
     const extra = describeCredentialOutcome(outcome)
     setNotice({
       kind: 'ok',
@@ -208,9 +255,7 @@ export function LaunchSection() {
     <section>
       <div className="mb-5 flex items-baseline gap-2.5">
         <h2 className="text-xl leading-7 font-medium">一键启动</h2>
-        <span className="text-sm text-muted-foreground">
-          配置本机客户端的启动路径，在这里一键唤起
-        </span>
+        <span className="text-sm text-muted-foreground">点击一键启动，批量唤起已配置软件</span>
         <Link
           to={`${navPath(NAV_CODES.WORKBENCH)}/launch`}
           className="ml-auto flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -285,6 +330,7 @@ export function LaunchSection() {
                           type="button"
                           onClick={() => void handleLaunch(profile)}
                           aria-label={`启动 ${profile.name}`}
+                          disabled={launching}
                           className="absolute top-1 right-1 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
                         >
                           <Rocket className="size-3.5" />
@@ -392,9 +438,9 @@ export function LaunchSection() {
               <button
                 type="button"
                 onClick={() => {
-                  if (selected !== null) void handleLaunch(selected)
+                  void handleLaunchAll()
                 }}
-                disabled={launching || selectedId === null}
+                disabled={launching || profiles.length === 0}
                 className="launch-cta"
               >
                 {launching ? (
@@ -402,7 +448,7 @@ export function LaunchSection() {
                 ) : (
                   <Rocket className="size-[18px]" />
                 )}
-                一键启动
+                {launching ? '正在启动全部软件' : '一键启动'}
               </button>
             ) : (
               <Link to={`${navPath(NAV_CODES.WORKBENCH)}/launch`} className="launch-cta">
