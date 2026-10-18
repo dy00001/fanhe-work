@@ -187,13 +187,9 @@ function NavEntry({
         cn(
           // 悬停「一帧到位」、不带类型 transition —— 设计稿（原型 §5 规则①）里原 UI
           // 除分段控件外所有悬停都是瞬时的，导航项是其中最典型的一处。
-          // **图标对齐（按原型 `.app.collapsed .item{justify-content:center;padding:0}`）**：
-          // 展开态图标左缘 x=22（nav 的 px-3 + 条目 px-2.5）；折叠态图标在 48px
-          // 内容区居中，`pl-[15px]` → 18px 图标中心落 x=36。这里用 `pl-[15px]` 而
-          // 不是 `justify-center`：宽度动画期间后者会让图标瞬间甩到远端再滑回，而
-          // `transition-[padding]` 让图标屏幕 x 平滑走 22→27（中心 31→36），不跳位。
+          // 折叠态与底部工具栏采用相同的居中布局，图标共用侧栏水平中线。
           'flex h-8 w-full shrink-0 items-center gap-2.5 rounded-xl transition-[padding] duration-200 ease-out',
-          collapsed ? 'pr-0 pl-[15px]' : indent ? 'pr-2.5 pl-[38px]' : 'px-2.5',
+          collapsed ? 'justify-center px-0' : indent ? 'pr-2.5 pl-[38px]' : 'px-2.5',
           // 当前项按原型是「加 2px 字号」而不是加粗（16/400）。
           isActive
             ? 'bg-accent text-base font-normal text-foreground'
@@ -219,7 +215,11 @@ function NavEntry({
   // 展开态下名称就在链接上，再加气泡是重复；折叠态下它是唯一的名称来源。
   return collapsed ? (
     <Tooltip>
-      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      {/* Radix Slot 不能直接合并 NavLink 的 className 回调，会把函数转成 DOM class 文本。
+          用外层盒子承接 Tooltip 属性，让 NavLink 自己处理当前路由样式。 */}
+      <TooltipTrigger asChild>
+        <div className="w-full">{link}</div>
+      </TooltipTrigger>
       <TooltipContent side="right">
         {item.planned ? `${item.label}（开发中）` : item.label}
       </TooltipContent>
@@ -263,11 +263,8 @@ function NavGroupBlock({
           aria-expanded={flyoutOpen}
           aria-label={group.label}
           title={group.label}
-          // **图标对齐（按原型）**：折叠态分组图标在 48px 内容区居中，`pl-[15px]`
-          // → 中心 x=36，与导航条目/底部图标同一条 x=36 垂直中轴；展开态 `px-2.5`
-          // → 左缘 x=22。用 padding 过渡而非 justify-center，切换不跳位。
           className={cn(
-            'flex h-8 w-full items-center rounded-xl pr-0 pl-[15px] transition-[padding] duration-200 ease-out',
+            'flex h-8 w-full items-center justify-center rounded-xl px-0 transition-[padding] duration-200 ease-out',
             flyoutOpen
               ? 'bg-accent text-foreground'
               : 'text-muted-foreground hover:bg-accent hover:text-foreground',
