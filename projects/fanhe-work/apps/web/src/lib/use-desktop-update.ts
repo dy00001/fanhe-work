@@ -67,8 +67,13 @@ function desktopBridge(): Window['fanheDesktop'] | undefined {
 export type DesktopUpdateControls = {
   /** 顶栏那一块该显示什么。`hidden` 表示不渲染。 */
   view: DesktopUpdateView
-  /** 执行视图对应的动作：`ready` 时装并重启，`failed` 时重查。其余视图下是空操作。 */
+  /**
+   * 执行视图对应的动作：`available` 时开始下载，`ready` 时装并重启，
+   * `failed` 时重查。其余视图下是空操作。
+   */
   act: () => void
+  /** 有动作正在进行中（下载请求已发出但进度还没回来、或正在安装）。 */
+  busy: boolean
 }
 
 /**
@@ -159,6 +164,27 @@ export function useDesktopUpdate(): DesktopUpdateControls {
     }
   }, [])
 
+  /**
+   * 开始下载已发现的新版（0.1.6）。
+   *
+   * 主进程**不等下载完就返回**，所以这里拿到的仍是 `available`；真正的 `downloading`
+   * 要等第一次进度事件。中间这一小段靠 `busy` 兜住：按钮置灰、文案换成「正在开始…」，
+   * 否则用户会以为没点上而连点几次。
+   */
+  const download = useCallback(async (): Promise<void> => {
+    const bridge = desktopBridge()
+    if (bridge === undefined) return
+    setBusy(true)
+    try {
+      const next = parseDesktopUpdateStatus(await bridge.downloadUpdate())
+      setStatus((current) => (isSameUpdateStatus(current, next) ? current : next))
+    } catch {
+      // 同 `runCheck`：失败的表现交给轮询到的 `error` 态，不在这里弹东西。
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
   /** 装已下载的新版并退出应用。 */
   const install = useCallback(async (): Promise<void> => {
     const bridge = desktopBridge()
@@ -238,12 +264,16 @@ export function useDesktopUpdate(): DesktopUpdateControls {
   )
 
   const act = useCallback((): void => {
+    if (view.kind === 'available') {
+      void download()
+      return
+    }
     if (view.kind === 'ready') {
       void install()
       return
     }
     if (view.kind === 'failed') void runCheck()
-  }, [view, install, runCheck])
+  }, [view, download, install, runCheck])
 
-  return { view, act }
+  return { view, act, busy }
 }

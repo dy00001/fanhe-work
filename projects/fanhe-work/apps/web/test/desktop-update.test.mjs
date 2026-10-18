@@ -112,11 +112,15 @@ test('下载中显示版本号与百分比，且不可点', () => {
   assert.equal(view.actionLabel, undefined)
 })
 
-test('available 也按下载中渲染（autoDownload 为真，两者之间没有可等的中间态）', () => {
+test('🔴 available 是「等你点」而不是「正在下」：带小红点、可点、没有进度', () => {
   const view = buildDesktopUpdateView(status('available', { version: '0.1.2' }), 'desktop')
-  assert.equal(view.kind, 'downloading')
-  assert.equal(view.text, '正在下载 v0.1.2…')
-  assert.equal(view.percent, null)
+  assert.equal(view.kind, 'available')
+  assert.equal(view.text, '发现新版本 v0.1.2')
+  assert.equal(view.actionLabel, '立即更新')
+  // 小红点由这一态自己声明，组件不猜。
+  assert.equal(view.dot, true)
+  // 还没开始下载，进度必须是 null —— 给一个 0% 的进度条会让人以为已经在下。
+  assert.equal(view.percent, undefined)
 })
 
 test('只知道在下、不知道在下哪一版时也不编造版本号', () => {

@@ -39,6 +39,14 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { useDesktopUpdate } from '../lib/use-desktop-update'
 import { cn } from '../lib/utils'
 import { Button } from './ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog'
 
 /**
  * 「等待中」那两个形态共用的外壳。
@@ -49,8 +57,26 @@ import { Button } from './ui/button'
 const STATUS_SHELL =
   'inline-flex h-8 items-center gap-2 rounded-md border border-border bg-card px-2.5 text-xs text-muted-foreground'
 
+/**
+ * 右上角的小红点。
+ *
+ * 单独抽出来是因为它有两个必须成立的细节：**不接收指针事件**（点在红点上要等于
+ * 点在按钮上，否则按钮会「点不中」），以及**带一圈背景色描边**（顶栏背景是浅色，
+ * 没有 ring 的红点贴在边框上会糊成一团）。
+ */
+function UnreadDot() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute -top-0.5 -right-0.5 size-2 rounded-full bg-red-500 ring-2 ring-background"
+    />
+  )
+}
+
 export function UpdateNotice() {
-  const { view, act } = useDesktopUpdate()
+  const { view, act, busy } = useDesktopUpdate()
+  /** 安装确认框。流程要求「提示」与「用户确认」是两步，所以不能点一下就直接退出。 */
+  const [confirmOpen, setConfirmOpen] = useState(false)
   /**
    * 面板是为「哪个形态」打开的。
    *
@@ -92,6 +118,27 @@ export function UpdateNotice() {
       <div role="status" className={STATUS_SHELL}>
         <LoaderCircle className="size-3.5 animate-spin" />
         {view.text}
+      </div>
+    )
+  }
+
+  if (view.kind === 'available') {
+    // 发现了新版但还没下。这一态的可点性与「下载中」相反：它是唯一一个**用户该按**
+    // 的入口，所以用按钮（outline，不是主色 —— 它还不是「现在必须做」的事）。
+    return (
+      <div className="relative">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={act}
+          disabled={busy}
+          title={view.title}
+          aria-label={`${view.text}，点一下开始下载`}
+        >
+          <Download />
+          {busy ? '正在开始…' : view.text}
+        </Button>
+        <UnreadDot />
       </div>
     )
   }
@@ -139,11 +186,44 @@ export function UpdateNotice() {
   }
 
   if (view.kind === 'ready') {
+    // 下载与校验已在后台静默完成，这里只做「提示 + 确认」。点按钮不直接退出，
+    // 先弹一个确认框 —— 直接退出会让正在填的表单、正在跑的输入丢掉，而用户只是
+    // 想看看有什么更新。
     return (
-      <Button size="sm" title={view.title} onClick={act}>
-        <RefreshCw />
-        {view.actionLabel}
-      </Button>
+      <>
+        <div className="relative">
+          <Button size="sm" title={view.title} onClick={() => setConfirmOpen(true)}>
+            <RefreshCw />
+            {view.actionLabel}
+          </Button>
+          <UnreadDot />
+        </div>
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>更新已就绪</DialogTitle>
+              <DialogDescription>
+                {view.text}
+                {view.sizeText === null ? '' : `（${view.sizeText}）`}
+                。立即更新会关闭应用、装上新版并自动重新打开，本地设置与数据都保留。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                稍后
+              </Button>
+              <Button
+                onClick={() => {
+                  setConfirmOpen(false)
+                  act()
+                }}
+              >
+                立即重启更新
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </>
     )
   }
 

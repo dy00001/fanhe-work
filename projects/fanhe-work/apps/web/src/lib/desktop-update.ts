@@ -204,6 +204,24 @@ export type DesktopUpdateView =
   | { kind: 'hidden' }
   /** 正在检查。只在用户主动触发时显示（见 `use-desktop-update.ts`）。 */
   | { kind: 'checking'; text: string }
+  /**
+   * 发现了新版本，**还没开始下载**（0.1.6 起下载由用户点一下才开始）。
+   *
+   * 与 `downloading` 分开是这一版的核心改动：两者该给用户的信号不同 —— 前者是
+   * 「有件事等你做」（小红点 + 可点），后者是「已经在做了」（进度、不可点）。
+   * 合成一态就只能靠文案区分，而文案是会被改的。
+   */
+  | {
+      kind: 'available'
+      version: string | null
+      /** `发现新版本 v0.1.6`。 */
+      text: string
+      /** `立即更新`。 */
+      actionLabel: string
+      title: string
+      /** 右上角那个小红点。恒为 `true`，写成字段是为了让测试能直接断言「这一态有点」。 */
+      dot: true
+    }
   /** 正在下载。**不可点** —— 这时候没有能做的动作。 */
   | {
       kind: 'downloading'
@@ -269,7 +287,21 @@ export function buildDesktopUpdateView(
   if (host !== 'desktop' || status === null) return { kind: 'hidden' }
 
   switch (status.phase) {
-    case 'available':
+    case 'available': {
+      const label = status.version === null ? '新版本' : formatVersionLabel(status.version)
+      return {
+        kind: 'available',
+        version: status.version,
+        text: `发现新版本 ${label}`,
+        actionLabel: '立即更新',
+        title:
+          status.version === null
+            ? '发现新版本。点一下开始下载安装包，下载过程中可以继续用。'
+            : `发现 ${label}。点一下开始下载安装包，下载过程中可以继续用。`,
+        dot: true,
+      }
+    }
+
     case 'downloading': {
       const transfer = status.transfer ?? null
       const transferred = transfer === null ? null : transfer.transferred
