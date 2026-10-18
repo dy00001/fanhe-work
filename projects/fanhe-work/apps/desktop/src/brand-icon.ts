@@ -3,18 +3,17 @@
  *
  * ## 为什么单开一个模块
  *
- * 同一枚图标有三个消费者：窗口（标题栏左上角）、任务栏、系统托盘。三处各自拼一次
- * 路径，迟早会偏成「窗口换了、托盘还是旧的」—— 而那种偏差在界面上只是「图标长得
- * 不太一样」，很难被当成一个 bug 报出来。所以路径与目标尺寸都在这里定义一次。
+ * 品牌图标用于任务栏和系统托盘，标题栏使用独立的小尺寸图标。标题栏只有约 16px
+ * 的显示空间，复杂印章被系统缩放后细节会糊在一起，因此该位置需要简化的专用图形。
  *
  * ## 为什么是 `app-icon.png` 而不是 `logo.png`
  *
  * `logo.png` 是**品牌原图**（362×391，非方形、白底无 alpha），它的用途是页面内的
  * 品牌位（侧栏品牌行、登录页、favicon），那里按原始比例显示是对的。
  *
- * 而窗口 / 任务栏 / 托盘这三个位置给的是**正方形槽位**：非方形图会被按比例塞进去、
+ * 任务栏 / 托盘位置给的是**正方形槽位**：非方形图会被按比例塞进去、
  * 两侧留白，小尺寸下看起来像被压扁或带了一条底色。`app-icon.png` 是从原图裁出印章
- * 后重排的 256×256 方图（圆角白底、四角透明），专门给这三个位置用。
+ * 后重排的 256×256 方图（圆角白底、四角透明），用于任务栏和托盘。
  *
  * 两者都随 web 构建产物投递（`apps/web/public/brand/` → `dist/brand/`），因此这里
  * 只需要一个相对路径，不必让桌面端各自持有二进制资源。
@@ -35,6 +34,9 @@ import { join } from 'node:path'
  */
 export const BRAND_ICON_RELATIVE = join('brand', 'app-icon.png')
 
+/** 标题栏专用多尺寸图标。小尺寸以简化的印章字母标记绘制，避免系统缩放糊成一团。 */
+export const WINDOW_ICON_RELATIVE = join('brand', 'window-icon.ico')
+
 /**
  * 托盘图标的目标边长（px）。
  *
@@ -48,4 +50,9 @@ export const TRAY_ICON_WIDTH = 16
 /** 品牌图标的绝对路径。`distRoot` 由 `main.ts` 传 `DIST_ROOT`（见 `paths.ts`）。 */
 export function brandIconPath(distRoot: string): string {
   return join(distRoot, BRAND_ICON_RELATIVE)
+}
+
+/** 标题栏窗口图标的绝对路径。 */
+export function windowIconPath(distRoot: string): string {
+  return join(distRoot, WINDOW_ICON_RELATIVE)
 }

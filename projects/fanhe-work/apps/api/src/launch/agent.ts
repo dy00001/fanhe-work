@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, extname } from 'node:path'
 
 import type { LaunchPathState, LaunchProfile, RunLaunchProfileResponse } from '@fanhe/shared'
 
@@ -242,6 +242,22 @@ export async function runLaunchProfile(
   return outcome
 }
 
+/**
+ * 启动这一条时要不要让 Windows 隐藏控制台窗口。
+ *
+ * 两件事同时成立，所以判据只能按目标类型分：
+ *   ① 目标是 `.exe`（GUI 客户端）时**不能隐藏**。隐藏启动标记会让部分客户端把主窗口
+ *      创建成隐藏状态，`spawn` 照样返回成功，用户看到的是「点了没反应」；
+ *   ② 目标是 `.cmd` / `.bat` / 脚本时**必须隐藏**。它们是控制台程序，不隐藏就会闪一个
+ *      黑框 —— 0.1.4 之前一直是隐藏的，改成一律 `false` 等于把这个行为还回去。
+ *
+ * 判据刻意用扩展名而不是「猜它是不是 GUI」：扩展名是用户填在配置里的、可复核的事实，
+ * 而「这个 exe 有没有窗口」要执行起来才知道。
+ */
+export function needsHiddenConsole(executablePath: string): boolean {
+  return extname(executablePath).toLowerCase() !== '.exe'
+}
+
 async function startProcess(
   profile: LaunchProfile,
   logger: LaunchLogger,
@@ -263,9 +279,10 @@ async function startProcess(
         // 显式写出。Node 的默认值就是 false，但这一行是安全边界，不该靠默认值
         // 承担 —— 将来有人为了「支持通配符」把它改成 true，这里会先被看到。
         shell: false,
-        // 不弹控制台窗口。启动的是 GUI 客户端时无所谓，但用户完全可能配一条指向
-        // `cmd.exe` 或某个脚本的配置，那时没有这一项会闪一个黑框。
-        windowsHide: true,
+        // 控制台窗口的显隐按目标类型分：`.exe` 不能隐藏（部分 GUI 客户端会连主窗口
+        // 一起藏起来，spawn 仍报成功），脚本类必须隐藏（否则闪黑框）。见
+        // `needsHiddenConsole` 的注释。
+        windowsHide: needsHiddenConsole(command),
         // 丢弃子进程的三路标准流。用管道的话，工作台退出后管道关闭，子进程再往
         // stdout 写就会拿到 EPIPE；而且没人读的管道写满之后会阻塞子进程本身。
         stdio: 'ignore',

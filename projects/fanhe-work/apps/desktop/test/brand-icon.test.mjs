@@ -1,20 +1,18 @@
 /**
  * 品牌图标的回归测试。
  *
- * 这一层守的是一件很容易在换机 / 改图之后悄悄坏掉的事：**窗口、任务栏、托盘三处
- * 顶的是不是同一枚、且是方的**。
+ * 标题栏使用简化的多尺寸 ICO，任务栏和托盘使用方形品牌 PNG。
  *
  * 背景：界面里那个 `logo.png` 是 362×391、白底、无 alpha 的品牌原图，它给页面内的
- * 品牌位用是对的；但标题栏 / 任务栏 / 托盘给的是**正方形槽位**，非方形图会被按方形
- * 重排、四周留白，小尺寸下看着像被压扁或者带了一条底色。所以这三个位置改用
- * `app-icon.png`（256×256、四角透明）。
+ * 品牌位用是对的；任务栏 / 托盘给的是**正方形槽位**，非方形图会被按方形重排，
+ * 小尺寸下看着像被压扁或者带了一条底色，所以这两个位置使用 `app-icon.png`
+ *（256×256、四角透明）。标题栏使用 `window-icon.ico`。
  *
  * 这里断言四条，每一条都对应一个具体的坏法：
  *   ① 路径拼得对（改目录结构时先坏的是它）；
  *   ② 图是**方的**（非方形就是这个 bug 本身）；
  *   ③ 图**带 alpha 且四角透明**（没有 alpha 的话任务栏深色底上会顶出一块白板）；
- *   ④ `electron-builder.yml` 的 `win.icon` 指向**同一个文件**（不同源就会出现
- *      「任务栏一个样、托盘另一个样」，而这种偏差很难被当成 bug 报出来）。
+ *   ④ `electron-builder.yml` 的 `win.icon` 与托盘图标指向同一个文件。
  *
  * 与其它 desktop 测试同款：直接测 `src/brand-icon.ts` 源码，不构建。
  */
@@ -24,7 +22,13 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { inflateSync } from 'node:zlib'
 
-import { BRAND_ICON_RELATIVE, TRAY_ICON_WIDTH, brandIconPath } from '../src/brand-icon.ts'
+import {
+  BRAND_ICON_RELATIVE,
+  TRAY_ICON_WIDTH,
+  WINDOW_ICON_RELATIVE,
+  brandIconPath,
+  windowIconPath,
+} from '../src/brand-icon.ts'
 
 /** `apps/desktop/test` → `apps/web/public/brand/`。 */
 const BRAND_DIR = join(import.meta.dirname, '..', '..', 'web', 'public', 'brand')
@@ -76,6 +80,11 @@ test('图标路径拼在 web 产物的 brand/ 下', () => {
     join('E:', 'ws', 'apps', 'web', 'dist', 'brand', 'app-icon.png'),
   )
   assert.equal(BRAND_ICON_RELATIVE, join('brand', 'app-icon.png'))
+  assert.equal(
+    windowIconPath(join('E:', 'ws', 'apps', 'web', 'dist')),
+    join('E:', 'ws', 'apps', 'web', 'dist', 'brand', 'window-icon.ico'),
+  )
+  assert.equal(WINDOW_ICON_RELATIVE, join('brand', 'window-icon.ico'))
 })
 
 test('托盘图标目标尺寸是正整数且小于原图，缩了才有意义', () => {
@@ -100,13 +109,13 @@ test('品牌图标带 alpha 通道，且四角透明', () => {
   assert.equal(a, 0, `左上角应当透明，实际 rgba(${r},${g},${b},${a})`)
 })
 
-test('打包配置的 win.icon 与窗口/托盘图标同源', () => {
+test('打包配置的 win.icon 与任务栏/托盘品牌图标同源', () => {
   const yml = readFileSync(join(import.meta.dirname, '..', 'electron-builder.yml'), 'utf8')
   const match = /^\s*icon:\s*(\S+)\s*$/m.exec(yml)
   assert.ok(match !== null, 'electron-builder.yml 里没找到 win.icon')
   assert.equal(
     match[1],
     '../web/public/brand/app-icon.png',
-    '任务栏图标（exe 图标资源）与窗口/托盘图标必须指向同一个文件',
+    '任务栏图标（exe 图标资源）与托盘品牌图标必须指向同一个文件',
   )
 })

@@ -32,7 +32,7 @@ if (databaseUrl !== null) {
 }
 
 const { isLoopbackAddress } = await import('../src/launch/loopback.js')
-const { buildLaunchCommand, buildLaunchEnv, shouldStripFromLaunchEnv } =
+const { buildLaunchCommand, buildLaunchEnv, needsHiddenConsole, shouldStripFromLaunchEnv } =
   await import('../src/launch/agent.js')
 const { prisma } = await import('../src/db/prisma.js')
 const { hashPassword } = await import('../src/auth/password.js')
@@ -126,6 +126,34 @@ describe('启动命令组装', () => {
     const command = buildLaunchCommand(profile)
     command.args.push('--b')
     assert.deepEqual(profile.args, ['--a'])
+  })
+})
+
+/**
+ * 控制台窗口的显隐。
+ *
+ * 这一条钉的是两个相反方向的坏法：GUI 客户端被隐藏启动 → 点了没反应（spawn 仍报成功）；
+ * 脚本被可见启动 → 闪黑框。判据只能按扩展名分，用例把两侧都固定住。
+ */
+describe('needsHiddenConsole（控制台窗口显隐）', () => {
+  test('GUI 客户端（.exe）不隐藏，否则主窗口可能一起被藏起来', () => {
+    assert.equal(needsHiddenConsole('C:\\Program Files\\Tencent\\QQNT\\QQ.exe'), false)
+    assert.equal(needsHiddenConsole('D:\\Apps\\AliWorkbench\\AliWorkbench.exe'), false)
+  })
+
+  test('扩展名大小写不影响判定', () => {
+    assert.equal(needsHiddenConsole('D:\\Apps\\Foo.EXE'), false)
+    assert.equal(needsHiddenConsole('D:\\Scripts\\Run.CMD'), true)
+  })
+
+  test('脚本与批处理必须隐藏，否则会闪一个黑框', () => {
+    assert.equal(needsHiddenConsole('D:\\Scripts\\launch.cmd'), true)
+    assert.equal(needsHiddenConsole('D:\\Scripts\\launch.bat'), true)
+    assert.equal(needsHiddenConsole('D:\\Scripts\\launch.ps1'), true)
+  })
+
+  test('无扩展名按脚本处理（保守：宁可隐藏，不闪窗）', () => {
+    assert.equal(needsHiddenConsole('D:\\Tools\\run'), true)
   })
 })
 
