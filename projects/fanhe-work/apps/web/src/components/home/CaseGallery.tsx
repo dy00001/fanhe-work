@@ -1,25 +1,9 @@
 import { ArrowLeft, ArrowRight, Image as ImageIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-/**
- * 案例展示的品类清单。顺序即界面顺序。
- *
- * 与原型逐条一致，九个品类一个不多一个不少。**它们是文案不是数据**：这一版没有
- * 「案例」这张表，卡面是占位（`封面待补`），因此清单写在前端。等案例落库之后，
- * 这张表应当换成一次查询，而卡片结构与横滑逻辑都不用动 —— 那正是把清单单独拎出来
- * 的原因。
- */
-const CATEGORIES = [
-  '橱柜',
-  '衣柜',
-  '书柜',
-  '鞋柜',
-  '酒柜',
-  '套装门',
-  '电视柜',
-  '餐边柜',
-  '护墙板',
-] as const
+import { CASE_CATEGORIES } from '../../lib/case-catalog'
+import { Dialog, DialogTrigger } from '../ui/dialog'
+import { CaseGalleryDialogContent } from './CaseGalleryDialog'
 
 /**
  * 案例展示（原型编号 9）。
@@ -35,12 +19,17 @@ const CATEGORIES = [
  *     行为 —— 否则滚轮会同时横移卡片条与纵向滚动整页，用户看到的是「页面乱跳」。
  *   - 拖拽：按住左键拖动。系统滚动条已被隐藏，鼠标用户没有别的办法拖。
  *   - 键盘：容器可聚焦，← → 翻一页。
+ *
+ * **「全部品类」是一个按钮。** 原型里它写的是 `href="#"`，落地时保持成静态文字，于是
+ * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：九个品类与
+ * 各自的案例位全量铺开，首页这条横滑条仍然只负责「先看四个」。
  */
 export function CaseGallery() {
   const stripRef = useRef<HTMLDivElement>(null)
   const [atStart, setAtStart] = useState(true)
   const [atEnd, setAtEnd] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [allCategoriesOpen, setAllCategoriesOpen] = useState(false)
 
   /**
    * 两端状态。
@@ -101,102 +90,118 @@ export function CaseGallery() {
   const dragRef = useRef<{ startX: number; startScroll: number } | null>(null)
 
   return (
-    <section>
-      <div className="mb-5 flex items-baseline gap-2.5">
-        <h2 className="text-xl leading-7 font-medium">案例展示</h2>
-        <span className="text-sm text-muted-foreground">按品类查看已交付方案</span>
-        {/* 「全部品类」在原型里是一个 `href="#"` 的静态入口，本项目尚无对应页面，
-            因此保持渲染、不接跳转 —— 与头像菜单里的「收藏 / 帮助中心」同一条处理。 */}
-        <span className="ml-auto flex items-center gap-1 text-sm text-muted-foreground">
-          全部品类
-          <ArrowRight className="size-3.5" />
-        </span>
-      </div>
-
-      <div className="relative">
-        {!atStart && (
-          <button
-            type="button"
-            onClick={() => page(-1)}
-            aria-label="上一页"
-            className="absolute left-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
-            style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
-          >
-            <ArrowLeft className="size-5" />
-          </button>
-        )}
-        {!atEnd && (
-          <button
-            type="button"
-            onClick={() => page(1)}
-            aria-label="下一页"
-            className="absolute right-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
-            style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
-          >
-            <ArrowRight className="size-5" />
-          </button>
-        )}
-
-        <div
-          ref={stripRef}
-          role="region"
-          aria-label="案例展示，横向滚动，可用左右方向键翻页"
-          tabIndex={0}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowLeft') {
-              event.preventDefault()
-              page(-1)
-            }
-            if (event.key === 'ArrowRight') {
-              event.preventDefault()
-              page(1)
-            }
-          }}
-          onPointerDown={(event) => {
-            // 只认主键：右键与中键按下时不该进入拖拽态。
-            if (event.button !== 0) return
-            const el = stripRef.current
-            if (el === null) return
-            dragRef.current = { startX: event.clientX, startScroll: el.scrollLeft }
-            setDragging(true)
-          }}
-          onPointerMove={(event) => {
-            const drag = dragRef.current
-            const el = stripRef.current
-            if (drag === null || el === null) return
-            el.scrollLeft = drag.startScroll - (event.clientX - drag.startX)
-          }}
-          onPointerUp={() => {
-            dragRef.current = null
-            setDragging(false)
-          }}
-          onPointerCancel={() => {
-            dragRef.current = null
-            setDragging(false)
-          }}
-          className={[
-            'flex gap-4 overflow-x-auto overflow-y-hidden outline-none',
-            '[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden',
-            dragging ? 'cursor-grabbing select-none' : 'cursor-grab',
-            'focus-visible:rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring',
-          ].join(' ')}
-        >
-          {CATEGORIES.map((name) => (
-            <div
-              key={name}
-              className="flex min-w-0 shrink-0 basis-[calc((100%_-_48px)/4)] flex-col"
+    // `Dialog.Root` 不产出 DOM，包住整个区块不会改变任何布局；把根放在这一层是为了
+    // 让头部的入口按钮能作为 `DialogTrigger`，与窗口内容共享同一个上下文。
+    <Dialog open={allCategoriesOpen} onOpenChange={setAllCategoriesOpen}>
+      <section>
+        <div className="mb-5 flex items-baseline gap-2.5">
+          <h2 className="text-xl leading-7 font-medium">案例展示</h2>
+          <span className="text-sm text-muted-foreground">按品类查看已交付方案</span>
+          {/* 入口本身。用 `DialogTrigger` 而不是自己写 `aria-haspopup`：它同时负责
+              打开时把 `aria-expanded` / `aria-controls` 挂到按钮上，以及关闭时把焦点
+              还给按钮 —— 后者手写不出来，Radix 是在关闭动画结束后自己调的。 */}
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              className="group -mx-1.5 ml-auto flex items-center gap-1 rounded-md px-1.5 text-sm text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
-              <div className="flex aspect-[400/234] w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-border bg-[color-mix(in_srgb,var(--m-neutral)_4%,var(--card))]">
-                <span className="grid size-10 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--m-neutral)_var(--wash),var(--card))] text-m-neutral">
-                  <ImageIcon className="size-5" />
-                </span>
-                <span className="text-sm text-muted-foreground-weak">封面待补</span>
-              </div>
-              <div className="mt-2 h-6 text-center text-base leading-6 font-medium">{name}</div>
-            </div>
-          ))}
+              全部品类
+              {/* 箭头在悬停时右移 2px：这一条是本区块唯一的「点得动」暗示，静态文字没有
+                  下划线也没有背景，只靠颜色变化在小字号上不够明显。 */}
+              <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+            </button>
+          </DialogTrigger>
         </div>
-      </div>
-    </section>
+
+        <CaseGalleryDialogContent />
+
+        <div className="relative">
+          {!atStart && (
+            <button
+              type="button"
+              onClick={() => page(-1)}
+              aria-label="上一页"
+              className="absolute left-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
+              style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
+            >
+              <ArrowLeft className="size-5" />
+            </button>
+          )}
+          {!atEnd && (
+            <button
+              type="button"
+              onClick={() => page(1)}
+              aria-label="下一页"
+              className="absolute right-[13px] z-[2] grid size-10 place-items-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_62%,transparent)] text-background hover:bg-foreground"
+              style={{ top: 'calc((100% - 32px) / 2 - 20px)' }}
+            >
+              <ArrowRight className="size-5" />
+            </button>
+          )}
+
+          <div
+            ref={stripRef}
+            role="region"
+            aria-label="案例展示，横向滚动，可用左右方向键翻页"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft') {
+                event.preventDefault()
+                page(-1)
+              }
+              if (event.key === 'ArrowRight') {
+                event.preventDefault()
+                page(1)
+              }
+            }}
+            onPointerDown={(event) => {
+              // 只认主键：右键与中键按下时不该进入拖拽态。
+              if (event.button !== 0) return
+              const el = stripRef.current
+              if (el === null) return
+              dragRef.current = { startX: event.clientX, startScroll: el.scrollLeft }
+              setDragging(true)
+            }}
+            onPointerMove={(event) => {
+              const drag = dragRef.current
+              const el = stripRef.current
+              if (drag === null || el === null) return
+              el.scrollLeft = drag.startScroll - (event.clientX - drag.startX)
+            }}
+            onPointerUp={() => {
+              dragRef.current = null
+              setDragging(false)
+            }}
+            onPointerCancel={() => {
+              dragRef.current = null
+              setDragging(false)
+            }}
+            className={[
+              'flex gap-4 overflow-x-auto overflow-y-hidden outline-none',
+              '[scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden',
+              dragging ? 'cursor-grabbing select-none' : 'cursor-grab',
+              'focus-visible:rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring',
+            ].join(' ')}
+          >
+            {CASE_CATEGORIES.map((category) => (
+              <div
+                key={category.id}
+                className="flex min-w-0 shrink-0 basis-[calc((100%_-_48px)/4)] flex-col"
+              >
+                <div className="flex aspect-[400/234] w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-border bg-[color-mix(in_srgb,var(--m-neutral)_4%,var(--card))]">
+                  <span className="grid size-10 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--m-neutral)_var(--wash),var(--card))] text-m-neutral">
+                    <ImageIcon className="size-5" />
+                  </span>
+                  <span className="text-sm text-muted-foreground-weak">封面待补</span>
+                </div>
+                <div className="mt-2 h-6 text-center text-base leading-6 font-medium">
+                  {category.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </Dialog>
   )
 }
