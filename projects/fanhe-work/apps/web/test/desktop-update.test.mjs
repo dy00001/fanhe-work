@@ -110,6 +110,9 @@ test('下载中显示版本号与百分比，且不可点', () => {
   assert.equal(view.percent, 0.42)
   // 「不可点」由视图没有 actionLabel 体现：组件对 downloading 渲染的是 div 而不是按钮。
   assert.equal(view.actionLabel, undefined)
+  // 也不挂红点：这一态不需要「来看一眼」，它需要的是等。红点的意义是提醒一个
+  // 待办动作，而这里没有待办。
+  assert.equal(view.dot, undefined)
 })
 
 test('🔴 available 是「等你点」而不是「正在下」：带小红点、可点、没有进度', () => {
@@ -139,6 +142,9 @@ test('下载完成时给出可点的按钮，且按钮上带版本号', () => {
   assert.match(view.actionLabel, /v0\.1\.2/)
   // 这一句是给用户看的承诺，而它成立的前提是 NSIS 不动 userData + 端口被钉住。
   assert.match(view.title, /本地设置与数据都保留/)
+  // 就绪也是「有件事等你做」，与 available 一样挂红点 —— 用户离开一会儿回来，
+  // 顶栏上那一点是他唯一能看出「有事发生」的线索。
+  assert.equal(view.dot, true)
 })
 
 test('已下载却拿不到版本号时退回「准备中」，不渲染「更新到 null」', () => {

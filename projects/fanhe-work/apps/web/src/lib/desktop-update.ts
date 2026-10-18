@@ -256,6 +256,8 @@ export type DesktopUpdateView =
       title: string
       /** 安装包大小，用于在面板里给出「下完了」的实证。 */
       sizeText: string | null
+      /** 右上角那个小红点。与 `available` 同理：这一态也是「有件事等你做」。 */
+      dot: true
     }
   /** 检查或下载失败，可以重试。 */
   | {
@@ -349,6 +351,7 @@ export function buildDesktopUpdateView(
         actionLabel: `重启更新到 ${formatVersionLabel(status.version)}`,
         title: `${formatVersionLabel(status.version)} 的安装包已下载完成。点一下会退出应用、装上新版并自动重新打开 —— 本地设置与数据都保留。`,
         sizeText: total === null ? null : formatBytes(total),
+        dot: true,
       }
     }
 

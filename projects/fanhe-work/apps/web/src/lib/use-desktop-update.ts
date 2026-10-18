@@ -115,7 +115,8 @@ export function useDesktopUpdate(): DesktopUpdateControls {
    * `isSameUpdateStatus`），于是不会触发重渲染 —— 没有这个时钟，一次卡顿会让
    * 「已用 00:18」停在 00:18，看起来像界面死了。
    *
-   * 只在下载阶段开：空闲时每秒重渲染一次顶栏是白烧 CPU。
+   * 只在「有东西在动」时开：`available` 是等用户点、`downloading` 是正在下，两者
+   * 都可能停在原地等一会儿；空闲时每秒重渲染一次顶栏是白烧 CPU。
    */
   const [now, setNow] = useState(() => Date.now())
   const downloading =
@@ -149,7 +150,7 @@ export function useDesktopUpdate(): DesktopUpdateControls {
       })
   }, [])
 
-  /** 主动查一次（只检查并下载，不安装）。 */
+  /** 主动查一次（只检查，不下载、不安装）。 */
   const runCheck = useCallback(async (): Promise<void> => {
     const bridge = desktopBridge()
     if (bridge === undefined) return

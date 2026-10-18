@@ -196,7 +196,7 @@ export function UpdateNotice() {
             <RefreshCw />
             {view.actionLabel}
           </Button>
-          <UnreadDot />
+          {view.dot ? <UnreadDot /> : null}
         </div>
         <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
           <DialogContent className="sm:max-w-md">
