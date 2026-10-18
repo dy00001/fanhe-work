@@ -52,6 +52,26 @@ export type UpdatePhase =
   /** 出错。 */
   | 'error'
 
+/**
+ * 一次下载的字节级事实。
+ *
+ * `percent` 单独一个字段不够用：界面上要显示「已下载 / 总大小 / 速度 / 剩余时间」，
+ * 而这几项都不能由百分比反推（百分比是 0~100 的整数化结果，反推出来的字节数在
+ * 小文件上会跳，在断点续传时会错）。
+ */
+export type UpdateTransfer = {
+  /** 已下载字节数。 */
+  transferred: number
+  /** 总字节数。上游拿不到时为 `null`（那时只能显示已下载量）。 */
+  total: number | null
+  /** 平滑后的速度（字节/秒）。拿不到任何样本时为 `null`，**不要写成 0** —— 0 在界面上是「停了」。 */
+  bytesPerSecond: number | null
+  /** 本轮下载开始的时间戳（毫秒）。界面用它算「已用时间」。 */
+  startedAt: number | null
+  /** 最后一次收到进度的时间戳（毫秒）。界面用它判断「是不是停了」。 */
+  updatedAt: number | null
+}
+
 export type UpdateStatus = {
   phase: UpdatePhase
   /**
@@ -64,6 +84,8 @@ export type UpdateStatus = {
   version: string | null
   /** 下载进度，0~1。非 `downloading` 阶段为 `null`。 */
   percent: number | null
+  /** 下载的字节级事实。没有在下载、或上游一个字节都没报过时为 `null`。 */
+  transfer: UpdateTransfer | null
   /** 一句话说明，给日志与排障用；界面不直接显示它。 */
   detail: string
 }
@@ -82,17 +104,103 @@ export type UpdateEvent =
   | { type: 'available'; version: string }
   /** 检查完成，没有新版。 */
   | { type: 'not-available' }
-  /** 下载进度。`percent` 是上游给的 0~100 的原始值。 */
-  | { type: 'progress'; percent: number }
+  /** 下载进度。`percent` 是上游给的 0~100 的原始值；其余字段是同一事件的字节级事实。 */
+  | {
+      type: 'progress'
+      percent: number
+      /** 已下载字节数。上游没给时不传。 */
+      transferred?: number
+      /** 总字节数。上游没给时不传。 */
+      total?: number
+      /** 上游自报的瞬时速度（字节/秒），只在没有本地样本时作为初值。 */
+      bytesPerSecond?: number
+      /** 事件时间戳（毫秒）。由翻译层传入，纯函数不读时钟。 */
+      at?: number
+    }
   /** 下载完成，可以安装了。 */
-  | { type: 'downloaded'; version: string }
+  | { type: 'downloaded'; version: string; at?: number }
   /** 这条通道在本形态下不可用。 */
   | { type: 'unsupported'; detail: string }
   /** 出错。 */
   | { type: 'error'; detail: string }
 
 export function initialUpdateStatus(): UpdateStatus {
-  return { phase: 'idle', version: null, percent: null, detail: '' }
+  return { phase: 'idle', version: null, percent: null, transfer: null, detail: '' }
+}
+
+/**
+ * 速度平滑系数。
+ *
+ * 上游的 `bytesPerSecond` 是它自己那段窗口的均值，而界面要每秒刷新一次 —— 直接拿
+ * 单次样本去显示，速度会在 800 KB/s 与 3 MB/s 之间来回跳，读起来像网络在抖。
+ * 用指数滑动平均把噪声压掉，同时保留「真的掉速了」时的可见下降。
+ *
+ * 0.35 是取舍：太大（如 0.8）压不住抖，太小（如 0.1）在断流时要好几秒才归零，
+ * 那几秒里界面会显示一个不存在的速度。
+ */
+const SPEED_SMOOTHING = 0.35
+
+/**
+ * 小于这个间隔不重算瞬时速度。
+ *
+ * 上游在极端情况下会连发两条进度（间隔几十毫秒），那时 `Δ字节/Δ时间` 会被分母
+ * 放大成一个荒谬的数字（几十 MB/s），而它只活一帧就消失 —— 不值得让用户看到。
+ */
+const MIN_SPEED_SAMPLE_MS = 200
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+/**
+ * 从「上一个字节数 + 现在这个」算出平滑速度。
+ *
+ * 三个输入都可能是 `null`，各自的含义不同：
+ * - 没有上一笔：用上游自报的速度起个头；它也没有就返回 `null`（不编造）。
+ * - 字节数没涨（`Δ = 0`）：瞬时速度是 0，但**不直接归零**，让 EMA 衰减几拍 ——
+ *   否则一次卡顿就会把速度打到 0 再弹回来，比不显示更难看。
+ * - 时间没前进：保留上一拍的速度，这次样本作废。
+ */
+function nextSpeed(
+  previous: UpdateTransfer | null,
+  transferred: number,
+  at: number | null,
+  upstream: number | null,
+): number | null {
+  const previousSpeed = previous === null ? null : previous.bytesPerSecond
+  if (previous === null) return upstream
+  if (at === null || previous.updatedAt === null) return previousSpeed ?? upstream
+
+  const elapsedMs = at - previous.updatedAt
+  if (elapsedMs < MIN_SPEED_SAMPLE_MS) return previousSpeed ?? upstream
+
+  const deltaBytes = transferred - previous.transferred
+  if (deltaBytes < 0) return upstream
+  const instant = deltaBytes / (elapsedMs / 1000)
+  if (previousSpeed === null) return instant
+  return previousSpeed * (1 - SPEED_SMOOTHING) + instant * SPEED_SMOOTHING
+}
+
+/** 把一条进度事件收成 `UpdateTransfer`。没有字节数就返回 `null`（只有百分比可用）。 */
+function buildTransfer(
+  previous: UpdateTransfer | null,
+  event: Extract<UpdateEvent, { type: 'progress' }>,
+): UpdateTransfer | null {
+  const transferred = finiteOrNull(event.transferred)
+  if (transferred === null) return previous
+
+  const at = finiteOrNull(event.at)
+  const total = finiteOrNull(event.total)
+  const upstreamSpeed = finiteOrNull(event.bytesPerSecond)
+  return {
+    transferred,
+    // 总大小在一次下载里是常量：上游某次没给就沿用上一次，不要把它冲成 null，
+    // 否则「剩余时间」会在一帧里消失又出现。
+    total: total ?? previous?.total ?? null,
+    bytesPerSecond: nextSpeed(previous, transferred, at, upstreamSpeed),
+    startedAt: previous?.startedAt ?? at,
+    updatedAt: at ?? previous?.updatedAt ?? null,
+  }
 }
 
 /**
@@ -130,15 +238,23 @@ export function applyUpdateEvent(current: UpdateStatus, event: UpdateEvent): Upd
 
   switch (event.type) {
     case 'checking':
-      return { phase: 'checking', version: null, percent: null, detail: '' }
+      return { phase: 'checking', version: null, percent: null, transfer: null, detail: '' }
 
     case 'available':
-      return { phase: 'available', version: event.version, percent: null, detail: '' }
+      // 新一轮下载即将开始，上一轮的字节数必须清掉 —— 否则界面会先显示上一版的
+      // 100%，再跳回 0%。
+      return {
+        phase: 'available',
+        version: event.version,
+        percent: null,
+        transfer: null,
+        detail: '',
+      }
 
     case 'not-available':
       // 不变量 3 的推论：没查到新版时不保留上一次的 version，否则界面可能拿着一个
       // 过期的版本号去显示「有新版」。
-      return { phase: 'up-to-date', version: null, percent: null, detail: '' }
+      return { phase: 'up-to-date', version: null, percent: null, transfer: null, detail: '' }
 
     case 'progress':
       // 不变量 3：推进到 downloading，但**不编造 version** ——
@@ -147,21 +263,48 @@ export function applyUpdateEvent(current: UpdateStatus, event: UpdateEvent): Upd
         phase: 'downloading',
         version: current.version,
         percent: normalizePercent(event.percent),
+        transfer: buildTransfer(current.transfer, event),
         detail: '',
       }
 
-    case 'downloaded':
-      return { phase: 'downloaded', version: event.version, percent: 1, detail: '' }
+    case 'downloaded': {
+      // 收尾时把「已下载」对齐到总大小：上游最后一次进度常常停在 99.7%，
+      // 完成态却显示 99% 会让人以为还差一点。
+      const previous = current.transfer
+      const total = previous?.total ?? null
+      return {
+        phase: 'downloaded',
+        version: event.version,
+        percent: 1,
+        transfer:
+          previous === null
+            ? null
+            : {
+                ...previous,
+                transferred: total ?? previous.transferred,
+                bytesPerSecond: null,
+                updatedAt: finiteOrNull(event.at) ?? previous.updatedAt,
+              },
+        detail: '',
+      }
+    }
 
     case 'unsupported':
-      return { phase: 'unsupported', version: null, percent: null, detail: event.detail }
+      return {
+        phase: 'unsupported',
+        version: null,
+        percent: null,
+        transfer: null,
+        detail: event.detail,
+      }
 
     case 'error':
-      // 不变量 2：保留 version 与 percent（进度对判断「下载到一半失败」有用）。
+      // 不变量 2：保留 version、percent 与字节数（「下到 42 MB 时失败」是可诊断的）。
       return {
         phase: 'error',
         version: current.version,
         percent: current.percent,
+        transfer: current.transfer,
         detail: event.detail,
       }
   }
@@ -187,6 +330,23 @@ export function describeUpdateStatus(status: UpdateStatus): string {
   const parts = [`阶段=${status.phase}`]
   if (status.version !== null) parts.push(`版本=${status.version}`)
   if (status.percent !== null) parts.push(`进度=${Math.round(status.percent * 100)}%`)
+  // 字节数与速度只在有值时写出来，理由同上：占位值会让人以为那是一个真实读数。
+  const transfer = status.transfer ?? null
+  if (transfer !== null) {
+    parts.push(
+      transfer.total === null
+        ? `已下载=${formatMegabytes(transfer.transferred)}MB`
+        : `已下载=${formatMegabytes(transfer.transferred)}/${formatMegabytes(transfer.total)}MB`,
+    )
+    if (transfer.bytesPerSecond !== null) {
+      parts.push(`速度=${formatMegabytes(transfer.bytesPerSecond)}MB/s`)
+    }
+  }
   if (status.detail !== '') parts.push(`说明=${status.detail}`)
   return parts.join(' ')
+}
+
+/** 字节 → 兆字节，保留一位小数。日志里不追求精度，只要求能一眼看出量级。 */
+function formatMegabytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1)
 }

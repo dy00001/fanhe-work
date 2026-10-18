@@ -201,3 +201,107 @@ test('反例：把非有限进度归一成 0 而不是 null，会被进度用例
     'null 与 0 必须能分辨 —— 前者是「拿不到」，后者是「刚开始」',
   )
 })
+
+/* ---------------- 字节级进度：大小、速度、时间（0.1.6） ---------------- */
+
+/**
+ * 这一组守的是「界面上那几个数字是不是真的来自事件」。
+ *
+ * 失败模式都很安静：速度恒为 0（看起来像卡死）、总大小被一次缺字段的进度冲成 null
+ * （「剩余时间」闪一下就没了）、完成态停在 99%（用户以为还差一点）。它们都不会抛错。
+ */
+
+const MB = 1024 * 1024
+
+/** 喂一串进度事件，返回最终状态。 */
+function runProgress(samples) {
+  let status = applyUpdateEvent(initialUpdateStatus(), { type: 'available', version: '0.2.0' })
+  for (const sample of samples) status = applyUpdateEvent(status, { type: 'progress', ...sample })
+  return status
+}
+
+test('第一条进度用上游自报的速度起头（本地还没有两个样本）', () => {
+  const status = runProgress([
+    { percent: 1, transferred: 1 * MB, total: 100 * MB, bytesPerSecond: 2 * MB, at: 1000 },
+  ])
+  assert.equal(status.transfer?.bytesPerSecond, 2 * MB)
+  assert.equal(status.transfer?.startedAt, 1000)
+  assert.equal(status.transfer?.updatedAt, 1000)
+})
+
+test('之后的速度由本地样本平滑得出，而不是照抄上游', () => {
+  const status = runProgress([
+    { percent: 1, transferred: 1 * MB, total: 100 * MB, bytesPerSecond: 1 * MB, at: 1000 },
+    // 一秒内多下了 2 MB：瞬时 2 MB/s，与上一拍的 1 MB/s 按 0.35 混合 → 1.35 MB/s
+    { percent: 3, transferred: 3 * MB, total: 100 * MB, bytesPerSecond: 99 * MB, at: 2000 },
+  ])
+  const speed = status.transfer?.bytesPerSecond ?? 0
+  assert.ok(Math.abs(speed - 1.35 * MB) < 1024, `期望约 1.35 MB/s，实际 ${speed}`)
+})
+
+test('🔴 字节数不涨时速度衰减而不是立刻归零（一次卡顿不该把读数打到 0）', () => {
+  const status = runProgress([
+    { percent: 3, transferred: 3 * MB, total: 100 * MB, bytesPerSecond: 2 * MB, at: 1000 },
+    { percent: 3, transferred: 3 * MB, total: 100 * MB, at: 2000 },
+  ])
+  const speed = status.transfer?.bytesPerSecond ?? 0
+  assert.ok(speed > 0, '卡一拍之后速度应仍有正值')
+  assert.ok(speed < 2 * MB, '速度必须下降，否则界面上看不出网络已经停了')
+})
+
+test('总大小某一次没给时沿用上一次，不被冲成 null', () => {
+  const status = runProgress([
+    { percent: 10, transferred: 10 * MB, total: 100 * MB, at: 1000 },
+    { percent: 11, transferred: 11 * MB, at: 2000 },
+  ])
+  assert.equal(status.transfer?.total, 100 * MB, '总大小在一次下载里是常量')
+})
+
+test('没有字节数时 transfer 保持 null，只靠百分比（旧行为不退化）', () => {
+  const status = runProgress([{ percent: 42 }])
+  assert.equal(status.transfer, null)
+  assert.equal(status.percent, 0.42)
+})
+
+test('下载失败时保留已下载量，能说出「下到 42 MB 断了」', () => {
+  const downloading = runProgress([
+    { percent: 42, transferred: 42 * MB, total: 100 * MB, bytesPerSecond: 2 * MB, at: 1000 },
+  ])
+  const failed = applyUpdateEvent(downloading, {
+    type: 'error',
+    detail: 'net::ERR_CONNECTION_RESET',
+  })
+  assert.equal(failed.phase, 'error')
+  assert.equal(failed.transfer?.transferred, 42 * MB)
+  assert.equal(failed.percent, 0.42)
+  assert.match(describeUpdateStatus(failed), /已下载=42\.0\/100\.0MB/)
+})
+
+test('完成态把已下载量对齐到总大小（不显示 99%）', () => {
+  const downloading = runProgress([
+    { percent: 99.7, transferred: 99.7 * MB, total: 100 * MB, at: 1000 },
+  ])
+  const done = applyUpdateEvent(downloading, { type: 'downloaded', version: '0.2.0', at: 2000 })
+  assert.equal(done.transfer?.transferred, 100 * MB)
+  assert.equal(done.transfer?.bytesPerSecond, null, '完成之后速度不再有意义')
+  assert.equal(done.percent, 1)
+})
+
+test('新一轮下载开始时清掉上一轮的字节数（否则会先显示 100% 再跳回 0%）', () => {
+  const downloading = runProgress([
+    { percent: 42, transferred: 42 * MB, total: 100 * MB, at: 1000 },
+  ])
+  const next = applyUpdateEvent(downloading, { type: 'available', version: '0.3.0' })
+  assert.equal(next.transfer, null)
+  assert.equal(next.percent, null)
+})
+
+test('日志行写出已下载与速度，且不出现 null 占位', () => {
+  const status = runProgress([
+    { percent: 42, transferred: 42 * MB, total: 100 * MB, bytesPerSecond: 2.5 * MB, at: 1000 },
+  ])
+  const line = describeUpdateStatus(status)
+  assert.match(line, /已下载=42\.0\/100\.0MB/)
+  assert.match(line, /速度=2\.5MB\/s/)
+  assert.equal(line.includes('null'), false)
+})

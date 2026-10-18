@@ -1038,10 +1038,19 @@ function wireAutoUpdater(): void {
   )
   autoUpdater.on('update-not-available', () => dispatchUpdateEvent({ type: 'not-available' }))
   autoUpdater.on('download-progress', (progress) =>
-    dispatchUpdateEvent({ type: 'progress', percent: progress.percent }),
+    dispatchUpdateEvent({
+      type: 'progress',
+      percent: progress.percent,
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond,
+      // 时间戳由这一层给：`update.ts` 是纯函数，不读时钟，否则它的用例就得
+      // 假装一个时间，而「速度是怎么随时间变化的」恰恰是要断言的东西。
+      at: Date.now(),
+    }),
   )
   autoUpdater.on('update-downloaded', (info) =>
-    dispatchUpdateEvent({ type: 'downloaded', version: info.version }),
+    dispatchUpdateEvent({ type: 'downloaded', version: info.version, at: Date.now() }),
   )
   autoUpdater.on('error', (error) =>
     dispatchUpdateEvent({
