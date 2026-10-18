@@ -363,13 +363,20 @@ const desktopBridge = Object.freeze({
   getUpdateStatus: (): Promise<UpdateStatus> =>
     ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,
   /**
-   * 主动查一次更新。**只检查并下载，不安装** —— 安装是 `installUpdate`。
+   * 主动查一次更新。**只检查，不下载、不安装** —— 下载是 `downloadUpdate`，
+   * 安装是 `installUpdate`（0.1.6 起三件事各自一个入口）。
    *
    * 返回检查之后的状态。开发态与冒烟态下通道不可用，此时返回的 `phase` 是
    * `unsupported` 而不是抛错，调用方不必为此写一条分支。
    */
   checkForUpdates: (): Promise<UpdateStatus> =>
     ipcRenderer.invoke('update:check') as Promise<UpdateStatus>,
+  /**
+   * 开始下载已发现的新版。**立即返回**，不等下载结束 —— 进度由 `getUpdateStatus`
+   * 轮询取得。没有可下的版本时原样返回当前状态，不抛错。
+   */
+  downloadUpdate: (): Promise<UpdateStatus> =>
+    ipcRenderer.invoke('update:download') as Promise<UpdateStatus>,
   /** 安装已下载的新版并退出应用。没有就绪的包时返回 `not_ready`，应用不会退出。 */
   installUpdate: (): Promise<UpdateInstallResult> =>
     ipcRenderer.invoke('update:install') as Promise<UpdateInstallResult>,

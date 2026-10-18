@@ -34,8 +34,10 @@ interface Window {
     isDesktopShell: true
     /** 更新通道当前状态。结构见 `apps/desktop/src/update.ts` 的 `UpdateStatus`。 */
     getUpdateStatus: () => Promise<unknown>
-    /** 主动查一次更新（只检查并下载，不安装）。 */
+    /** 主动查一次更新（只检查，不下载、不安装）。 */
     checkForUpdates: () => Promise<unknown>
+    /** 开始下载已发现的新版；立即返回，进度靠 `getUpdateStatus` 轮询。 */
+    downloadUpdate: () => Promise<unknown>
     /** 安装已下载的新版并退出应用；没有就绪的包时返回 `not_ready`。 */
     installUpdate: () => Promise<{ ok: true } | { ok: false; reason: string; detail: string }>
     /**

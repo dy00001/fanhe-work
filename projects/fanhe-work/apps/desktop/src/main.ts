@@ -1026,9 +1026,13 @@ function wireAutoUpdater(): void {
     return
   }
 
-  // 有新版就自动下（默认即 true，写出来是因为这是一条决定而非巧合）：
-  // 用户点「重启更新」时不该再等一次下载。
-  autoUpdater.autoDownload = true
+  // **不自动下载**：检测到新版只是「有这件事」，下不下由用户点一下决定。
+  //
+  // 这条在 0.1.6 改过。原先是 `true`，理由是「用户点重启更新时不该再等一次下载」，
+  // 代价是**检测到新版就开始吃掉带宽**，而用户可能正在开会、正在跑别的下载，或者
+  // 根本不想现在更新 —— 他连一个「稍后」都没得选。改成显式点击之后，代价是多一次
+  // 点击，换来的是这条通道不再自作主张。
+  autoUpdater.autoDownload = false
   // 见上方「为什么「重启后生效」这句话是真的」。
   autoUpdater.autoInstallOnAppQuit = true
 
@@ -1090,6 +1094,29 @@ function registerUpdateIpc(): void {
         detail: error instanceof Error ? error.message : String(error),
       })
     }
+    return updateStatus
+  })
+
+  /**
+   * 开始下载（0.1.6）。
+   *
+   * **不等下载结束就返回**：一次 112 MB 的下载要几十秒到几分钟，让 IPC 挂在那里
+   * 会让渲染进程那边一个 `await` 悬上几分钟，中间任何一次组件卸载都变成泄漏。
+   * 进度走轮询（`update:status`），这里只负责「踢一脚」。
+   *
+   * 只在 `available` / `error` 两态接受：已下载完再下是浪费，`idle` 时下载则
+   * 说明上游还没告诉我们有哪一版 —— 那种情况下 `downloadUpdate()` 会抛
+   * 「Please check update first」。
+   */
+  ipcMain.handle('update:download', () => {
+    if (!updateChannelAvailable()) return updateStatus
+    if (updateStatus.phase !== 'available' && updateStatus.phase !== 'error') return updateStatus
+    void autoUpdater.downloadUpdate().catch((error: unknown) => {
+      dispatchUpdateEvent({
+        type: 'error',
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
     return updateStatus
   })
 
