@@ -71,7 +71,18 @@ export type DesktopUpdateStatus = {
   phase: DesktopUpdatePhase
   version: string | null
   percent: number | null
+  /** 字节级事实。没有在下载时为 `null`。 */
+  transfer: DesktopUpdateTransfer | null
   detail: string
+}
+
+/** 与 `apps/desktop/src/update.ts` 的 `UpdateTransfer` 一一对应（同样是抄一份）。 */
+export type DesktopUpdateTransfer = {
+  transferred: number
+  total: number | null
+  bytesPerSecond: number | null
+  startedAt: number | null
+  updatedAt: number | null
 }
 
 /**
@@ -88,7 +99,7 @@ export function parseDesktopUpdateStatus(payload: unknown): DesktopUpdateStatus 
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
 
   const candidate = payload as Partial<DesktopUpdateStatus>
-  const { phase, version, percent, detail } = candidate
+  const { phase, version, percent, detail, transfer } = candidate
 
   if (typeof phase !== 'string' || !DESKTOP_UPDATE_PHASES.includes(phase as DesktopUpdatePhase)) {
     return null
@@ -104,8 +115,35 @@ export function parseDesktopUpdateStatus(payload: unknown): DesktopUpdateStatus 
     phase: phase as DesktopUpdatePhase,
     version: safeVersion,
     percent: safePercent,
+    transfer: parseTransfer(transfer),
     detail: typeof detail === 'string' ? detail : '',
   }
+}
+
+/**
+ * 字节级事实的校验。
+ *
+ * 任何一个必需字段不合法就整体归 `null`，而不是「能读几个算几个」：半份数据会让
+ * 界面显示「0 B / — · 速度 —」，看起来像下载卡住了，而真实原因只是字段没传对。
+ * `transferred` 是唯一必需项 —— 没有它，其余几项都算不出来。
+ */
+function parseTransfer(raw: unknown): DesktopUpdateTransfer | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const candidate = raw as Partial<DesktopUpdateTransfer>
+  const transferred = nonNegative(candidate.transferred)
+  if (transferred === null) return null
+  return {
+    transferred,
+    total: nonNegative(candidate.total),
+    // 速度允许为 0（真的停了），但不允许负数或非有限值。
+    bytesPerSecond: nonNegative(candidate.bytesPerSecond),
+    startedAt: nonNegative(candidate.startedAt),
+    updatedAt: nonNegative(candidate.updatedAt),
+  }
+}
+
+function nonNegative(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 /**
@@ -138,7 +176,19 @@ export function isSameUpdateStatus(
     a.phase === b.phase &&
     a.version === b.version &&
     a.percent === b.percent &&
-    a.detail === b.detail
+    a.detail === b.detail &&
+    isSameTransfer(a.transfer ?? null, b.transfer ?? null)
+  )
+}
+
+function isSameTransfer(a: DesktopUpdateTransfer | null, b: DesktopUpdateTransfer | null): boolean {
+  if (a === null || b === null) return a === b
+  return (
+    a.transferred === b.transferred &&
+    a.total === b.total &&
+    a.bytesPerSecond === b.bytesPerSecond &&
+    a.startedAt === b.startedAt &&
+    a.updatedAt === b.updatedAt
   )
 }
 
@@ -159,13 +209,46 @@ export type DesktopUpdateView =
       kind: 'downloading'
       version: string | null
       percent: number | null
+      /** 已下载字节数；拿不到字节级事实时为 `null`。 */
+      transferred: number | null
+      /** 总字节数。 */
+      total: number | null
+      /** 平滑速度（字节/秒）。 */
+      speed: number | null
+      /** 已用时间（毫秒）。 */
+      elapsedMs: number | null
+      /** 预计剩余时间（毫秒）；速度未知或总大小未知时为 `null`。 */
+      etaMs: number | null
+      /** 进度停住超过阈值：网断了、被限速、或对端不发了。 */
+      stalled: boolean
+      /** 顶栏那一行（窄）：`正在下载 v0.1.5 · 38%`。 */
       text: string
+      /** 面板第一行：`42.3 MB / 112.4 MB`。 */
+      sizeText: string
+      /** 面板第二行：`2.4 MB/s · 已用 00:18 · 剩余 00:29`。 */
+      metaText: string
       title: string
     }
   /** 已下载完，点一下就装并重启。 */
-  | { kind: 'ready'; version: string; text: string; actionLabel: string; title: string }
+  | {
+      kind: 'ready'
+      version: string
+      text: string
+      actionLabel: string
+      title: string
+      /** 安装包大小，用于在面板里给出「下完了」的实证。 */
+      sizeText: string | null
+    }
   /** 检查或下载失败，可以重试。 */
-  | { kind: 'failed'; text: string; actionLabel: string; title: string; detail: string }
+  | {
+      kind: 'failed'
+      text: string
+      actionLabel: string
+      title: string
+      detail: string
+      /** 失败时已经下到的量；检查阶段失败时为 `null`。 */
+      progressText: string | null
+    }
 
 /**
  * 状态 → 视图。**只有桌面宿主才可能不是 `hidden`。**
@@ -180,27 +263,51 @@ export type DesktopUpdateView =
 export function buildDesktopUpdateView(
   status: DesktopUpdateStatus | null,
   host: UpdateHost,
+  /** 判定「停住」用的当前时间。默认取真实时钟；测试传固定值。 */
+  now: number = Date.now(),
 ): DesktopUpdateView {
   if (host !== 'desktop' || status === null) return { kind: 'hidden' }
 
   switch (status.phase) {
     case 'available':
-    case 'downloading':
+    case 'downloading': {
+      const transfer = status.transfer ?? null
+      const transferred = transfer === null ? null : transfer.transferred
+      const total = transfer === null ? null : transfer.total
+      const speed = transfer === null ? null : transfer.bytesPerSecond
+      const elapsedMs =
+        transfer === null || transfer.startedAt === null
+          ? null
+          : Math.max(0, now - transfer.startedAt)
+      const etaMs = computeEtaMs(transferred, total, speed)
+      // 总大小已知且已经下满时不算「停住」：那一刻上游可能只是还没发 downloaded 事件。
+      const incomplete = total === null || transferred === null || transferred < total
+      const stalled = incomplete && isStalled(transfer, now)
       return {
         kind: 'downloading',
         version: status.version,
         percent: status.percent,
+        transferred,
+        total,
+        speed,
+        elapsedMs,
+        etaMs,
+        stalled,
         text: describeDownload(status),
+        sizeText: describeSize(transferred, total),
+        metaText: describeMeta(speed, elapsedMs, etaMs, stalled),
         title:
           status.version === null
             ? '新版安装包正在下载，完成后会提示重启更新'
             : `${formatVersionLabel(status.version)} 的安装包正在下载，完成后会提示重启更新`,
       }
+    }
 
-    case 'downloaded':
+    case 'downloaded': {
       // `version` 为 `null` 时不该走到这里（主进程的 `isReadyToInstall` 也这么要求），
       // 但它是外部输入，兜一下：没有版本号就退回检查中，而不是渲染一个「更新到 null」。
       if (status.version === null) return { kind: 'checking', text: '正在准备更新…' }
+      const total = status.transfer?.total ?? null
       return {
         kind: 'ready',
         version: status.version,
@@ -209,16 +316,25 @@ export function buildDesktopUpdateView(
         // 而「我刚看到有 0.1.3，怎么装完还是 0.1.2」是一个很自然的疑问。
         actionLabel: `重启更新到 ${formatVersionLabel(status.version)}`,
         title: `${formatVersionLabel(status.version)} 的安装包已下载完成。点一下会退出应用、装上新版并自动重新打开 —— 本地设置与数据都保留。`,
+        sizeText: total === null ? null : formatBytes(total),
       }
+    }
 
-    case 'error':
+    case 'error': {
+      const transfer = status.transfer ?? null
+      const progressText =
+        transfer === null ? null : describeSize(transfer.transferred, transfer.total)
       return {
         kind: 'failed',
-        text: '更新检查失败',
+        // 有字节数说明是「下载到一半断了」，没有则是「连检查都没成」—— 两者的下一步
+        // 不一样（前者可以续传，后者要先能连上），文案必须分开。
+        text: transfer === null ? '更新检查失败' : '下载中断',
         actionLabel: '重试',
-        title: `没能连上更新源。${status.detail === '' ? '' : `原因：${status.detail}`}点一下重新检查。`,
+        title: `没能完成更新。${status.detail === '' ? '' : `原因：${status.detail}`}点一下重新检查。`,
         detail: status.detail,
+        progressText,
       }
+    }
 
     case 'checking':
       return { kind: 'checking', text: '正在检查更新…' }
@@ -231,11 +347,102 @@ export function buildDesktopUpdateView(
   }
 }
 
-/** 下载中那一行：有版本号就写出来，有进度就带上百分比。 */
+/**
+ * 进度多久没动就算「停住」。
+ *
+ * 主进程的进度事件大约一秒一条，所以 3 秒意味着**至少漏了两拍**。取 3 而不是 1：
+ * 网络抖一下是常态，每抖一次就把界面切成「已暂停」会让人以为下载坏了。
+ */
+export const UPDATE_STALL_MS = 3000
+
+function isStalled(transfer: DesktopUpdateTransfer | null, now: number): boolean {
+  if (transfer === null || transfer.updatedAt === null) return false
+  return now - transfer.updatedAt >= UPDATE_STALL_MS
+}
+
+/** 下载中那一行（窄）：有版本号就写出来，有进度就带上百分比。 */
 function describeDownload(status: DesktopUpdateStatus): string {
   const label = status.version === null ? '新版本' : formatVersionLabel(status.version)
   if (status.percent === null) return `正在下载 ${label}…`
   return `正在下载 ${label} · ${Math.round(status.percent * 100)}%`
+}
+
+/** `42.3 MB / 112.4 MB`；总大小未知时退成 `已下载 42.3 MB`。 */
+function describeSize(transferred: number | null, total: number | null): string {
+  if (transferred === null) return '正在获取大小…'
+  if (total === null) return `已下载 ${formatBytes(transferred)}`
+  return `${formatBytes(transferred)} / ${formatBytes(total)}`
+}
+
+/** `2.4 MB/s · 已用 00:18 · 剩余 00:29`；停住时换成明确的状态词。 */
+function describeMeta(
+  speed: number | null,
+  elapsedMs: number | null,
+  etaMs: number | null,
+  stalled: boolean,
+): string {
+  const elapsed = `已用 ${formatDuration(elapsedMs)}`
+  if (stalled) return `已暂停 · ${elapsed} · 等待网络恢复`
+  const speedText = speed === null ? '速度 —' : `${formatBytes(speed)}/s`
+  const etaText = etaMs === null ? '剩余 —' : `剩余 ${formatDuration(etaMs)}`
+  return `${speedText} · ${elapsed} · ${etaText}`
+}
+
+/**
+ * 字节 → 人能读的字符串。
+ *
+ * 阈值取 1024 而不是 1000：这是文件大小，与资源管理器、`latest.yml` 里的 `size`
+ * 用同一套进制，否则界面写 112 MB、属性面板写 107 MB，用户会以为下错了包。
+ */
+export function formatBytes(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  // 一位小数，但去掉末尾的 `.0`：`2.0 MB/s` 比 `2 MB/s` 多读一个字符、不增加信息。
+  const oneDecimal = (value: number): string => value.toFixed(1).replace(/\.0$/, '')
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb < 10 ? oneDecimal(kb) : Math.round(kb)} KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${mb < 10 ? oneDecimal(mb) : Math.round(mb)} MB`
+  return `${oneDecimal(mb / 1024)} GB`
+}
+
+/**
+ * 毫秒 → `00:18` / `1:02:03`。
+ *
+ * 60 秒以内直接写「18 秒」：`00:18` 在这个量级上反而要多读一眼。
+ */
+export function formatDuration(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return '—'
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
+}
+
+/**
+ * 预计剩余时间。
+ *
+ * 速度 ≤ 0 或总大小未知时返回 `null`（界面显示「剩余 —」）。**不要用 0 兜底** ——
+ * 那会显示成「剩余 0 秒」，是一个比「不知道」糟糕得多的谎。
+ *
+ * 超过 24 小时的估算一律归 `null`：那不是估算不准，而是这个量级的读数对用户没有
+ * 任何决策价值，写出来只会让人以为下载坏了。
+ */
+export function computeEtaMs(
+  transferred: number | null,
+  total: number | null,
+  speed: number | null,
+): number | null {
+  if (transferred === null || total === null || speed === null) return null
+  if (!Number.isFinite(speed) || speed <= 0) return null
+  const remaining = total - transferred
+  if (remaining <= 0) return 0
+  const etaMs = (remaining / speed) * 1000
+  if (!Number.isFinite(etaMs) || etaMs > 24 * 60 * 60 * 1000) return null
+  return etaMs
 }
 
 /**

@@ -103,6 +103,25 @@ export function useDesktopUpdate(): DesktopUpdateControls {
   }, [status])
 
   /**
+   * 每秒走一格的本地时钟。
+   *
+   * 下载中界面上有三样东西**不随状态变化而变化**：已用时间、剩余时间、以及「停住
+   * 多久了」。它们只随真实时间推进，而轮询在内容没变时会保留同一个状态引用（见
+   * `isSameUpdateStatus`），于是不会触发重渲染 —— 没有这个时钟，一次卡顿会让
+   * 「已用 00:18」停在 00:18，看起来像界面死了。
+   *
+   * 只在下载阶段开：空闲时每秒重渲染一次顶栏是白烧 CPU。
+   */
+  const [now, setNow] = useState(() => Date.now())
+  const downloading =
+    status !== null && (status.phase === 'downloading' || status.phase === 'available')
+  useEffect(() => {
+    if (HOST !== 'desktop' || !downloading) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [downloading])
+
+  /**
    * 只读一次当前状态，不触发检查。
    *
    * **写成 `.then` 而不是 `async`/`await`**，与 `use-version-check.ts` 的 `refresh`
@@ -211,7 +230,7 @@ export function useDesktopUpdate(): DesktopUpdateControls {
   // `status` 在内容没变时是同一个引用（`isSameUpdateStatus` 保证），所以这两个
   // `useMemo` 在空闲时不会每轮都重算 —— 否则 `view` 每渲染换一个新对象，
   // 下面 `act` 的依赖也就每渲染都变，白让消费它的按钮失效一次 memo。
-  const mapped = useMemo(() => buildDesktopUpdateView(status, HOST), [status])
+  const mapped = useMemo(() => buildDesktopUpdateView(status, HOST, now), [status, now])
   const view = useMemo<DesktopUpdateView>(
     // 「正在检查」只在用户主动触发时显示，理由见文件头。
     () => (mapped.kind === 'checking' && !busy ? { kind: 'hidden' } : mapped),

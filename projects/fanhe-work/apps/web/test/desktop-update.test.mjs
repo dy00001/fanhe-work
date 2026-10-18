@@ -24,7 +24,11 @@ import {
   UPDATE_POLL_ACTIVE_MS,
   UPDATE_POLL_ERROR_MS,
   UPDATE_POLL_IDLE_MS,
+  UPDATE_STALL_MS,
   buildDesktopUpdateView,
+  computeEtaMs,
+  formatBytes,
+  formatDuration,
   isSameUpdateStatus,
   parseDesktopUpdateStatus,
   updatePollIntervalMs,
@@ -289,4 +293,202 @@ test('desktop 状态机产出的每个阶段，web 侧都能原样解析', () =>
   }
 
   assert.deepEqual([...seen].sort(), [...DESKTOP_UPDATE_PHASES].sort())
+})
+
+/* ---------------- 下载详情：大小、速度、已用/剩余时间、停住（0.1.6） ---------------- */
+
+/**
+ * 这一组守的是「面板上那几个数字」。
+ *
+ * 它们的失败模式全是「看着正常但读数是错的」：把 1024 当 1000 用（界面写 112 MB、
+ * 资源管理器写 107 MB）、速度未知时显示「剩余 0 秒」、卡住之后「已用 00:18」不再
+ * 走动。这三种都不会抛错，只能在用例里钉住。
+ */
+
+const MB = 1024 * 1024
+
+/** 造一个「正在下载」的状态。 */
+function downloadingStatus(overrides = {}) {
+  return {
+    phase: 'downloading',
+    version: '0.2.0',
+    percent: 0.42,
+    detail: '',
+    transfer: {
+      transferred: 42 * MB,
+      total: 100 * MB,
+      bytesPerSecond: 2 * MB,
+      startedAt: 1_000_000,
+      updatedAt: 1_000_000 + 18_000,
+    },
+    ...overrides,
+  }
+}
+
+test('formatBytes 用 1024 进制，与资源管理器一致', () => {
+  assert.equal(formatBytes(0), '0 B')
+  assert.equal(formatBytes(512), '512 B')
+  assert.equal(formatBytes(1536), '1.5 KB')
+  assert.equal(formatBytes(20 * 1024), '20 KB')
+  assert.equal(formatBytes(112 * MB), '112 MB')
+  assert.equal(formatBytes(2.5 * MB), '2.5 MB')
+  assert.equal(formatBytes(1.5 * 1024 * MB), '1.5 GB')
+  assert.equal(formatBytes(null), '—')
+  assert.equal(formatBytes(Number.NaN), '—')
+})
+
+test('formatDuration：一分钟以内直接写秒，超过写 mm:ss，再长写 h:mm:ss', () => {
+  assert.equal(formatDuration(18_000), '18 秒')
+  assert.equal(formatDuration(0), '0 秒')
+  assert.equal(formatDuration(89_000), '1:29')
+  assert.equal(formatDuration(3_723_000), '1:02:03')
+  assert.equal(formatDuration(null), '—')
+  assert.equal(formatDuration(-1), '—')
+})
+
+test('computeEtaMs：速度未知或为 0 时返回 null，绝不返回 0', () => {
+  assert.equal(computeEtaMs(42 * MB, 100 * MB, null), null)
+  assert.equal(computeEtaMs(42 * MB, 100 * MB, 0), null)
+  assert.equal(computeEtaMs(42 * MB, null, 2 * MB), null)
+  // 58 MB / 2 MB/s = 29 秒
+  assert.equal(computeEtaMs(42 * MB, 100 * MB, 2 * MB), 29_000)
+  // 已经下满：剩余 0，是确定的
+  assert.equal(computeEtaMs(100 * MB, 100 * MB, 2 * MB), 0)
+  // 超过一天的估算没有决策价值
+  assert.equal(computeEtaMs(0, 100 * 1024 * MB, 1), null)
+})
+
+test('下载中：面板拿到大小、速度、已用与剩余时间', () => {
+  const view = buildDesktopUpdateView(downloadingStatus(), 'desktop', 1_000_000 + 18_000)
+  assert.equal(view.kind, 'downloading')
+  assert.equal(view.transferred, 42 * MB)
+  assert.equal(view.total, 100 * MB)
+  assert.equal(view.speed, 2 * MB)
+  assert.equal(view.elapsedMs, 18_000)
+  assert.equal(view.etaMs, 29_000)
+  assert.equal(view.stalled, false)
+  assert.equal(view.sizeText, '42 MB / 100 MB')
+  assert.equal(view.metaText, '2 MB/s · 已用 18 秒 · 剩余 29 秒')
+})
+
+test('🔴 进度几秒没动就报「已暂停」，且速度不再冒充正常值', () => {
+  const status = downloadingStatus()
+  const view = buildDesktopUpdateView(status, 'desktop', 1_000_000 + 18_000 + UPDATE_STALL_MS)
+  assert.equal(view.kind, 'downloading')
+  assert.equal(view.stalled, true)
+  assert.match(view.metaText, /^已暂停/)
+  assert.equal(view.metaText.includes('MB/s'), false, '停住时不该还写一个速度')
+})
+
+test('已经下满但还没收到完成事件时不算停住（那只是上游还没发下一个事件）', () => {
+  const status = downloadingStatus({
+    percent: 1,
+    transfer: {
+      transferred: 100 * MB,
+      total: 100 * MB,
+      bytesPerSecond: 0,
+      startedAt: 1_000_000,
+      updatedAt: 1_000_000,
+    },
+  })
+  const view = buildDesktopUpdateView(status, 'desktop', 1_000_000 + 60_000)
+  assert.equal(view.kind, 'downloading')
+  assert.equal(view.stalled, false)
+})
+
+test('拿不到字节级事实时，面板不编造大小与速度', () => {
+  const view = buildDesktopUpdateView(
+    downloadingStatus({ transfer: null, percent: null }),
+    'desktop',
+    1_000_000,
+  )
+  assert.equal(view.kind, 'downloading')
+  assert.equal(view.sizeText, '正在获取大小…')
+  assert.equal(view.metaText, '速度 — · 已用 — · 剩余 —')
+})
+
+test('下载中断：失败态带上「已经下到多少」', () => {
+  const view = buildDesktopUpdateView(
+    { ...downloadingStatus(), phase: 'error', detail: 'net::ERR_CONNECTION_RESET' },
+    'desktop',
+    1_000_000,
+  )
+  assert.equal(view.kind, 'failed')
+  assert.equal(view.text, '下载中断')
+  assert.equal(view.progressText, '42 MB / 100 MB')
+  assert.match(view.title, /ERR_CONNECTION_RESET/)
+})
+
+test('检查阶段就失败时不显示进度（那时一个字节都没下）', () => {
+  const view = buildDesktopUpdateView(
+    { phase: 'error', version: null, percent: null, transfer: null, detail: 'ENOTFOUND' },
+    'desktop',
+    1_000_000,
+  )
+  assert.equal(view.kind, 'failed')
+  assert.equal(view.text, '更新检查失败')
+  assert.equal(view.progressText, null)
+})
+
+test('下载完成：就绪态带上安装包大小', () => {
+  const view = buildDesktopUpdateView(
+    {
+      phase: 'downloaded',
+      version: '0.2.0',
+      percent: 1,
+      transfer: {
+        transferred: 112 * MB,
+        total: 112 * MB,
+        bytesPerSecond: null,
+        startedAt: 1_000_000,
+        updatedAt: 1_000_000,
+      },
+      detail: '',
+    },
+    'desktop',
+    1_000_000,
+  )
+  assert.equal(view.kind, 'ready')
+  assert.equal(view.sizeText, '112 MB')
+})
+
+test('字节级事实形状不对时整体归 null（半份数据会画出「0 B / —」的假卡死）', () => {
+  const parsed = parseDesktopUpdateStatus({
+    phase: 'downloading',
+    version: '0.2.0',
+    percent: 0.4,
+    detail: '',
+    transfer: { total: 100 * MB, bytesPerSecond: 2 * MB },
+  })
+  assert.equal(parsed.transfer, null)
+})
+
+test('🔴 字节数变了就是新状态（否则每秒的进度不会触发重渲染）', () => {
+  const a = parseDesktopUpdateStatus({
+    phase: 'downloading',
+    version: '0.2.0',
+    percent: 0.4,
+    detail: '',
+    transfer: {
+      transferred: 40 * MB,
+      total: 100 * MB,
+      bytesPerSecond: 2 * MB,
+      startedAt: 1,
+      updatedAt: 2,
+    },
+  })
+  const b = parseDesktopUpdateStatus({
+    phase: 'downloading',
+    version: '0.2.0',
+    percent: 0.4,
+    detail: '',
+    transfer: {
+      transferred: 41 * MB,
+      total: 100 * MB,
+      bytesPerSecond: 2 * MB,
+      startedAt: 1,
+      updatedAt: 3,
+    },
+  })
+  assert.equal(isSameUpdateStatus(a, b), false)
 })
