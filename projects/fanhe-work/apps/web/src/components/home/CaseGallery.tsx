@@ -21,8 +21,9 @@ import { CaseGalleryDialogContent } from './CaseGalleryDialog'
  *   - 键盘：容器可聚焦，← → 翻一页。
  *
  * **「全部品类」是一个按钮。** 原型里它写的是 `href="#"`，落地时保持成静态文字，于是
- * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：九个品类与
- * 各自的案例位全量铺开，首页这条横滑条仍然只负责「先看四个」。
+ * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：把九个
+ * 品类一次性铺开——没有案例库之前，弹窗与主页横滑条共用同一份卡片样式，不重复堆假数
+ * 据；首页这条横滑条仍然只负责「先看四个」。
  */
 export function CaseGallery() {
   const stripRef = useRef<HTMLDivElement>(null)
