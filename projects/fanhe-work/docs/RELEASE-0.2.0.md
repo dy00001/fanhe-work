@@ -176,15 +176,23 @@ run-daily.ps1  →  data/daily/<日期>/  →  export-daily-ingest.mjs  →  ops
 
 | 步骤 | 状态 |
 | --- | --- |
-| 1. 根 `package.json` 版本 `0.1.6` → `0.2.0`，`apps/desktop` 由 `sync-version.mjs` 同步 | 本轮已完成 |
-| 2. `docs/RELEASE-0.2.0.md` 与 `CHANGELOG.md` | 本轮已完成 |
-| 3. 四道门禁（test / lint / typecheck / format:check） | 本轮已跑：912 项 0 失败 |
-| 4. `pnpm --filter @fanhe/web build` | **待执行** |
-| 5. 删 `apps/desktop/release/win-unpacked` 后 `pnpm --filter @fanhe/desktop dist` | **待执行**（U 盘上不删会撞安全删除守卫 ETIMEDOUT） |
-| 6. `verify:sign` + `verify:pack` | **待执行** |
-| 7. 发布三项核对（未认证 by-tag 200、线上 `latest.yml` 逐字节一致、线上 exe 的 sha512 与声明 MATCH） | **待执行** |
+| 1. 根 `package.json` 版本 `0.1.6` → `0.2.0`，`apps/desktop` 由 `sync-version.mjs` 同步 | 完成（`5a583d5`） |
+| 2. `docs/RELEASE-0.2.0.md` 与 `CHANGELOG.md` | 完成 |
+| 3. 四道门禁（test / lint / typecheck / format:check） | 完成：912 项 0 失败 |
+| 4. `pnpm --filter @fanhe/web build` | 完成：产物自报 `0.2.0` |
+| 5. 删 `release/win-unpacked` 后 `pnpm --filter @fanhe/desktop dist` | 完成：5 分 25 秒，exit 0 |
+| 6. `verify:sign` + `verify:pack` | 完成：9 个 exe 全 Valid（`NOT_VALID_COUNT=0`）、47 项断言全过 |
+| 7. 发布与三项核对 | 完成：Release `418602436`，`draft=false`，三资产 `uploaded` |
 
-第 4 步之后本版才算「可发布」；第 5–7 步需要在能联网且证书在机的环境里做。
+### 打包态冒烟
+
+`--smoke` 在本机会话直接跑会失败（`ERR_FAILED (-2) loading http://127.0.0.1:41873/`），日志里 GPU 进程反复以 `0xC0000005` 退出。**这不是安装包的问题**：
+
+- 端口与静态服务正常：同一端口上另起一个 Node 服务，`curl` 返回 200；前端产物 `index.html` 1694 字节、`assets/` 与 `brand/` 齐备。
+- 排除环境变量污染：`NODE_OPTIONS` 与 `ELECTRON_RUN_AS_NODE` 由本会话注入，跑之前需 `env -u` 掉；否则 Electron 会以 Node 模式启动并报 `bad option: --smoke`。
+- 加上 `--no-sandbox --disable-gpu-sandbox --use-angle=swiftshader` 后 **PASS**：`渲染元素=1 标题=梵禾 Work 预加载桥=有 console错误=0`、`反代到达上游=是`、`启动自检=可用`、`凭据通道=可用`。
+
+结论：本机的沙箱环境起不了默认 GPU/渲染进程，安装包本身可正常加载。**在真实桌面会话里应当用默认参数复跑一次**，这条没有替代品。
 
 ### 本轮实测
 
@@ -197,3 +205,11 @@ run-daily.ps1  →  data/daily/<日期>/  →  export-daily-ingest.mjs  →  ops
 | 接口矩阵 | 54 项全过（三档权限 × 五档区间 × 五店占位 × 日增 10-19 与快照选择 × 六条反例） |
 | 浏览器矩阵 | 管理员 39 项 / 仅看板 26 项 / 无权限 5 项全过，console 零错误、无 4xx/5xx |
 | 数据锚点 | 30 天基线 10,800,000 分（¥108,000）三条路径一致；日增 10-19 入库 31 个业务日、快照两类窗口并存 |
+| `dist` | 5 分 25 秒，exit 0 |
+| 产物 | `fanhe-work-setup-0.2.0.exe` **112,402,960** 字节；`.blockmap` 117,671；`latest.yml` 349 |
+| `verify:sign` | 9 个 exe 全 `STATUS=Valid`，`NOT_VALID_COUNT=0`，`RESULT=OK` |
+| `verify:pack` | **47 项断言全过**；asar 内版本 `0.2.0`；`resources/web` 与 `apps/web/dist` 逐文件一致；构建期身份 `0.2.0 · 2026-10-20T15:47:57Z · d2a2645` |
+| 发布 | Release `418602436`，tag `v0.2.0` → `5a583d5`，`draft=false`、`prerelease=false` |
+| 核对一：未认证 by-tag | **200**，三资产 `uploaded` |
+| 核对二：线上 `latest.yml` | **逐字节一致**（349 字节，sha256 `d13b2792…`） |
+| 核对三：线上 exe sha512 | **MATCH**（下载 112,402,960 字节，`hylbJPIG…` 与声明一致） |
