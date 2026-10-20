@@ -234,7 +234,7 @@ ALL_PROXY=http://127.0.0.1:7897 git -c http.proxy=http://127.0.0.1:7897 push ori
 | `pnpm lint` / `typecheck` / `format:check` | 全绿 | `format:check` 应输出 `All matched files use Prettier code style!` |
 | 浏览器 e2e | **150 项全通过，0 失败** | 含「渲染过程未产生未捕获异常或 console.error」。UI 集成后为 149（T3-12 时为 146，UI 集成新增 3 项：导航 18 项形态、首页三段式、顶栏版本号）。**UI 落地对齐后于 2026-10-13 重跑**：首轮抓到 3 项失败，根因是断言停留在 T7-01 之前（占位页断言仍指向已落地的「系统设置」），改用「综合看板」并补系统设置的落地断言后 **150 项全通过**（`12b553b`）。T3-12 那次的首轮超时与根因（CDP 合成指针事件概率性整组丢失）见 8.2 与 9.39 |
 | 外壳冒烟 | **PASS** | `pnpm --filter @fanhe/desktop smoke`：隐藏窗口加载产物 → 探 DOM → 打印一行结论并按成败设退出码。判据是 `#root` 里有元素 + console 零错误（见 8.5）。**受限环境需 `FANHE_NO_SANDBOX=1`** |
-| 数据库 | **7 个迁移**、**13 张业务表**、权限点 **12** / 角色 **4** | e2e 之后的干净基线是 `users` 1（owner `fanhe`）、其余业务表 0 行。T7-01 新增第七个迁移 `20261012094234_user_permissions` 与权限点 `system.user.delete`，权限点由 11 增至 **12**。**注意**：日常开发库里有使用者自己建的账号与数据（实测 `users` 3、`notes` 2，含 `fanhe-01` / `guoyao`），清理残留前先按命名前缀与创建时间确认是不是自己的数据，测试残留的命名前缀是 `zz_test_*` |
+| 数据库 | **8 个迁移**、**17 张业务表**、权限点 **15** / 角色 **4** | e2e 之后的干净基线是 `users` 1（owner `fanhe`）、其余业务表 0 行。T7-01 新增第七个迁移 `20261012094234_user_permissions` 与权限点 `system.user.delete`，权限点由 11 增至 **12**。**注意**：日常开发库里有使用者自己建的账号与数据（实测 `users` 3、`notes` 2，含 `fanhe-01` / `guoyao`），清理残留前先按命名前缀与创建时间确认是不是自己的数据，测试残留的命名前缀是 `zz_test_*`。**2026-10-20 运营看板接入**：新增第 8 个迁移 `20261020135517_add_ops_metrics`，业务表 13 → **17**（`ecom_shops` / `ecom_daily_metrics` / `ecom_dimension_snapshots` / `ecom_collect_runs`），权限点 12 → **15**（`ops` 段三个），跑过 `db:seed`。 |
 
 ---
 
@@ -1373,3 +1373,23 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 **上一轮新增/修改的关键文件（T3-08）**：`apps/web/src/lib/note-draft.ts`（新）、`apps/web/src/components/notes/{NoteEditor,NotesPanel}.tsx`、`apps/web/test/note-draft.test.mjs`（新）、`apps/web/test/e2e-auth.mjs`、`apps/web/package.json`、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
 
 **上一轮新增/修改的关键文件（T3-07）**：`packages/shared/src/note.ts`、`apps/api/src/note/notes.ts`、`apps/api/src/routes/notes.ts`、`apps/web/src/lib/api.ts`、`apps/web/src/components/notes/NotesPanel.tsx`、`apps/web/test/e2e-auth.mjs`（新增 `openThemeMenu` 与 `E2E_CDP_PORT`）、三个测试文件、`docs/{DEVELOPMENT-PLAN,WORK-STATUS}.md`。
+
+
+## 十二、2026-10-20 运营看板（ops）接入
+
+千牛 / 生意参谋数据接入梵禾 Work，落地为运维信息平台下的「数据看板」（`/ops/dashboard`，原 `planned: true` 占位项已转正）。
+
+**改动的层，按依赖顺序：**
+
+1. **共享包**：新增 `packages/shared/src/ops.ts`（契约类型、限额、日期运算）；`permissions.ts` 增 `ops` 模块与三个权限点（`ops.shop.read` / `ops.finance.read` / `ops.collect.read`），ADMIN 显式授予三项（**不写 `ops.*`**，避免连金额权限一起给），MEMBER 与 VIEWER 默认没有；`navigation.ts` 把 `dashboard` 的 `planned` 置 false、`module` 设为 `ops`、改写 `summary`。
+2. **数据模型**：`schema.prisma` 末尾新增四个 `ecom_*` 模型与四个枚举，一条迁移。**与原方案（十表）的差异见 `docs/ops/README.md` 第二节** —— 商品 / 渠道 / 客服 / 推广没有逐日序列，硬建五张空表比不建更糟，收敛为「逐日表 + 带窗口的维度快照表」。
+3. **服务端**：` apps/api/src/ops/{date,ingest,query}.ts` 与 `routes/ops.ts`；`app.ts` 注册一行；`config/env.ts` 增 `ops.ingestToken`（getter，未配置时不阻止启动，ingest 返回 503）。写接口走回环 + `x-ops-token`，读接口走 `requirePermission`。
+4. **前端**：`lib/{ops,ops-display,ops-view,ops-pending,use-ops-dashboard}.ts`、`components/ops/`（11 个组件）、`pages/OpsDashboardPage.tsx`；`routes.tsx` 补一条分派；`lib/api.ts` 增三个请求函数；`index.css` 增涨跌令牌 `--up` / `--down`（亮暗各一份，涨红跌绿）。
+5. **采集端**：`tools/collector/`（原 `E:/qianniu-shuju` 整目录迁入，含 30 天基线 `data/csv30`、20 个脚本、10 份口径文档、原型页面），新增 `scripts/export-ingest.mjs`（csv30 → 契约 JSON）；`apps/api/src/tools/ops-import.ts` 为回填入口。
+6. **忽略规则三处同改**：`.gitignore`（采集器 profile / daily / raw / 截图）、`eslint.config.js` 的 `ignores`、`.prettierignore` 均加 `tools/collector`。
+
+**实测（2026-10-20）：** 四道门禁 **887 项 0 失败**（shared 119 + web 240 + desktop 287 + api 241，含 5 项数据库设计性跳过）；`lint` 0 问题、`typecheck` 通过、`format:check` 通过。迁移 7 → 8、表 13 → 17、权限点 12 → 15。入库 30 天基线：逐日 30 行、维度 50 行，支付金额 10,800,000 分（¥108,000），与 `csv30` 四处锚点一致；同一 payload 连跑两次 `revisedDays = 0`。接口反例：错 token → 401、未配 token → 503、窗口倒置 → 400、逐日日期越窗 → 400、未登录读接口 → 401。
+
+**新增文档：** `docs/ops/README.md`（模块边界、权限、口径、欠账）、`docs/ops/DATA-CONTRACT.md`（上报契约）、`docs/ops/RUNBOOK.md`（每日采集、回填、故障判据）。
+
+**明确的欠账：** 服务 / 推广 / 内容三个板块无真实数据（页面显示待接入清单，不给演示数字）；分店 2 至 5 空；商品健康四项未采；导出、手动触发采集、单品下钻未做；日增原始 JSON 尚无自动转契约的适配器（`export-ingest.mjs` 只读 `csv30`）。

@@ -1,0 +1,149 @@
+# 运营数据 · 上报契约（ops-ingest.v1）
+
+> 版本：v1，2026-10-20
+> 定义位置：`packages/shared/src/ops.ts`（类型）、`apps/api/src/routes/ops.ts`（JSON Schema）、`tools/collector/scripts/export-ingest.mjs`（生产者）
+> 收货方：`apps/api/src/ops/ingest.ts`
+
+---
+
+## 一、为什么要有契约
+
+采集端与服务端是两套代码、两个进程、两台机器（采集必须在有千牛登录态的机器上跑）。它们之间只有一份 JSON 交接。没有契约的话，两边会各自演化出「字段名差不多」的两套理解，而差异只会在某个月末被财务对出来。
+
+契约承担三件事：
+
+1. **固定字段名与单位**（金额一律为分，比率一律为 0~1 的比例）。
+2. **固定可加性**：`daily` 段可相加，`dimensions` 段不可相加。分两段而不是一个扁平数组，就是为了让这件事在结构上无法混淆。
+3. **固定幂等**：同一份 payload 可以反复提交，结果一致。
+
+---
+
+## 二、顶层结构
+
+```json
+{
+  "contractVersion": 1,
+  "shop": { "code": "fanhe-main", "name": "梵禾美学全屋定制家具", "platform": "taobao", "sellerNick": null },
+  "window": { "from": "2026-09-19", "to": "2026-10-18" },
+  "source": "report",
+  "trigger": "backfill",
+  "rawPath": "tools/collector/data/csv30",
+  "daily": [ ... ],
+  "dimensions": [ ... ]
+}
+```
+
+| 字段 | 必填 | 约定 |
+| --- | --- | --- |
+| `contractVersion` | 是 | 只能是 `1`。改结构必须递增，收货方认版本不认字段猜测 |
+| `shop.code` | 是 | 稳定代号（不是数据库 id）。同一个代号 = 同一家店，换名不改代号 |
+| `shop.platform` | 是 | `taobao` / `tmall` |
+| `window` | 是 | 闭区间，两端都是 `YYYY-MM-DD`，跨度 1 到 366 天 |
+| `source` | 是 | `report`（报表导出）或 `api`（接口直取）。对账时用它区分口径 |
+| `trigger` | 是 | `schedule` / `manual` / `backfill`。审计与排查用 |
+| `rawPath` | 否 | 原始文件**相对路径**。绝对路径会被盘符变化打穿，所以禁止 |
+
+`window` 的语义：**`daily` 段的每一行都必须落在窗口内**，越界整批拒绝（`400 invalid_daily`）。理由是区间求和与窗口必须能对上，对不上只会在月末发现。
+
+---
+
+## 三、`daily` 段（可相加）
+
+```json
+{ "date": "2026-09-19", "payAmountFen": 176000, "visitors": 36, "payBuyers": 4, "itemVisitors": 19 }
+```
+
+| 字段 | 单位 | 可空 | 说明 |
+| --- | --- | --- | --- |
+| `date` | 业务日 | 否 | 自然日，不带时区。不用时间戳 |
+| `payAmountFen` | 分 | 是 | 支付金额 |
+| `visitors` | 人 | 是 | 当日访客（同一访客当天多次访问算一次） |
+| `payBuyers` | 人 | 是 | 当日支付买家 |
+| `itemVisitors` | 人次 | 是 | 商品访客，同一访客看多个商品各算一次 |
+
+**空值 ≠ 0。** `null` 表示这一天没采到，`0` 表示当天确实没有。收货方原样入库，不补 0；补 0 会系统性拉低日均，而且从数字上看不出来。
+
+**金额用「分」**：单日上限约 2147 万元（Int 上限），超过说明上游把元当成分传了 —— 这个上限本身是一道校验。换算只在生产者一侧发生一次。
+
+**逐日行有上限**：400 行。一年 366 行，超过说明粒度搞错了。
+
+---
+
+## 四、`dimensions` 段（不可相加）
+
+```json
+{ "type": "channel", "key": "经营优势", "label": "经营优势", "metrics": { "visitors": 3679, "ratio": 0.947, "payAmountFen": 9800000 } }
+```
+
+| `type` | 一行代表 | 典型 `key` | 典型 `metrics` |
+| --- | --- | --- | --- |
+| `item` | 一个商品 | 平台商品 id | `visitors` `payBuyers` `payRate` `payAmountFen` `cartFen` `favorites` |
+| `channel` | 一条渠道 | 渠道名（已归一） | `visitors` `ratio` `cycleCrc` `payBuyers` `payRate` `payAmountFen` |
+| `area` | 一个地域 | 省份名 | `visitors` `ratio` `orderRate` |
+| `keyword` | 一个搜索词 | 词本身 | `visitors` |
+| `content` | 一个内容来源 | 微详情 / 短视频 / 直播 / 图文 | `visitors` `cycleCrc` `note` |
+| `summary` | **一个指标** | 指标名（与 KPI 的 key 同构） | `value` `cycleCrc` |
+
+`summary` 与前五种不是一类：前五种「一行一个对象」，它是「一行一个指标」。整段口径的比率、时长、客单价放这里，避免混进逐日表。
+
+`metrics` 里金额字段**一律以 `Fen` 结尾**。这不是命名洁癖：服务端按这个后缀裁剪无权限字段，界面按后缀判断「有没有金额列」。改后缀会同时打穿权限与展示。
+
+**窗口进主键**：`(shop, type, statFrom, statTo, key)` 唯一。同一批商品在 9 月与 10 月各有一份 30 天排行，是两份不同的事实，不能互相覆盖。
+
+---
+
+## 五、收货方的行为（写入端）
+
+1. **整批事务**。逐日与维度同进同退；半截写入会让日趋势与商品榜来自不同窗口，而界面上看不出异常。
+2. **幂等**。按 `(shop, statDate)` 与 `(shop, type, statFrom, statTo, key)` upsert。重复提交不产生新行。
+3. **`revised` 判定**。同一业务日的新值与库里不同时，`revised = true`。平台回溯改数（昨天的 GMV 今天变了）靠这一列留痕；**不是「只要写就 true」**。
+4. **清掉同窗口的旧行**。本次未上报的维度键会从同一窗口删除。不清的话，下架商品会永远留在排行里。**历史窗口一行不动** —— 历史是既成事实。
+5. **批次必留痕**。每次写入建一行 `ecom_collect_runs`，含行数、耗时、原始路径、错误。失败也记。
+6. **不推算、不聚合、不换算**。收货方只存「平台给了什么」。
+
+---
+
+## 六、两条写入通道
+
+| 通道 | 用途 | 鉴权 | 命令 |
+| --- | --- | --- | --- |
+| `POST /api/ops/ingest` | 日常采集（计划任务） | 回环 + `x-ops-token`（`OPS_INGEST_TOKEN`） | 采集器自己发 |
+| `pnpm db:ops-import` | 历史回填、新机初始化 | 本机数据库凭据 | `tsx src/tools/ops-import.ts [路径]` |
+
+两条通道**共用同一个 `ingestOpsSnapshot`**。这一点必须守住：两套代码会在去重、`revised`、窗口清理上分叉，而分叉出来的差异没有任何测试能发现。
+
+`OPS_INGEST_TOKEN` 未配置时 ingest 返回 **503 并说明原因**，不是 500，也不阻止 API 启动 —— 读接口与页面不依赖它。
+
+---
+
+## 七、四档口径与前端约定
+
+| 档位 | 含义 | 前端表现 |
+| --- | --- | --- |
+| 逐日（`daily`） | 有逐日序列，区间内可求和 | 徽标「逐日」，可随区间重算 |
+| 推算（`derived`） | 由逐日值相除得到 | 徽标「推算」，随区间重算但不可跨维度相加 |
+| 整段（`period`） | 只有整段值，带自己的窗口 | 徽标「整段」，区块标题写明窗口，不提供可点的时间控件 |
+| 演示 | 只存在于旧原型，**不在契约里** | 接口不返回演示数据，缺数据就显示待接入清单 |
+
+「任何页面都不允许出现时间条可点但数字不动」这条规则，在整段口径的区块里靠**显式标注窗口**来满足 —— 用户看到「09-19 ~ 10-18 整段」就不会期待它随上方区间变化。
+
+---
+
+## 八、改契约的流程
+
+1. 改 `packages/shared/src/ops.ts` 的类型。
+2. 改 `apps/api/src/routes/ops.ts` 的 JSON Schema（`additionalProperties: false`，多一个字段就 400）。
+3. 改 `apps/api/src/ops/ingest.ts` 的校验与写入。
+4. 改 `tools/collector/scripts/export-ingest.mjs` 的生产逻辑。
+5. 若改的是字段名或单位：递增 `contractVersion`，并保证旧版本仍能被识别（或在文档里明确「不兼容」并给出迁移脚本）。
+6. 跑四道门禁，`revisedDays` 在重跑后必须回到 0。
+
+---
+
+## 九、当前已知的契约内差异
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 逐日求和访客 4,038 ≠ 整段访客 3,890 | 跨日重复访客在整段口径下去重 | 两值都入库（`summary.visitors` 与逐日和），接口按区间是否等于快照窗口选择，见 `ops/query.ts` |
+| 商品访客逐条相加 3,350 ≠ 去重商品访客 3,241 | 同一访客看多个商品 | 同上，界面标注「含同一访客看多个商品」 |
+| 内容板块三个模块目录为空 | 生意参谋内容模块抓到响应但不渲染数据面板 | 已记录为已知缺口，内容三项改从光合平台取（D 批） |
