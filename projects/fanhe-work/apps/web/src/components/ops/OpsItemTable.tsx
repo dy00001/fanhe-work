@@ -49,7 +49,15 @@ export function OpsItemTable(props: { group: OpsDimensionGroup; limit?: number }
 
   const rows = sortByMetric(props.group.rows, sortKey, direction)
   const visible = props.limit === undefined ? rows : rows.slice(0, props.limit)
-  const showMoney = visible.some((row) => hasKey(row, 'payAmountFen'))
+  /*
+   * **两个金额列各自判断**，不是只看支付金额。
+   *
+   * 首版只判 `payAmountFen`，于是没有 `ops.finance.read` 的账号在商品表里仍会看到
+   * 一列「加购金额」，值全是「—」。那比不显示更糟：它让人以为这些商品真的没有
+   * 加购，而不是「你看不到」。服务端裁字段时是把键整个删掉，所以判据就是键在不在。
+   */
+  const showPayAmount = visible.some((row) => hasKey(row, 'payAmountFen'))
+  const showCart = visible.some((row) => hasKey(row, 'cartFen'))
 
   const windowLabel =
     props.group.window === null
@@ -77,30 +85,32 @@ export function OpsItemTable(props: { group: OpsDimensionGroup; limit?: number }
                 #
               </TableHead>
               <TableHead className="text-xs font-normal text-muted-foreground-weak">商品</TableHead>
-              {COLUMNS.filter((column) => column.key !== 'payAmountFen' || showMoney).map(
-                (column) => (
-                  <TableHead
-                    key={column.key}
-                    className="text-right text-xs font-normal text-muted-foreground-weak"
+              {COLUMNS.filter((column) => {
+                if (column.key === 'payAmountFen') return showPayAmount
+                if (column.key === 'cartFen') return showCart
+                return true
+              }).map((column) => (
+                <TableHead
+                  key={column.key}
+                  className="text-right text-xs font-normal text-muted-foreground-weak"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSort(column.key)
+                    }}
+                    className={cn(
+                      'inline-flex items-center gap-1 tabular-nums hover:text-foreground',
+                      sortKey === column.key && 'text-foreground',
+                    )}
                   >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSort(column.key)
-                      }}
-                      className={cn(
-                        'inline-flex items-center gap-1 tabular-nums hover:text-foreground',
-                        sortKey === column.key && 'text-foreground',
-                      )}
-                    >
-                      {column.label}
-                      {sortKey === column.key ? (
-                        <span>{direction === 'desc' ? '↓' : '↑'}</span>
-                      ) : null}
-                    </button>
-                  </TableHead>
-                ),
-              )}
+                    {column.label}
+                    {sortKey === column.key ? (
+                      <span>{direction === 'desc' ? '↓' : '↑'}</span>
+                    ) : null}
+                  </button>
+                </TableHead>
+              ))}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -123,14 +133,16 @@ export function OpsItemTable(props: { group: OpsDimensionGroup; limit?: number }
                 <TableCell className="text-right text-sm tabular-nums">
                   {formatPercent(metricOf(row, 'payRate'))}
                 </TableCell>
-                {showMoney ? (
+                {showPayAmount ? (
                   <TableCell className="text-right text-sm tabular-nums">
                     {formatFen(metricOf(row, 'payAmountFen'), { compact: true })}
                   </TableCell>
                 ) : null}
-                <TableCell className="text-right text-sm tabular-nums">
-                  {formatFen(metricOf(row, 'cartFen'), { compact: true })}
-                </TableCell>
+                {showCart ? (
+                  <TableCell className="text-right text-sm tabular-nums">
+                    {formatFen(metricOf(row, 'cartFen'), { compact: true })}
+                  </TableCell>
+                ) : null}
               </TableRow>
             ))}
           </TableBody>

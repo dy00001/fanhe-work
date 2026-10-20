@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import {
   OPS_DIMENSION_TYPES,
   OPS_LIMITS,
+  opsRangeDays,
   PERMISSIONS,
   clampOpsRange,
   isValidOpsRange,
@@ -20,7 +21,13 @@ import { requirePermission } from '../auth/guard.js'
 import { env } from '../config/env.js'
 import { isLoopbackAddress } from '../launch/loopback.js'
 import { ingestFailureMessage, ingestOpsSnapshot } from '../ops/ingest.js'
-import { latestCoveredDate, listOpsShops, loadOpsDashboard, loadOpsHealth } from '../ops/query.js'
+import {
+  latestCoveredDate,
+  listOpsShops,
+  loadOpsDashboard,
+  loadOpsHealth,
+  loadOpsShopBoards,
+} from '../ops/query.js'
 
 /**
  * 运营数据看板的接口。
@@ -231,6 +238,13 @@ async function resolveRange(
     return { ok: false, message: `区间不是合法日期：${query.from} ~ ${query.to}` }
   }
   const range = { from: query.from, to: query.to }
+  // 起止颠倒必须显式拒绝，不能靠 clamp 兜底：clamp 只处理「跨度太长」，
+  // 对倒置区间是空操作，于是它会带着一个非法区间一路查下去，返回一屏
+  // 「全为空但成功」的结果。那种响应看起来像「这段时间没数据」，
+  // 实际是参数写反了，两者要区分开。
+  if (opsRangeDays(range) === 0) {
+    return { ok: false, message: `起止顺序不对：${query.from} 晚于 ${query.to}` }
+  }
   if (!isValidOpsRange(range)) {
     // 超过上限时收口而不是报错：用户点「近 90 天」和手输一年区间，意图是一样的
     // （想看尽量长的一段），拒绝只会让他反复改数字。
@@ -280,6 +294,32 @@ export function registerOpsRoutes(app: FastifyInstance): void {
       }
       const body: OpsHealthResponse = health
       return reply.code(200).send(body)
+    },
+  )
+
+  /**
+   * 五店并列指标带。数据大屏首屏一次取全，避免「五家店五次往返」。
+   *
+   * 没有数据的店铺也返回（`hasData: false`），由界面渲染「待接入」占位卡 ——
+   * 布局固定五列是交互约定，后端不替界面决定「这家店该不该出现」。
+   */
+  app.get<{ Querystring: DashboardQuery }>(
+    '/api/ops/overview-shops',
+    {
+      preHandler: requirePermission(PERMISSIONS.OPS_SHOP_READ),
+      schema: { querystring: DASHBOARD_QUERY_SCHEMA },
+    },
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const range = await resolveRange(request.query)
+      if (!range.ok) {
+        return reply.code(400).send({ error: 'invalid_range', message: range.message })
+      }
+      const board = await loadOpsShopBoards({
+        range: range.value,
+        viewer: { permissions: request.authContext.permissions },
+      })
+      return reply.code(200).send(board)
     },
   )
 

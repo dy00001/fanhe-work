@@ -18,6 +18,7 @@
     "db:ping": "tsx src/tools/ping-db.ts",
     "db:create-owner": "tsx src/tools/create-owner.ts",
     "db:ops-import": "tsx src/tools/ops-import.ts",
+    "db:ops-shops": "tsx src/tools/ops-seed-shops.ts",
     "db:reset-password": "tsx src/tools/reset-password.ts",
     "db:studio": "prisma studio"
   },

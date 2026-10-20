@@ -27,8 +27,31 @@ const FRESHNESS_CLASS = {
   none: 'text-muted-foreground-weak',
 } as const
 
-export function OpsHealthPanel(props: { state: OpsHealthState; onReload: () => void; now: Date }) {
+export function OpsHealthPanel(props: {
+  state: OpsHealthState
+  onReload: () => void
+  now: Date
+  /** 当前账号是否持有 `ops.collect.read`。没有时不发请求，直接给说明。 */
+  allowed: boolean
+}) {
   const { state } = props
+
+  /*
+   * 没有权限时**不发那次注定 403 的请求**，直接渲染说明。
+   *
+   * 两个理由。一是体验：一个 403 只会让浏览器在控制台打一条「Failed to load
+   * resource」，这条红字会被当成页面出错，实际是设计行为。二是让「为什么看不到」
+   * 就近可读 —— 面板本身比一次静默的拒绝更能回答问题。
+   */
+  if (!props.allowed) {
+    return (
+      <OpsSection title="采集批次" note="当前账号没有查看采集记录的权限">
+        <p className="py-4 text-sm text-muted-foreground-weak">
+          采集批次与数据新鲜度需要 ops.collect.read 权限。看板其余部分不受影响。
+        </p>
+      </OpsSection>
+    )
+  }
 
   if (state.status === 'idle' || state.status === 'loading') {
     return (

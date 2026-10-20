@@ -26,6 +26,7 @@ import type {
   NoteResponse,
   OpsDashboardResponse,
   OpsHealthResponse,
+  OpsShopBoardsResponse,
   NoteTagListResponse,
   PermissionCatalogResponse,
   PermissionCode,
@@ -750,5 +751,21 @@ export function opsHealthRequest(
       method: 'GET',
       accessToken,
     },
+  )
+}
+
+/** 五店并列指标带。与看板共用区间参数，但独立一次请求（切店是全局状态）。 */
+export function opsShopBoardsRequest(
+  accessToken: string,
+  query: { from?: string; to?: string; days?: number } = {},
+): Promise<OpsShopBoardsResponse> {
+  const search = new URLSearchParams()
+  if (query.from !== undefined && query.from !== '') search.set('from', query.from)
+  if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  if (query.days !== undefined) search.set('days', String(query.days))
+  const queryString = search.toString()
+  return request<OpsShopBoardsResponse>(
+    `/api/ops/overview-shops${queryString === '' ? '' : `?${queryString}`}`,
+    { method: 'GET', accessToken },
   )
 }

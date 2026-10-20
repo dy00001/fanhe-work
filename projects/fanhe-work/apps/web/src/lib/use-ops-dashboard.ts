@@ -1,8 +1,8 @@
-import type { OpsDashboardResponse, OpsHealthResponse } from '@fanhe/shared'
+import type { OpsDashboardResponse, OpsHealthResponse, OpsShopBoardsResponse } from '@fanhe/shared'
 import { useEffect, useState } from 'react'
 
 import { ApiError } from './api'
-import { loadOpsDashboard, loadOpsHealth } from './ops'
+import { loadOpsDashboard, loadOpsHealth, loadOpsShopBoards } from './ops'
 
 /**
  * 运营看板的数据加载。
@@ -135,6 +135,62 @@ export function useOpsHealth(input: { shop: string | null; enabled: boolean }): 
       active = false
     }
   }, [input.shop, input.enabled, key])
+
+  return {
+    state,
+    reload: () => {
+      setTicket((value) => value + 1)
+    },
+  }
+}
+
+/**
+ * 五店并列指标带。
+ *
+ * 与看板读模型分开一次请求，是因为它的适用范围更大：七个入口都要显示店铺段控件
+ * （切店是全局状态），而它的失败**不该影响主内容** —— 拿不到店铺清单时隐藏切换器，
+ * 页面其余部分照常。失败按「没有」处理，与采集批次面板同一条取舍。
+ */
+export type OpsBoardsState =
+  { status: 'loading' } | { status: 'ready'; data: OpsShopBoardsResponse | null }
+
+type BoardsEntry = { key: string; data: OpsShopBoardsResponse | null }
+
+export function useOpsShopBoards(input: {
+  days?: number
+  from?: string
+  to?: string
+  enabled: boolean
+}): { state: OpsBoardsState; reload: () => void } {
+  const [ticket, setTicket] = useState(0)
+  const [entry, setEntry] = useState<BoardsEntry | null>(null)
+
+  const key = [input.days ?? '', input.from ?? '', input.to ?? '', ticket].join('|')
+  const state: OpsBoardsState =
+    entry !== null && entry.key === key
+      ? { status: 'ready', data: entry.data }
+      : { status: 'loading' }
+
+  useEffect(() => {
+    if (!input.enabled) return
+    let active = true
+
+    loadOpsShopBoards({
+      ...(input.days === undefined ? {} : { days: input.days }),
+      ...(input.from === undefined ? {} : { from: input.from }),
+      ...(input.to === undefined ? {} : { to: input.to }),
+    })
+      .then((data) => {
+        if (active) setEntry({ key, data })
+      })
+      .catch(() => {
+        if (active) setEntry({ key, data: null })
+      })
+
+    return () => {
+      active = false
+    }
+  }, [input.days, input.from, input.to, input.enabled, key])
 
   return {
     state,

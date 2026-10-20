@@ -1377,18 +1377,20 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 
 ## 十二、2026-10-20 运营看板（ops）接入
 
-千牛 / 生意参谋数据接入梵禾 Work，落地为运维信息平台下的「数据看板」（`/ops/dashboard`，原 `planned: true` 占位项已转正）。
+千牛 / 生意参谋数据接入梵禾 Work，落地为**运维信息平台下的七个入口**（数据大屏 `/ops/dashboard`、交易分析 `/ops/trade`、商品分析 `/ops/items`、流量分析 `/ops/flow`、服务体验 `/ops/service`、推广投放 `/ops/ads`、内容运营 `/ops/content`），照 `tools/collector/preview/ops-dashboard-preview.html` 的结构与交互落地；原三个「功能开发中」槽位由这七项取代，导航清单 18 → **21 项**。
 
 **改动的层，按依赖顺序：**
 
 1. **共享包**：新增 `packages/shared/src/ops.ts`（契约类型、限额、日期运算）；`permissions.ts` 增 `ops` 模块与三个权限点（`ops.shop.read` / `ops.finance.read` / `ops.collect.read`），ADMIN 显式授予三项（**不写 `ops.*`**，避免连金额权限一起给），MEMBER 与 VIEWER 默认没有；`navigation.ts` 把 `dashboard` 的 `planned` 置 false、`module` 设为 `ops`、改写 `summary`。
 2. **数据模型**：`schema.prisma` 末尾新增四个 `ecom_*` 模型与四个枚举，一条迁移。**与原方案（十表）的差异见 `docs/ops/README.md` 第二节** —— 商品 / 渠道 / 客服 / 推广没有逐日序列，硬建五张空表比不建更糟，收敛为「逐日表 + 带窗口的维度快照表」。
 3. **服务端**：` apps/api/src/ops/{date,ingest,query}.ts` 与 `routes/ops.ts`；`app.ts` 注册一行；`config/env.ts` 增 `ops.ingestToken`（getter，未配置时不阻止启动，ingest 返回 503）。写接口走回环 + `x-ops-token`，读接口走 `requirePermission`。
-4. **前端**：`lib/{ops,ops-display,ops-view,ops-pending,use-ops-dashboard}.ts`、`components/ops/`（11 个组件）、`pages/OpsDashboardPage.tsx`；`routes.tsx` 补一条分派；`lib/api.ts` 增三个请求函数；`index.css` 增涨跌令牌 `--up` / `--down`（亮暗各一份，涨红跌绿）。
+4. **前端**：`lib/{ops,ops-display,ops-view,ops-series,ops-pending,use-ops-dashboard}.ts`、`components/ops/`（13 个组件）、`pages/OpsDashboardPage.tsx`（七入口共用，按 `item.code` 分派）；`routes.tsx` 用 `isOpsNavCode` 分派；`lib/api.ts` 增四个请求函数；`index.css` 增涨跌令牌 `--up` / `--down`。**五店占位**：`pnpm db:ops-shops` 建 `s2`–`s5` 四行，未接入店显示「待接入」+「—」，切店走 `?shop=`，布局与交互与有数据的店一致。
 5. **采集端**：`tools/collector/`（原 `E:/qianniu-shuju` 整目录迁入，含 30 天基线 `data/csv30`、20 个脚本、10 份口径文档、原型页面），新增 `scripts/export-ingest.mjs`（csv30 → 契约 JSON）；`apps/api/src/tools/ops-import.ts` 为回填入口。
 6. **忽略规则三处同改**：`.gitignore`（采集器 profile / daily / raw / 截图）、`eslint.config.js` 的 `ignores`、`.prettierignore` 均加 `tools/collector`。
 
-**实测（2026-10-20）：** 四道门禁 **892 项 0 失败**（shared 119 + web 240 + desktop 287 + api 246，含 5 项数据库设计性跳过）；`lint` 0 问题、`typecheck` 通过、`format:check` 通过。迁移 7 → 8、表 13 → 17、权限点 12 → 15。入库 30 天基线：逐日 30 行、维度 50 行，支付金额 10,800,000 分（¥108,000），与 `csv30` 四处锚点一致；同一 payload 连跑两次 `revisedDays = 0`。接口反例：错 token → 401、未配 token → 503、窗口倒置 → 400、逐日日期越窗 → 400、未登录读接口 → 401。
+**实测（2026-10-20 二次改造）：** 接口矩阵 **46 项全过**（权限三档、区间五档、五店占位、六条反例）；浏览器矩阵 管理员 37 项 / 仅看板 26 项 / 无权限 5 项全过，七个入口的「点左侧 → 地址变 → 右侧换 → 高亮跟随」逐项验证，console 零错误。**四道门禁 903 项 0 失败**（shared 119 + web 251 + desktop 287 + api 246，含 5 项设计性跳过）。
+
+**首轮实测（2026-10-20）：** 四道门禁 **892 项 0 失败**（shared 119 + web 240 + desktop 287 + api 246，含 5 项数据库设计性跳过）；`lint` 0 问题、`typecheck` 通过、`format:check` 通过。迁移 7 → 8、表 13 → 17、权限点 12 → 15。入库 30 天基线：逐日 30 行、维度 50 行，支付金额 10,800,000 分（¥108,000），与 `csv30` 四处锚点一致；同一 payload 连跑两次 `revisedDays = 0`。接口反例：错 token → 401、未配 token → 503、窗口倒置 → 400、逐日日期越窗 → 400、未登录读接口 → 401。
 
 **新增文档：** `docs/ops/README.md`（模块边界、权限、口径、欠账）、`docs/ops/DATA-CONTRACT.md`（上报契约）、`docs/ops/RUNBOOK.md`（每日采集、回填、故障判据）。
 

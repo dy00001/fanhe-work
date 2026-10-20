@@ -193,6 +193,33 @@ export type OpsDashboardResponse = {
   flags: OpsFlags
 }
 
+/**
+ * 单店的一块「铺面」：五店并列指标带里的一张卡。
+ *
+ * `hasData` 与「金额为 null」是两件事：前者说这家店有没有任何逐日数据，后者可能是
+ * 权限裁剪的结果。卡片上的「待接入」标只看 `hasData`，金额显示只看 `masked`。
+ */
+export type OpsShopBoard = {
+  shop: OpsShopSummary
+  hasData: boolean
+  /** 区间内实际有数的天数。用来区分「整段」与「只覆盖了几天」。 */
+  coveredDays: number
+  payAmountFen: number | null
+  payBuyers: number | null
+  visitors: number | null
+  payRate: number | null
+  /** 金额是否被权限裁掉。true 时上面三个金额相关字段都是 null。 */
+  masked: boolean
+  /** 迷你柱状用的逐日金额，直接取自逐日表，不插值。 */
+  series: readonly OpsDailyPoint[]
+}
+
+export type OpsShopBoardsResponse = {
+  range: OpsDateRange
+  days: number
+  shops: readonly OpsShopBoard[]
+}
+
 /** 采集批次的可读投影。健康面板与排查都读它。 */
 export type OpsCollectRunSummary = {
   id: string

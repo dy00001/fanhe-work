@@ -20,7 +20,8 @@
  * `role_permissions` 的那份结果，运行期 `/api/auth/me` 返回的权限与它同源。
  * 手写一份「角色应有的权限」等于把被测对象换成了测试自己的假设。
  *
- * UI 二次改造后（与原型对齐）清单为十八项，并引入三条新约定，本文件把它们钉住：
+ * UI 二次改造后（与原型对齐）清单为十八项；2026-10-20 运营看板接入后运维分组
+ * 由「1 个入口 + 3 个槽位」改为七个具名入口，清单增至二十一项。本文件把它们钉住：
  * 分组头不再可路由、子项路径是两层的、预留槽位是有编号的真项。
  */
 
@@ -45,7 +46,7 @@ import {
 
 const codesOf = (items) => items.map((item) => item.code)
 
-/** 清单里全部十八项，顺序与 `NAV_ITEMS` 的定义一致。 */
+/** 清单里全部二十一项，顺序与 `NAV_ITEMS` 的定义一致。 */
 const ALL_CODES = [
   NAV_CODES.WORKBENCH,
   NAV_CODES.ASSETS,
@@ -55,9 +56,12 @@ const ALL_CODES = [
   NAV_CODES.CUSTOMER_SLOT_1,
   NAV_CODES.CUSTOMER_SLOT_2,
   NAV_CODES.DASHBOARD,
-  NAV_CODES.OPS_SLOT_1,
-  NAV_CODES.OPS_SLOT_2,
-  NAV_CODES.OPS_SLOT_3,
+  NAV_CODES.OPS_TRADE,
+  NAV_CODES.OPS_ITEMS,
+  NAV_CODES.OPS_FLOW,
+  NAV_CODES.OPS_SERVICE,
+  NAV_CODES.OPS_ADS,
+  NAV_CODES.OPS_CONTENT,
   NAV_CODES.DESIGN_SLOT_1,
   NAV_CODES.DESIGN_SLOT_2,
   NAV_CODES.DESIGN_SLOT_3,
@@ -77,9 +81,12 @@ const ALL_PATHS = [
   '/customer/slot-1',
   '/customer/slot-2',
   '/ops/dashboard',
-  '/ops/slot-1',
-  '/ops/slot-2',
-  '/ops/slot-3',
+  '/ops/trade',
+  '/ops/items',
+  '/ops/flow',
+  '/ops/service',
+  '/ops/ads',
+  '/ops/content',
   '/design/slot-1',
   '/design/slot-2',
   '/design/slot-3',
@@ -90,57 +97,77 @@ const ALL_PATHS = [
 ]
 
 /**
- * 不设权限门槛的十五项（`module === null`），对已认证用户一律可见。
+ * 运维信息平台的七个入口。它们都绑 `ops` 模块，因此对 member / viewer 一律不可见。
  *
- * 清单里有三项带门槛：首页绑 `personal`、系统设置绑 `system`、数据看板绑 `ops`
- * （2026-10-20 接入千牛运营数据后从占位项转正，店铺金额不再对全体成员开放）。
+ * 用一个清单而不是逐个比较：七项里漏掉一项，下面几条断言就会静默放宽 —— 而
+ * 「成员能看到某个运营板块」这种偏差不会报错，只会让人某天发现菜单多了一行。
+ */
+const OPS_CODES = [
+  NAV_CODES.DASHBOARD,
+  NAV_CODES.OPS_TRADE,
+  NAV_CODES.OPS_ITEMS,
+  NAV_CODES.OPS_FLOW,
+  NAV_CODES.OPS_SERVICE,
+  NAV_CODES.OPS_ADS,
+  NAV_CODES.OPS_CONTENT,
+]
+
+/**
+ * 不设权限门槛的十二项（`module === null`），对已认证用户一律可见。
+ *
+ * 带门槛的共九项：首页 `personal`、系统设置 `system`、运营看板七项 `ops`。
  */
 const UNGATED_CODES = ALL_CODES.filter(
   (code) =>
-    code !== NAV_CODES.WORKBENCH &&
-    code !== NAV_CODES.SYSTEM_SETTINGS &&
-    code !== NAV_CODES.DASHBOARD,
+    code !== NAV_CODES.WORKBENCH && code !== NAV_CODES.SYSTEM_SETTINGS && !OPS_CODES.includes(code),
 )
 
-/** 除系统设置与数据看板外的十六项。member 与 viewer 的可见范围就是它。 */
+/** 除系统设置与七个运营入口外的十三项。member 与 viewer 的可见范围就是它。 */
 const WITHOUT_SYSTEM_SETTINGS = ALL_CODES.filter(
-  (code) => code !== NAV_CODES.SYSTEM_SETTINGS && code !== NAV_CODES.DASHBOARD,
+  (code) => code !== NAV_CODES.SYSTEM_SETTINGS && !OPS_CODES.includes(code),
 )
 
-test('导航清单为十八项，编号唯一且顺序稳定', () => {
-  assert.equal(NAV_ITEMS.length, 18)
+test('导航清单为二十一项，编号唯一且顺序稳定', () => {
+  assert.equal(NAV_ITEMS.length, 21)
   assert.deepEqual(codesOf(NAV_ITEMS), ALL_CODES)
-  assert.equal(new Set(ALL_CODES).size, 18)
+  assert.equal(new Set(ALL_CODES).size, 21)
 })
 
-test('owner 可见全部十八项', () => {
+test('owner 可见全部二十一项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.owner)), ALL_CODES)
 })
 
-test('admin 可见全部十八项：有 personal 全权，也有 system.user.read', () => {
+test('admin 可见全部二十一项：有 personal 全权、system.user.read 与 ops 三项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.admin)), ALL_CODES)
 })
 
-test('member 看不到系统设置与数据看板，其余十六项可见', () => {
+test('member 看不到系统设置与七个运营入口，其余十三项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.member))
   assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
   // 运营数据默认对成员不可见：店铺 GMV 与客单价属于经营机密。
-  assert.ok(!visible.includes(NAV_CODES.DASHBOARD))
+  for (const code of OPS_CODES) {
+    assert.ok(!visible.includes(code), `member 不应看到 ${code}`)
+  }
 })
 
-test('viewer 看不到系统设置与数据看板，其余十六项可见', () => {
+test('viewer 看不到系统设置与七个运营入口，其余十三项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.viewer))
   assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
-  assert.ok(!visible.includes(NAV_CODES.DASHBOARD))
+  for (const code of OPS_CODES) {
+    assert.ok(!visible.includes(code), `viewer 不应看到 ${code}`)
+  }
 })
 
-test('单独授予 ops.shop.read 后成员能看到数据看板', () => {
+test('单独授予 ops.shop.read 后，七个运营入口一次全开', () => {
   // 这是本模块的核心用法：不给角色，给账号。断言权限点与导航项的绑定真的生效，
   // 否则「导航项绑了 module」这件事只是注释里的一句话。
   const granted = [...ROLE_PERMISSIONS.member, PERMISSIONS.OPS_SHOP_READ]
-  assert.ok(codesOf(filterNavigation(granted)).includes(NAV_CODES.DASHBOARD))
+  const visible = codesOf(filterNavigation(granted))
+  for (const code of OPS_CODES) {
+    assert.ok(visible.includes(code), `持有 ops.shop.read 后应看到 ${code}`)
+  }
 })
 
 test('首页对四种角色都可见', () => {
@@ -153,7 +180,7 @@ test('首页对四种角色都可见', () => {
   }
 })
 
-test('尚无权限点可绑的十五项对已认证用户一律可见', () => {
+test('尚无权限点可绑的十二项对已认证用户一律可见', () => {
   for (const role of ['owner', 'admin', 'member', 'viewer']) {
     const visible = codesOf(filterNavigation(ROLE_PERMISSIONS[role]))
     for (const code of UNGATED_CODES) {
@@ -162,7 +189,7 @@ test('尚无权限点可绑的十五项对已认证用户一律可见', () => {
   }
 })
 
-test('没有权限点时只剩不设门槛的十五项', () => {
+test('没有权限点时只剩不设门槛的十二项', () => {
   // 当前四个内置角色都持有 personal 段权限，走不到这一支；断言它存在，是为了
   // 钉住「module 为 null 即不设门槛」这条规则本身。
   assert.deepEqual(codesOf(filterNavigation([])), UNGATED_CODES)
@@ -292,12 +319,13 @@ test('顶层项 group 为 null；子项的 group 必须指向一个真实存在�
   assert.equal(NAV_ITEMS.filter((item) => item.group === null).length, 4)
 })
 
-test('预留槽位共十一项，每组数量与原型一致', () => {
+test('预留槽位共八项：客户 2、设计 3、其他 3，运维已无槽位', () => {
   const slots = NAV_ITEMS.filter((item) => item.slot)
-  assert.equal(slots.length, 11)
+  assert.equal(slots.length, 8)
   const perGroup = (group) => slots.filter((item) => item.group === group).length
   assert.equal(perGroup('customer'), 2)
-  assert.equal(perGroup('ops'), 3)
+  // 运维分组不再有预留槽位：七个入口已经填满。
+  assert.equal(perGroup('ops'), 0)
   assert.equal(perGroup('design'), 3)
   assert.equal(perGroup('others'), 3)
   for (const slot of slots) {
@@ -348,11 +376,15 @@ test('每个分组的子项与顺序与原型一致', () => {
     NAV_CODES.CUSTOMER_SLOT_1,
     NAV_CODES.CUSTOMER_SLOT_2,
   ])
+  // 运维信息平台现在是七个具名入口，顺序即侧栏从上到下的顺序。
   assert.deepEqual(groupItems('ops'), [
     NAV_CODES.DASHBOARD,
-    NAV_CODES.OPS_SLOT_1,
-    NAV_CODES.OPS_SLOT_2,
-    NAV_CODES.OPS_SLOT_3,
+    NAV_CODES.OPS_TRADE,
+    NAV_CODES.OPS_ITEMS,
+    NAV_CODES.OPS_FLOW,
+    NAV_CODES.OPS_SERVICE,
+    NAV_CODES.OPS_ADS,
+    NAV_CODES.OPS_CONTENT,
   ])
   assert.deepEqual(groupItems('design'), [
     NAV_CODES.DESIGN_SLOT_1,
@@ -389,8 +421,14 @@ test('buildNavSections 丢弃子项被权限过滤光的空分组', () => {
   )
 })
 
-test('member 的可见清单聚合后仍有四个分组（槽位不设门槛）', () => {
+test('member 的可见清单聚合后只剩三个分组（运维分组整组隐去）', () => {
+  // 运维信息平台七项全部绑 `ops`，member 一个都没有 → 该分组没有任何可见子项。
+  // 分组头不可路由，一个空分组点了只会展开一片空白，因此整组不渲染。
   const sections = buildNavSections(filterNavigation(ROLE_PERMISSIONS.member))
-  assert.equal(sections.filter((section) => section.kind === 'group').length, 4)
+  assert.equal(sections.filter((section) => section.kind === 'group').length, 3)
   assert.equal(sections.filter((section) => section.kind === 'item').length, 3)
+  assert.ok(
+    !sections.some((section) => section.kind === 'group' && section.group.code === 'ops'),
+    '运维信息平台对 member 不应出现空分组',
+  )
 })

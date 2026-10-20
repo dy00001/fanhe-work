@@ -14,6 +14,8 @@ import {
   type OpsHealthResponse,
   type OpsKpi,
   type OpsMetricSource,
+  type OpsShopBoard,
+  type OpsShopBoardsResponse,
   type OpsShopSummary,
 } from '@fanhe/shared'
 
@@ -601,6 +603,103 @@ export async function loadOpsDashboard(input: {
 export async function latestCoveredDate(): Promise<string | null> {
   const row = await prisma.ecomDailyMetric.aggregate({ _max: { statDate: true } })
   return fromDbDate(row._max.statDate)
+}
+
+/**
+ * 五店并列指标带。
+ *
+ * 一次查全部店铺当区间的逐日行，再在内存里按店分组。不做「每家店一次查询」：
+ * 五家店就是五次往返，而数据量本身很小（每店每天一行）。将来店铺数上到几十家时，
+ * 这里要改成一条 `group by shop_id` 的聚合查询 —— 届时 `OpsShopBoard` 的字段不用动。
+ *
+ * **没有数据的店铺照常返回**，`hasData` 为 false。界面据此渲染「待接入」占位卡，
+ * 而不是把这家店从列表里删掉：布局固定五列是这一版明确的交互约定，缺席比占位更容易
+ * 让人误判成「这家店被删了」。
+ */
+export async function loadOpsShopBoards(input: {
+  range: OpsDateRange
+  viewer: OpsViewer
+}): Promise<OpsShopBoardsResponse> {
+  const canReadFinance = hasPermission(input.viewer.permissions, FINANCE_PERMISSION)
+  const fromDate = toDbDate(input.range.from)
+  const toDate = toDbDate(input.range.to)
+
+  const shops = await prisma.ecomShop.findMany({
+    where: { enabled: true },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      platform: true,
+      sellerNick: true,
+      timezone: true,
+      lastCollectedAt: true,
+    },
+  })
+
+  const rows =
+    fromDate === null || toDate === null || shops.length === 0
+      ? []
+      : await prisma.ecomDailyMetric.findMany({
+          where: {
+            shopId: { in: shops.map((shop) => shop.id) },
+            statDate: { gte: fromDate, lte: toDate },
+          },
+          orderBy: { statDate: 'asc' },
+          select: {
+            shopId: true,
+            statDate: true,
+            payAmountFen: true,
+            visitors: true,
+            payBuyers: true,
+            itemVisitors: true,
+          },
+        })
+
+  const byShop = new Map<string, DailyRow[]>()
+  for (const row of rows) {
+    const date = fromDbDate(row.statDate)
+    if (date === null) continue
+    const list = byShop.get(row.shopId) ?? []
+    list.push({
+      date,
+      payAmountFen: row.payAmountFen,
+      visitors: row.visitors,
+      payBuyers: row.payBuyers,
+      itemVisitors: row.itemVisitors,
+    })
+    byShop.set(row.shopId, list)
+  }
+
+  const boards: OpsShopBoard[] = shops.map((shop) => {
+    const daily = byShop.get(shop.id) ?? []
+    const payAmount = sumField(daily, 'payAmountFen')
+    const payBuyers = sumField(daily, 'payBuyers')
+    const visitors = sumField(daily, 'visitors')
+    const hasData = daily.some((row) =>
+      [row.payAmountFen, row.visitors, row.payBuyers, row.itemVisitors].some(
+        (value) => value !== null,
+      ),
+    )
+
+    return {
+      shop: {
+        ...shop,
+        lastCollectedAt: shop.lastCollectedAt === null ? null : shop.lastCollectedAt.toISOString(),
+      },
+      hasData,
+      coveredDays: daily.filter((row) => row.payAmountFen !== null || row.visitors !== null).length,
+      payAmountFen: canReadFinance ? payAmount.sum : null,
+      payBuyers: payBuyers.sum,
+      visitors: visitors.sum,
+      payRate: ratioOf(payBuyers.sum, visitors.sum),
+      masked: !canReadFinance,
+      series: daily,
+    }
+  })
+
+  return { range: input.range, days: opsRangeDays(input.range), shops: boards }
 }
 
 /** 采集批次与新鲜度。批次列表是「昨天为什么没数」的第一手材料。 */

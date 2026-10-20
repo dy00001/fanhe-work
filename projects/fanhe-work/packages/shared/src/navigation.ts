@@ -57,8 +57,26 @@ export const NAV_CODES = {
   CUSTOMER_OVERVIEW: 'customer-overview',
   /** 客户进度。客户信息平台分组的子项。 */
   CUSTOMER_PROGRESS: 'customer-progress',
-  /** 数据看板。运维信息平台分组的子项。 */
+  /**
+   * 运营看板 · 数据大屏。运维信息平台分组的第一个子项。
+   *
+   * 编号保留 `dashboard` 而不是改成 `screen`：地址 `/ops/dashboard` 已经被文档、
+   * 书签与外部说明引用过，改编号等于让所有旧链接落到 404，而这次只是把它从
+   * 「单页里的一个标签」提升为「七个入口中的第一个」。标识稳定、展示可变。
+   */
   DASHBOARD: 'dashboard',
+  /** 运营看板 · 交易分析。 */
+  OPS_TRADE: 'ops-trade',
+  /** 运营看板 · 商品分析。 */
+  OPS_ITEMS: 'ops-items',
+  /** 运营看板 · 流量分析。 */
+  OPS_FLOW: 'ops-flow',
+  /** 运营看板 · 服务体验。 */
+  OPS_SERVICE: 'ops-service',
+  /** 运营看板 · 推广投放。 */
+  OPS_ADS: 'ops-ads',
+  /** 运营看板 · 内容运营。 */
+  OPS_CONTENT: 'ops-content',
   /** 系统设置。不落在主列表里，由 `NAV_FOOTER_CODES` 指到侧栏底部图标行。 */
   SYSTEM_SETTINGS: 'system-settings',
 
@@ -67,12 +85,8 @@ export const NAV_CODES = {
   CUSTOMER_SLOT_1: 'customer-slot-1',
   /** 客户信息平台的预留槽位 2。 */
   CUSTOMER_SLOT_2: 'customer-slot-2',
-  /** 运维信息平台的预留槽位 1。 */
-  OPS_SLOT_1: 'ops-slot-1',
-  /** 运维信息平台的预留槽位 2。 */
-  OPS_SLOT_2: 'ops-slot-2',
-  /** 运维信息平台的预留槽位 3。 */
-  OPS_SLOT_3: 'ops-slot-3',
+  // 运维信息平台**没有预留槽位**：七个入口已经把它填满。原先的三个「功能开发中」
+  // 在运营看板接入后成了重复入口，留着会让侧栏多出三行永远打不开的项。
   /** 设计信息平台的预留槽位 1。 */
   DESIGN_SLOT_1: 'design-slot-1',
   /** 设计信息平台的预留槽位 2。 */
@@ -283,50 +297,86 @@ export const NAV_ITEMS: readonly NavItem[] = [
     summary: '该子项尚未定义。',
   },
 
-  // ---- 分组二：运维信息平台。一个具名子项 + 三个预留槽位（原型编号 4）。 ----
+  // ---- 分组二：运维信息平台。七个具名子项，没有预留槽位。 ----
+  //
+  // 这一段的信息架构与原型（`UI合并方案` 之外的运营看板原型）一致：左侧固定七个
+  // 入口，右侧整块换成对应看板。**七项共用同一个页面组件**（`OpsDashboardPage`），
+  // 由 `item.code` 决定渲染哪一块 —— 页面按地址取状态，侧栏高亮由 `navPath`
+  // 派生，两者天然同步，不需要额外的「选中态」变量。
+  //
+  // 七项都绑 `ops` 模块：只要持有 `ops.shop.read` 就全部可见。不按板块拆权限，
+  // 是因为「能不能看店铺数据」是一个整体判断，而「能不能看金额」由
+  // `ops.finance.read` 在字段级控制 —— 拆成七个权限点只会让授权表变成一页表格，
+  // 而它要表达的意思只有两层。
   {
     code: NAV_CODES.DASHBOARD,
-    label: '数据看板',
+    label: '数据大屏',
     slug: 'dashboard',
     group: NAV_GROUP_CODES.OPS,
-    // 绑定 ops 模块。这是本项与其余占位项的唯一区别：它现在有真实的权限点了，
-    // 于是 member / viewer 默认看不到 —— 店铺金额属于经营机密，不该按「占位项
-    // 对所有登录用户可见」那条临时规则放行。
     module: 'ops',
-    // 2026-10-20 接入千牛运营数据后置为 false。路由分派在 routes.tsx 的 ModuleRoute 里。
     planned: false,
     slot: false,
-    summary: '千牛 / 生意参谋口径的店铺经营数据：成交与流量趋势、商品结构、渠道分解与数据新鲜度。',
+    summary: '五店并列的经营总览：支付金额、买家、访客、转化率与数据新鲜度。',
   },
   {
-    code: NAV_CODES.OPS_SLOT_1,
-    label: '功能开发中 1',
-    slug: 'slot-1',
+    code: NAV_CODES.OPS_TRADE,
+    label: '交易分析',
+    slug: 'trade',
     group: NAV_GROUP_CODES.OPS,
-    module: null,
-    planned: true,
-    slot: true,
-    summary: '该子项尚未定义。',
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '成交与退款：逐日支付金额、买家、访客、客单价，任意区间可重算。',
   },
   {
-    code: NAV_CODES.OPS_SLOT_2,
-    label: '功能开发中 2',
-    slug: 'slot-2',
+    code: NAV_CODES.OPS_ITEMS,
+    label: '商品分析',
+    slug: 'items',
     group: NAV_GROUP_CODES.OPS,
-    module: null,
-    planned: true,
-    slot: true,
-    summary: '该子项尚未定义。',
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '商品排行与结构：访客、买家、转化率、支付与加购金额，可排序。',
   },
   {
-    code: NAV_CODES.OPS_SLOT_3,
-    label: '功能开发中 3',
-    slug: 'slot-3',
+    code: NAV_CODES.OPS_FLOW,
+    label: '流量分析',
+    slug: 'flow',
     group: NAV_GROUP_CODES.OPS,
-    module: null,
-    planned: true,
-    slot: true,
-    summary: '该子项尚未定义。',
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '流量结构与来源：渠道、地域、搜索词、内容来源，以及跳失率与停留时长。',
+  },
+  {
+    code: NAV_CODES.OPS_SERVICE,
+    label: '服务体验',
+    slug: 'service',
+    group: NAV_GROUP_CODES.OPS,
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '客服绩效与评价：响应率、响应时长、咨询量、评价待回复、问大家。',
+  },
+  {
+    code: NAV_CODES.OPS_ADS,
+    label: '推广投放',
+    slug: 'ads',
+    group: NAV_GROUP_CODES.OPS,
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '万相台的推广花费与产出：关键词点击率、花费、账户余额、活动报名。',
+  },
+  {
+    code: NAV_CODES.OPS_CONTENT,
+    label: '内容运营',
+    slug: 'content',
+    group: NAV_GROUP_CODES.OPS,
+    module: 'ops',
+    planned: false,
+    slot: false,
+    summary: '光合平台的内容效果：内容查看、商品点击、活动人数与内容来源访客。',
   },
 
   // ---- 分组三：设计信息平台。三个预留槽位（原型编号 5）。 ----

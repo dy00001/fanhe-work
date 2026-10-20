@@ -8,10 +8,15 @@ import {
   Folder,
   LayoutGrid,
   ListChecks,
+  MessageSquare,
+  Megaphone,
+  Newspaper,
+  Package,
   Search,
   Settings,
   TrendingUp,
   Users,
+  Waves,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -29,12 +34,13 @@ import {
  * 取值全部对齐 `UI合并方案/梵禾Work-首页改造预览.html` 的侧栏图标：
  * 首页 `#i-home`（四宫格）→ `LayoutGrid`、资产 `#i-folder` → `Folder`、
  * 搜索 `#i-search` → `Search`、综合看板 `#i-chart-pie` → `ChartPie`、
- * 客户进度 `#i-checklist` → `ListChecks`、数据看板 `#i-chart-line` → `ChartLine`、
+ * 客户进度 `#i-checklist` → `ListChecks`、数据大屏 `#i-chart-line` → `ChartLine`、
  * 系统设置 `#i-settings` → `Settings`、预留槽位 `#i-dashed` → `CircleDashed`。
  *
- * 十一个预留槽位共用同一个虚线图标 —— 它们本来就没有各自的语义，原型里也一律用
- * `#i-dashed`。这里逐个写出来而不是用一个通配，是为了保住「新增编号必须补图标」
- * 这条编译期约束：真模块落地时把那一条改成它自己的图标，正是改动该发生的地方。
+ * 运维信息平台的七项各有语义，因此各用各的图标（交易 `TrendingUp`、商品 `Package`、
+ * 流量 `Waves`、服务 `MessageSquare`、推广 `Megaphone`、内容 `Newspaper`）。
+ * 剩下的八个预留槽位共用虚线图标 —— 它们本来就没有语义，原型里也一律用 `#i-dashed`。
+ * 仍然逐个写出来而不是用一个通配，是为了保住「新增编号必须补图标」这条编译期约束。
  */
 export const NAV_ICONS: Record<NavCode, LucideIcon> = {
   workbench: LayoutGrid,
@@ -42,13 +48,17 @@ export const NAV_ICONS: Record<NavCode, LucideIcon> = {
   search: Search,
   'customer-overview': ChartPie,
   'customer-progress': ListChecks,
+  // 运维信息平台的七个入口各有明确语义，不再共用虚线图标。
   dashboard: ChartLine,
+  'ops-trade': TrendingUp,
+  'ops-items': Package,
+  'ops-flow': Waves,
+  'ops-service': MessageSquare,
+  'ops-ads': Megaphone,
+  'ops-content': Newspaper,
   'system-settings': Settings,
   'customer-slot-1': CircleDashed,
   'customer-slot-2': CircleDashed,
-  'ops-slot-1': CircleDashed,
-  'ops-slot-2': CircleDashed,
-  'ops-slot-3': CircleDashed,
   'design-slot-1': CircleDashed,
   'design-slot-2': CircleDashed,
   'design-slot-3': CircleDashed,

@@ -5,6 +5,7 @@ import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
 import { NoAccessPage } from './pages/NoAccessPage'
 import { OpsDashboardPage } from './pages/OpsDashboardPage'
+import { isOpsNavCode } from './lib/ops-view'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { UsersPage } from './pages/UsersPage'
@@ -92,6 +93,21 @@ export function AppRoutes() {
           </Route>
         ))}
 
+        {/*
+          已登录却停在登录页的地址上，必须导回首页。
+
+          登录页与初始化页由 `AuthGate` 按状态渲染，**不在路由表里**；因此登录成功后
+          地址栏仍然是进入前的 `/login`，而 `AppRoutes` 找不到这个路径，会落进下面的
+          404 —— 表现为「登录成功了，界面却显示『页面不存在』」。这条坑只在有人
+          直接打开 `/login`（书签、深链接、桌面壳恢复上一次地址）时出现，从根路径
+          进入时地址是 `/`，index 会正常重定向。
+
+          用 `replace` 而不是普通导航：这两条路径是过渡态，不该留在历史里，否则
+          用户按后退又回到一个已经不存在的登录页。
+        */}
+        <Route path="login" element={<Navigate to="/" replace />} />
+        <Route path="setup" element={<Navigate to="/" replace />} />
+
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
@@ -129,9 +145,11 @@ function ModuleRoute({ code }: { code: NavCode }) {
 
   if (target.code === NAV_CODES.WORKBENCH) return <WorkbenchPage item={target} />
 
-  // 运营看板（千牛 / 生意参谋）。2026-10-20 从占位项转正，`planned` 已在共享包
-  // 置为 false，因此这一支不会与上面的占位判断冲突。
-  if (target.code === NAV_CODES.DASHBOARD) return <OpsDashboardPage item={target} />
+  // 运营看板（千牛 / 生意参谋）的七个入口共用同一个页面。
+  //
+  // 判据用 `isOpsNavCode` 而不是逐个 `===`：七项写成一串 if 之后，新增第八个入口时
+  // 很容易漏掉一支，而漏掉的表现是「点进去看到占位页」—— 界面不报错，只是内容不对。
+  if (isOpsNavCode(target.code)) return <OpsDashboardPage item={target} />
 
   // 账号与权限管理（T7-01）。放在 planned 判断之后、分派表末尾的兜底之前 ——
   // 这两处都不能省：planned 拦掉未落地的模块，兜底则接住清单里新增却还没写页面的

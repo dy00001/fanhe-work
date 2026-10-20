@@ -21,6 +21,11 @@ node .\scripts\check_daily.mjs --date 2026-10-19
 然后把数据交给平台侧入库（两条路选一条）：
 
 ```powershell
+# 0. 首次部署：建四家分店的「占位行」（无数据，界面显示「待接入」）
+#    幂等，可重复执行；主店由采集器建档，不在这里创建
+cd ..\..\projects\fanhe-work
+pnpm db:ops-shops
+
 # A. HTTP（推荐，日常）
 #    采集器 → 契约 JSON → POST /api/ops/ingest
 #    OPS_INGEST_TOKEN 必须先在 API 侧配好

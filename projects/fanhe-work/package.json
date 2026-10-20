@@ -24,6 +24,7 @@
     "db:ping": "pnpm --filter @fanhe/api db:ping",
     "db:create-owner": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:create-owner",
     "db:ops-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-import",
+    "db:ops-shops": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-shops",
     "db:studio": "pnpm --filter @fanhe/api db:studio",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

@@ -1,6 +1,6 @@
-import type { OpsDashboardResponse, OpsHealthResponse } from '@fanhe/shared'
+import type { OpsDashboardResponse, OpsHealthResponse, OpsShopBoardsResponse } from '@fanhe/shared'
 
-import { ApiError, opsDashboardRequest, opsHealthRequest } from './api'
+import { ApiError, opsDashboardRequest, opsHealthRequest, opsShopBoardsRequest } from './api'
 import { withAccessToken } from './session'
 
 /**
@@ -40,6 +40,22 @@ export function loadOpsDashboard(input: {
         ...(input.from === undefined ? {} : { from: input.from }),
         ...(input.to === undefined ? {} : { to: input.to }),
         ...(input.shop === null ? {} : { shop: input.shop }),
+      }),
+  )
+}
+
+/** 五店并列指标带。与看板同一套区间参数。 */
+export function loadOpsShopBoards(input: {
+  days?: number
+  from?: string
+  to?: string
+}): Promise<OpsShopBoardsResponse> {
+  return withAccessToken(
+    async (token) =>
+      await opsShopBoardsRequest(token, {
+        ...(input.days === undefined ? {} : { days: input.days }),
+        ...(input.from === undefined ? {} : { from: input.from }),
+        ...(input.to === undefined ? {} : { to: input.to }),
       }),
   )
 }
