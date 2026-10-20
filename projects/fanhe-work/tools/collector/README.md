@@ -23,6 +23,8 @@ tools/collector/
 │  ├─ collect-daily.mjs         ★ 日增采集（只抓前一天），输出 data/daily/<日期>/
 │  ├─ collect.mjs               30 天基线采集，csv30 的来源，不要日常跑
 │  ├─ check_daily.mjs           日增门禁：按页判 PASS / WARN / FAIL，有空采时退出码 1
+│  ├─ export-daily-ingest.mjs   ★ data/daily/<日期> → 入库契约（窗口 = 那一天）
+│  ├─ export-ingest.mjs         data/csv30 → 入库契约（30 天回填）
 │  ├─ probe-page.mjs            单页探针：页面发了哪些请求、统计时间是什么
 │  ├─ run-daily.ps1             一条命令串起「起 Edge → 采集 → 收尾」
 │  ├─ build_preview_data.mjs    csv30 → 原型页面常量（视觉对照用）
@@ -33,7 +35,8 @@ tools/collector/
 │  └─ lib/preview-source.mjs    页面数据与对账共用的唯一取数入口
 ├─ data/csv30/                  ★ 2026-09-19 ~ 2026-10-18 的 30 天基线，17 个模块目录 67 张 CSV
 │                               这是回填与回归的**唯一可信输入**，入库桥接读的就是它
-├─ data/ingest/                 由 csv30 导出的入库契约 JSON（可重生成，不进版本库）
+├─ data/ingest/                 导出的入库契约 JSON（可重生成，不进版本库）
+│                               ops-ingest.json（30 天回填）、ops-daily-<日期>.json（日增）
 ├─ preview/                     原型单文件 HTML，视觉与交互的参照物
 ├─ docs/                        采集口径与页面设计的原始文档，见第六节
 ├─ start-edge-debug.cmd         起一个带 9222 调试端口的 Edge（采集前置）
@@ -51,7 +54,9 @@ tools/collector/
    │  CDP 旁路录制（脚本在这里，只在有登录态的机器上跑）
    ▼
 data/daily/<日期>/<模块>/NN_<接口>.json     原始响应，原样落盘，不改写
-   │  scripts/build_csv.py  或  scripts/export-ingest.mjs（回填）
+   │  scripts/export-daily-ingest.mjs（日增，窗口 = 那一天）
+   │  scripts/export-ingest.mjs（30 天回填，读 data/csv30）
+   │  scripts/build_csv.py（人看的中间产物，不参与入库）
    ▼
 契约 JSON（ops-ingest.v1）
    │  POST /api/ops/ingest   （回环 + x-ops-token）
@@ -66,6 +71,11 @@ PostgreSQL  ecom_* 四张表  →  GET /api/ops/*  →  /ops/dashboard
 - **采集端不碰数据库、不认 Prisma。** 契约 JSON 是唯一交接物，两边可以独立演进。
 - **金额一律换成「分」。** 平台接口返回分，报表导出元。换算只发生一次，在导出契约时完成，
   之后任何一层都不再乘除 100。
+- **一个数只认一个来源。** 日增的支付金额取 `flow-overview` 的 `payAmt`；`trade-detail` 的
+  `getTendency` 若同时采到，只用来对账。两源不一致时导出脚本会写成「待确认」，不静默取其一 ——
+  最危险的不是缺数，是两个都对但口径不同的数被混着用。
+- **缺就是缺，不补 0。** 页面没采到、字段没回一律写 `null`。补 0 会把「没采到」伪装成「当天为零」，
+  而后者是一个业务结论。
 
 ## 四、日常运行
 

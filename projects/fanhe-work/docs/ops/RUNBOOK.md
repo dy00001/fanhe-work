@@ -7,7 +7,7 @@
 
 ## 一、每天要做的事
 
-只有两步，都在**装有千牛登录态的那台 Windows** 上。
+四步，前三步在**装有千牛登录态的那台 Windows** 上，第四步在平台侧。
 
 ```powershell
 # 1. 采集前一天（17 页全量，约 15 分钟；默认等每页 60 秒）
@@ -16,28 +16,54 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-daily.ps1
 
 # 2. 复核（FAIL 表示某页 0 个文件，WARN 表示只有 1 个或小于 800 字节）
 node .\scripts\check_daily.mjs --date 2026-10-19
+
+# 3. 原始响应 → 契约（窗口 = 那一天）
+node .\scripts\export-daily-ingest.mjs
 ```
 
-然后把数据交给平台侧入库（两条路选一条）：
+第三步会打印一张覆盖率表，逐块说明「拿到了几行、来自哪个文件、为什么没有」：
+
+```
+  商品        5 行  09_cc_item_view_top.json
+  地域       10 行  06_bda_visitor_distribution_listAreas.json
+  搜索词     10 行  05_v4_shop_wordAide_drainageSearch.json
+  渠道          无  未采到 tree_platform_support  ← 未采到渠道树（本日只采到总览）
+  结构指标   13 行  02_new_guide_trend_overview.json
+
+  逐日  1 行  金额 0.00 元  访客 67  买家 0
+  维度  38 行
+  写入  data\ingest\ops-daily-2026-10-19.json
+
+  下一步（在 projects/fanhe-work 下）：
+    pnpm db:ops-import "...\tools\collector\data\ingest\ops-daily-2026-10-19.json"
+```
+
+**退出码要当判据，不要只看「有没有报错」**：`0` 齐全、`2` 已产出但缺块（照上面第 3 步的表逐行看，缺的那块直接影响看板哪个区块）、`1` 无法产出（目录不对、日期与目录名不一致、认不出总览）。第 3 步用 `--strict` 时 `2` 也按失败处理，适合挂进计划任务。
 
 ```powershell
-# 0. 首次部署：建四家分店的「占位行」（无数据，界面显示「待接入」）
-#    幂等，可重复执行；主店由采集器建档，不在这里创建
+# 4. 入库（在 projects\fanhe-work 下；用绝对路径，入库脚本的工作目录是 apps\api）
 cd ..\..\projects\fanhe-work
-pnpm db:ops-shops
-
-# A. HTTP（推荐，日常）
-#    采集器 → 契约 JSON → POST /api/ops/ingest
-#    OPS_INGEST_TOKEN 必须先在 API 侧配好
-
-# B. 直接回填（本机开发 / 新机初始化）
-cd tools\collector
-node .\scripts\export-ingest.mjs          # 只在已经有 csv30 的情况下用
-cd ..\..\projects\fanhe-work
-pnpm db:ops-import
+pnpm db:ops-import "E:\fanhe Work\projects\fanhe-work\tools\collector\data\ingest\ops-daily-2026-10-19.json"
 ```
 
-**当前实现的边界**：日增采集（`data/daily/<日期>/` 的原始 JSON）还没有自动转成契约 JSON 的脚本 —— `export-ingest.mjs` 读的是 `data/csv30` 这份 30 天基线。日增入库前需要一个适配器（`build_csv.py` 的产物 → 契约），这一步尚未编写，属于 B 批采集的同批工作。**不要把「跑完 run-daily」当成「看板会有今天的数据」。**
+**首次部署只需多做一步**：建四家分店的「占位行」（无数据，界面显示「待接入」），幂等，可重复执行；主店由采集器建档，不在这里创建。
+
+```powershell
+pnpm db:ops-shops
+```
+
+### 1.1 历史回填（30 天基线，新机或库被重建时）
+
+```powershell
+cd tools\collector
+node .\scripts\export-ingest.mjs          # 读 data/csv30，产出 30 天窗口的契约
+cd ..\..\projects\fanhe-work
+pnpm db:ops-import                        # 不传路径时默认读 data/ingest/ops-ingest.json
+```
+
+两条通道共用同一个写入函数，因此回填与日增只差「窗口」与 `trigger` 字段（`backfill` / `schedule`），其余行为一致。
+
+**边界仍然存在**：`run-daily.ps1` 不会自动调用第 3、4 步 —— 采集失败时不该连带写库，且写库要连平台侧的库。所以「跑完 run-daily」依然**不等于**「看板有今天的数据」，中间这两步要人（或计划任务）接着走。
 
 ---
 
@@ -69,11 +95,17 @@ pnpm db:ops-import                        # 读默认路径
 
 ### 3.2 只补某一天
 
+采集与入库都可以按天单独跑：
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-daily.ps1 -Target 2026-10-19 -Pages trade-detail,qos-core
+powershell -ExecutionPolicy Bypass -File .\scripts\run-daily.ps1 -Target 2026-10-19 -Pages trade-detail,flow-overview,item-rank
+cd tools\collector
+node .\scripts\export-daily-ingest.mjs --date 2026-10-19
 ```
 
-单日入库时 `window` 与 `daily` 只有一行，`dimensions` 应当为空 —— 维度是整段口径，单日采集拿不到。
+**补采与首次采集写的是同一批行。** 同一业务日重复入库不会新增逐日行（`@@unique([shopId, statDate])`），只在值不同的时候把 `revised` 置真 —— 平台会回溯改数，这一列是那件事唯一的痕迹。判据是 `被改写天数`：正常情况下补同一天应为 `0`；为 `1` 说明平台改过数，属预期。
+
+**单日 payload 的 `dimensions` 不是空的。** 窗口等于那一天：商品是当天的 Top 5、地域与搜索词是当天的分布、结构指标（跳失率、停留时长、加购人数）是当天的整段值。这些小窗口快照不会挤掉 30 天快照 —— 读接口按「与查询区间重叠最多」挑快照（`pickSnapshotIndex`），查「近 30 天」时仍然用 30 天那一份，查单日时才用单日那一份。
 
 ### 3.3 校验入库结果
 
@@ -82,9 +114,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-daily.ps1 -Target 2026-10
 select count(*) from ecom_daily_metrics;
 select dim_type, count(*) from ecom_dimension_snapshots group by 1 order by 1;
 
--- 金额锚点：30 天合计应等于 10,800,000 分
+-- 金额锚点一：30 天基线合计应等于 10,800,000 分（2026-09-19 ~ 2026-10-18）
 select sum(pay_amount_fen) from ecom_daily_metrics
 where stat_date between '2026-09-19' and '2026-10-18';
+
+-- 金额锚点二：日增进来的某一天
+select stat_date, pay_amount_fen, visitors, pay_byers, revised
+from ecom_daily_metrics where stat_date = '2026-10-19';
+
+-- 窗口是否两套并存（应当同时看到 30 天与逐日两种窗口）
+select dim_type, stat_from, stat_to, count(*)
+from ecom_dimension_snapshots group by 1, 2, 3 order by 1, 3 desc;
 
 -- 最近批次
 select trigger, status, daily_rows, dimension_rows, started_at, error_message
