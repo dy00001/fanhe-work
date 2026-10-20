@@ -1,0 +1,3 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit
+index,timeoutCount,, UNASSIGNED,timeoutCount,False,True,已超时数量,
+index,willTimeoutCount,, UNASSIGNED,willTimeoutCount,False,True,即将超时数量,

@@ -23,6 +23,7 @@
     "db:seed": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:seed",
     "db:ping": "pnpm --filter @fanhe/api db:ping",
     "db:create-owner": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:create-owner",
+    "db:ops-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-import",
     "db:studio": "pnpm --filter @fanhe/api db:studio",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

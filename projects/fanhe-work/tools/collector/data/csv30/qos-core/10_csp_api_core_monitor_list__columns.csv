@@ -1,0 +1,16 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit,icon_color,icon_text
+label,dateId,, UNASSIGNED,dateId,False,True,日期,,,
+index,cstUv1d,, UNASSIGNED,cstUv1d,False,True,咨询人数,,,
+index,avgReplyDur1d,, UNASSIGNED,avgReplyDur1d,False,True,平均响应时长（秒),.2f,,
+index,allCstSftRate,, UNASSIGNED,allCstSftRate,False,True,客户满意率,.2f%,,
+index,payAmt1d,, UNASSIGNED,payAmt1d,False,True,客服销售额,.2f,,
+index,payUsrCnt1d,, UNASSIGNED,payUsrCnt1d,False,True,客服销售人数,,,
+index,proportionCss,, UNASSIGNED,proportionCss,False,True,客服销售额占比,.2f%,,
+index,unitPrice,, UNASSIGNED,unitPrice,False,True,客服销售客单价,.2f,,
+index,inquiryFinalTcr,, UNASSIGNED,inquiryFinalTcr,True,True,询单转化率,.2f%,blue,延
+index,callinTcr1d,, UNASSIGNED,callinTcr1d,False,True,咨询率,.2f%,,
+index,replyUv1d,, UNASSIGNED,replyUv1d,False,True,接待人数,,,
+index,manReplyRate3Min,, UNASSIGNED,manReplyRate3Min,False,True,3分钟人工响应率,.2f%,,
+index,wandanSucRate,, UNASSIGNED,wandanSucRate,False,True,客服挽单成功率,.2f%,blue,延
+index,wandanSucAmt,, UNASSIGNED,wandanSucAmt,False,True,客服挽单成功金额,.2f,blue,延
+index,fcr72Rate,, UNASSIGNED,fcr72Rate,False,True,售后3日FCR,.2f%,blue,延

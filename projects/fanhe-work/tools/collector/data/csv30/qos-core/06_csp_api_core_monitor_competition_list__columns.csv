@@ -1,0 +1,7 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit,icon_color,icon_text
+index,sellerNick,, UNASSIGNED,sellerNick,False,True,店铺,,,
+index,cstUv1d,, UNASSIGNED,cstUv1d,False,True,咨询人数指数,.2f,,
+index,payUsrCnt1d,, UNASSIGNED,payUsrCnt1d,False,True,客服销售人数指数,.2f,,
+index,payAmt1d,, UNASSIGNED,payAmt1d,False,True,客服销售额指数,.2f,,
+index,inquiryFinalTcr,, UNASSIGNED,inquiryFinalTcr,False,True,客服询单转化率指数,.2f,blue,延
+index,unitPrice,, UNASSIGNED,unitPrice,False,True,客服客单价指数,.2f,,

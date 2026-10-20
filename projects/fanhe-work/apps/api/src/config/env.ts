@@ -172,4 +172,24 @@ export const env = {
      */
     attemptRetentionHours: readInt('LOGIN_ATTEMPT_RETENTION_HOURS', 168, 1, 8760),
   },
+  /**
+   * 运营数据采集入口的共享密钥。
+   *
+   * 采集器是计划任务，没有用户会话，所以这条接口不能走登录态。鉴权拆成两层：
+   * 来源必须是回环（复用 `launch/loopback.ts`），并且请求头里带对这把密钥。
+   * 回环校验只是纵深防御 —— 桌面壳反代之后，所有请求的远端地址都可能是回环。
+   *
+   * **不设默认值，也不在启动时强制要求。** 没配的时候采集入口返回 503 并说明
+   * 原因，而不是让整个 API 起不来：读接口与页面不依赖它，为了一个离线功能
+   * 挡住所有人不合理。
+   *
+   * 用 getter 的理由与 `jwt.secret` 相同：本文件在模块加载期求值，直接读会让
+   * 每个 import 了 env 的脚本都被迫提供这一项（seed、create-owner 都会撞上）。
+   */
+  ops: {
+    get ingestToken(): string | null {
+      const value = process.env.OPS_INGEST_TOKEN
+      return value === undefined || value.trim() === '' ? null : value
+    },
+  },
 } as const

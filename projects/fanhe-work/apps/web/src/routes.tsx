@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from 'react-router'
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
 import { NoAccessPage } from './pages/NoAccessPage'
+import { OpsDashboardPage } from './pages/OpsDashboardPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { UsersPage } from './pages/UsersPage'
@@ -127,6 +128,10 @@ function ModuleRoute({ code }: { code: NavCode }) {
   if (target.planned) return <PlaceholderPage item={target} />
 
   if (target.code === NAV_CODES.WORKBENCH) return <WorkbenchPage item={target} />
+
+  // 运营看板（千牛 / 生意参谋）。2026-10-20 从占位项转正，`planned` 已在共享包
+  // 置为 false，因此这一支不会与上面的占位判断冲突。
+  if (target.code === NAV_CODES.DASHBOARD) return <OpsDashboardPage item={target} />
 
   // 账号与权限管理（T7-01）。放在 planned 判断之后、分派表末尾的兜底之前 ——
   // 这两处都不能省：planned 拦掉未落地的模块，兜底则接住清单里新增却还没写页面的

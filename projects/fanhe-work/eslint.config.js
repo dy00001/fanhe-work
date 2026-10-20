@@ -34,6 +34,11 @@ export default [
       // Reference UI mockups are frozen artefacts that were reviewed and
       // approved as rendered pages. Reformatting them risks changing output.
       'docs/mockups/**',
+      // 千牛采集器（tools/collector）。理由与 .prettierignore 同一条：这套脚本
+      // 是从独立工作区整目录移植的，与采集源保持字节级一致比统一风格更重要，
+      // 而且它只在装有千牛登录态的采集机上运行，不进任何构建产物。
+      // 忽略掉它不意味着不维护 —— 改采集逻辑仍要跑该目录自己的 check_daily。
+      'tools/collector/**',
     ],
   },
 

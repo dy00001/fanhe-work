@@ -1,0 +1,15 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit,icon_color,icon_text
+index,psnNickName,, UNASSIGNED,psnNickName,False,True,旺旺昵称,,,
+index,cstUv1d,, UNASSIGNED,cstUv1d,False,True,咨询人数,,,
+index,replyUv1d,, UNASSIGNED,replyUv1d,False,True,接待人数,,,
+index,validReplyUv1d,, UNASSIGNED,validReplyUv1d,False,True,有效接待人数,,,
+index,cstUsrCnt1d,, UNASSIGNED,cstUsrCnt1d,False,True,询单人数,,yellow,延
+index,inquiryFinalTcr,, UNASSIGNED,inquiryFinalTcr,False,True,询单转化率,.2f%,blue,延
+index,payUsrCnt1d,, UNASSIGNED,payUsrCnt1d,False,True,销售人数,,,
+index,payAmt1d,, UNASSIGNED,payAmt1d,False,True,销售额,.2f,,
+index,proportionCss,, UNASSIGNED,proportionCss,False,True,个人销售额占比,.2f%,,
+index,unitPrice,, UNASSIGNED,unitPrice,False,True,客单价,.2f,,
+index,avgReplyDur1d,, UNASSIGNED,avgReplyDur1d,False,True,平均响应时长（秒),.2f,,
+index,allCstSftRate,, UNASSIGNED,allCstSftRate,False,True,客户满意率,.2f%,,
+index,allCstSrvSft,, UNASSIGNED,allCstSrvSft,False,True,客户服务满意度,.2f,,
+index,manReplyRate3min,, UNASSIGNED,manReplyRate3min,False,True,3分钟人工响应率,.2f%,,

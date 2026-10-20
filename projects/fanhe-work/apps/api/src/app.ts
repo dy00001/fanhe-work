@@ -7,6 +7,7 @@ import { registerAuthRoutes } from './routes/auth.js'
 import { registerEventRoutes } from './routes/events.js'
 import { registerLaunchRoutes } from './routes/launch.js'
 import { registerNoteRoutes } from './routes/notes.js'
+import { registerOpsRoutes } from './routes/ops.js'
 import { registerSetupRoutes } from './routes/setup.js'
 import { registerSystemUserRoutes } from './routes/system-users.js'
 import { registerVersionRoutes } from './version/manifest.js'
@@ -52,6 +53,9 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerNoteRoutes(app)
   registerEventRoutes(app)
   registerSystemUserRoutes(app)
+  // 运营数据看板。读接口走 `ops.shop.read`，写接口（采集上报）走回环 + 共享密钥，
+  // 两条路径的鉴权方式不同，理由见 routes/ops.ts 顶部。
+  registerOpsRoutes(app)
   // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
   registerVersionRoutes(app)
 

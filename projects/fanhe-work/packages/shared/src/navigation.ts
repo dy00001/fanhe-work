@@ -203,6 +203,11 @@ export const NAV_FOOTER_CODES: readonly NavCode[] = [NAV_CODES.SYSTEM_SETTINGS]
  * owner，那等于把「预留占位」做成了「永远隐藏」，与实施方案「采用置灰加标签的
  * 方式」的意图相反。因此占位项暂时对所有已认证用户可见，等对象清单确定、追加
  * 权限点后，再把这里的 `module` 改成对应取值。
+ *
+ * 这条路径已经走过一次：运维信息平台下的「数据看板」（`dashboard`）在接入千牛
+ * 运营数据时补了 `ops` 段的三个权限点，于是 `module` 从 null 改成 `ops`、
+ * `planned` 置为 false。后续任一占位项落地照此办理即可，改动只涉及本文件与
+ * `permissions.ts` 两处。
  */
 export const NAV_ITEMS: readonly NavItem[] = [
   {
@@ -284,10 +289,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: '数据看板',
     slug: 'dashboard',
     group: NAV_GROUP_CODES.OPS,
-    module: null,
-    planned: true,
+    // 绑定 ops 模块。这是本项与其余占位项的唯一区别：它现在有真实的权限点了，
+    // 于是 member / viewer 默认看不到 —— 店铺金额属于经营机密，不该按「占位项
+    // 对所有登录用户可见」那条临时规则放行。
+    module: 'ops',
+    // 2026-10-20 接入千牛运营数据后置为 false。路由分派在 routes.tsx 的 ModuleRoute 里。
+    planned: false,
     slot: false,
-    summary: '订单量、交付周期、返工率等运营指标的图表展示。',
+    summary: '千牛 / 生意参谋口径的店铺经营数据：成交与流量趋势、商品结构、渠道分解与数据新鲜度。',
   },
   {
     code: NAV_CODES.OPS_SLOT_1,

@@ -24,6 +24,8 @@ import type {
   MeResponse,
   NoteListResponse,
   NoteResponse,
+  OpsDashboardResponse,
+  OpsHealthResponse,
   NoteTagListResponse,
   PermissionCatalogResponse,
   PermissionCode,
@@ -705,4 +707,48 @@ export function permissionCatalogRequest(accessToken: string): Promise<Permissio
 /** 角色清单，供创建与编辑时的角色下拉。 */
 export function roleListRequest(accessToken: string): Promise<RoleListResponse> {
   return request<RoleListResponse>('/api/system/roles', { method: 'GET', accessToken })
+}
+
+/**
+ * 运营看板。查询参数只有三项：区间两端与店铺代号。
+ *
+ * 与 `notesRequest` 同一条约定：**只在有值时发送**。服务端 schema 是
+ * `additionalProperties: false`，多带一个空串会直接 400，而空串在 URLSearchParams
+ * 里是最容易顺手塞进去的东西。
+ */
+export function opsDashboardRequest(
+  accessToken: string,
+  query: { from?: string; to?: string; days?: number; shop?: string } = {},
+): Promise<OpsDashboardResponse> {
+  const search = new URLSearchParams()
+  if (query.from !== undefined && query.from !== '') search.set('from', query.from)
+  if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  if (query.days !== undefined) search.set('days', String(query.days))
+  if (query.shop !== undefined && query.shop !== '') search.set('shop', query.shop)
+  const queryString = search.toString()
+  return request<OpsDashboardResponse>(
+    `/api/ops/dashboard${queryString === '' ? '' : `?${queryString}`}`,
+    {
+      method: 'GET',
+      accessToken,
+    },
+  )
+}
+
+/** 采集批次与新鲜度。需要 `ops.collect.read`，403 时界面收起健康面板。 */
+export function opsHealthRequest(
+  accessToken: string,
+  query: { shop?: string; limit?: number } = {},
+): Promise<OpsHealthResponse> {
+  const search = new URLSearchParams()
+  if (query.shop !== undefined && query.shop !== '') search.set('shop', query.shop)
+  if (query.limit !== undefined) search.set('limit', String(query.limit))
+  const queryString = search.toString()
+  return request<OpsHealthResponse>(
+    `/api/ops/health${queryString === '' ? '' : `?${queryString}`}`,
+    {
+      method: 'GET',
+      accessToken,
+    },
+  )
 }

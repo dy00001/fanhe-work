@@ -1,0 +1,6 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit
+index,rfdAboutTimeoutCnt,, UNASSIGNED,rfdAboutTimeoutCnt,False,True,退款即将超时预警量,
+index,proofAboutTimeoutCnt,, UNASSIGNED,proofAboutTimeoutCnt,False,True,举证即将超时预警量,
+label,hourId,, UNASSIGNED,hourId,False,True,小时id,
+label,dateId,, UNASSIGNED,dateId,False,True,日期id,
+index,willTimeoutCount,, UNASSIGNED,willTimeoutCount,False,True,即将超时数量,

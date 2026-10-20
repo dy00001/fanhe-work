@@ -1,0 +1,11 @@
+﻿colType,dataIndex,defaultSortOrder,indexType,key,screen,sorter,title,unit
+index,caseId,, UNASSIGNED,caseId,False,True,退款编号,
+index,dsptId,, UNASSIGNED,dsptId,False,True,维权编号,
+index,proofCreateTime,, UNASSIGNED,proofCreateTime,False,True,举证发起时间,
+index,proofTimeout,, UNASSIGNED,proofTimeout,False,True,举证自动结束时间,
+index,surplusTime,, UNASSIGNED,surplusTime,False,True,剩余处理时间,
+index,rfdApplyAmt,, UNASSIGNED,rfdApplyAmt,False,True,退款申请金额,
+index,buyerNick,, UNASSIGNED,buyerNick,False,True,买家旺旺,
+index,buyerId,, UNASSIGNED,buyerId,False,True,买家id,
+index,caseSceneType,, UNASSIGNED,caseSceneType,False,True,退款场景,
+index,lstReasonName,, UNASSIGNED,lstReasonName,False,True,退款原因,

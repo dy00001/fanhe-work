@@ -1,0 +1,15 @@
+﻿delay,iconMapping_color,iconMapping_text,iconMapping_status,key,mmValue,name,value
+False,red,延,False,cstUv1d,-100.0,咨询人数,0
+False,red,延,False,avgReplyDur1d,-100.0,平均响应时长（秒),0.0
+False,red,延,False,allCstSftRate,,客户满意率,0.0
+False,red,延,False,payAmt1d,,客服销售额,0.0
+False,red,延,False,payUsrCnt1d,,客服销售人数,0
+False,red,延,False,proportionCss,,客服销售额占比,0.0
+False,red,延,False,unitPrice,,客服销售客单价,0.0
+True,blue,延,True,inquiryFinalTcr,-,询单转化率,延迟统计
+False,red,延,False,callinTcr1d,-100.0,咨询率,0.0
+False,red,延,False,replyUv1d,-100,接待人数,0
+False,red,延,False,manReplyRate3Min,-100.0,3分钟人工响应率,0.0
+True,blue,延,True,wandanSucRate,-,客服挽单成功率,延迟统计
+True,blue,延,True,wandanSucAmt,-,客服挽单成功金额,延迟统计
+True,blue,延,True,fcr72Rate,-,售后3日FCR,延迟统计

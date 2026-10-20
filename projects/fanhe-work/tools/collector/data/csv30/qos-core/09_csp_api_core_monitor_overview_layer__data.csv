@@ -1,0 +1,4 @@
+﻿unitPrice,groupType,payAmt1d,sellerId,proportionCss,callinTcr1d,payUsrCnt1d,replyUv1d,avgReplyDur1d,cstUv1d,manReplyRate3Min,allCstSftRate
+0.0,base_avg,0.0,2486239571,0.0,0.0,0,0,0.0,0,0.0,
+772.1,avg,3500.0,2486239571,1.0,0.07045454545454545,3,36,24.97561,36,0.9941,0.5
+3278.5,exc,8410.0,2486239571,1.0,0.15083798882681565,10,74,12.954545,74,1.0,1.0

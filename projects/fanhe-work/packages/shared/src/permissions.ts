@@ -14,13 +14,16 @@
  * 与权限行，不动表结构。
  */
 
-/** 权限点的模块段。与 permissions.module 的取值域一致。 */
-export const PERMISSION_MODULES = ['system', 'personal'] as const
+/**
+ * 权限点的模块段。与 permissions.module 的取值域一致。
+ */
+export const PERMISSION_MODULES = ['system', 'personal', 'ops'] as const
 export type PermissionModule = (typeof PERMISSION_MODULES)[number]
 
 /**
  * 全部权限点。新增权限只改这一处，类型、清单与种子数据都由它派生。
- * system 段对应管理后台，personal 段对应个人工作台的三个板块。
+ * system 段对应管理后台，personal 段对应个人工作台的三个板块，
+ * ops 段对应运营数据看板（千牛 / 生意参谋口径）。
  */
 export const PERMISSIONS = {
   SYSTEM_USER_READ: 'system.user.read',
@@ -36,6 +39,15 @@ export const PERMISSIONS = {
   PERSONAL_NOTE_WRITE: 'personal.note.write',
   PERSONAL_EVENT_READ: 'personal.event.read',
   PERSONAL_EVENT_WRITE: 'personal.event.write',
+
+  // ---- 运营数据。三个权限点对应「能进页面 / 能看金额 / 能看采集健康」三件事。 ----
+  //
+  // 金额与页面准入拆成两个点，是这个模块唯一非做不可的设计：店铺 GMV、客单价属于
+  // 经营机密，而商品表现、流量结构对运营岗是日常需要。合成一个点就只有两档
+  // 「全看」与「全不看」，实际结果是所有人拿到全看。
+  OPS_SHOP_READ: 'ops.shop.read',
+  OPS_FINANCE_READ: 'ops.finance.read',
+  OPS_COLLECT_READ: 'ops.collect.read',
 } as const
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -60,6 +72,10 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.PERSONAL_NOTE_WRITE]: '撰写、修改、删除工作纪要',
   [PERMISSIONS.PERSONAL_EVENT_READ]: '查看事件记录',
   [PERMISSIONS.PERSONAL_EVENT_WRITE]: '新增、勾选完成、删除事件记录',
+
+  [PERMISSIONS.OPS_SHOP_READ]: '进入运营看板并查看非金额指标',
+  [PERMISSIONS.OPS_FINANCE_READ]: '查看运营看板中的金额类指标',
+  [PERMISSIONS.OPS_COLLECT_READ]: '查看采集批次与数据新鲜度',
 }
 
 export type PermissionMeta = {
@@ -133,16 +149,26 @@ export const ROLES: readonly RoleDefinition[] = [
     // 不含 system.role.manage 与 system.audit.read：改角色和看审计属于 owner 的职责。
     // system.user.manage 给了，但「只能管理比自己低级的账号」这条限制由服务端按
     // rank 判定，不是靠少给一个权限点来实现 —— 权限点是二值的，表达不了层级。
+    //
+    // ops 三个点逐条列出，**不写 `ops.*`**。通配符会把将来新增的 ops 权限点
+    // （导出、线索编辑、手动采集）一并授予管理员，而这类「顺手多给」在界面上
+    // 完全看不出来，只会在某天有人发现自己能导出全店金额时才被注意到。
     grants: [
       'personal.*',
       PERMISSIONS.SYSTEM_USER_READ,
       PERMISSIONS.SYSTEM_USER_MANAGE,
       PERMISSIONS.SYSTEM_ROLE_READ,
+      PERMISSIONS.OPS_SHOP_READ,
+      PERMISSIONS.OPS_FINANCE_READ,
+      PERMISSIONS.OPS_COLLECT_READ,
     ],
   },
   {
     code: ROLE_CODES.MEMBER,
     name: '成员',
+    // 刻意不给 ops 任何权限点。店铺 GMV 与客单价属于经营机密，默认放开等于
+    // 让每个成员都能看到全店营业额；需要时由 owner 在账号上单独授予
+    // `ops.shop.read`（此时能看到商品与流量，看不到金额）。
     description: '个人工作台全权',
     rank: 50,
     isSystem: true,

@@ -1,0 +1,5 @@
+﻿code,count,hitCache,message,params_dateId,params_datePartition,params_sellerId,params_sqlWhere,serviceName,serviceType,params_currentTime,params_thtk_apply_case_conf,params_pageSize,params_orderBy,params_thtk_agree_goods_conf,params_pageNum,params_jtk_apply_case_conf
+0,0,False,,20261019,1d,2486239571,1=1,tddl_sycm_kpi_slr_as_serv_about_timeout_dh_summary,oneservice,,,,,,,
+0,0,False,,20261018,1d,2486239571,1=1,tddl_sycm_kpi_slr_as_serv_about_timeout_dh_summary,oneservice,,,,,,,
+0,,False,,,,2486239571,1=1,tddl_sycm_kpi_slr_as_serv_rfd_about_timeout_summary,oneservice,2026-10-19 15:00:00,4,10,"case_id desc,id ",4,1,4
+0,,False,,,,2486239571,1=1,tddl_sycm_kpi_slr_as_serv_rfd_about_timeout_summary,oneservice,2026-10-19 15:18:12,4,10,"case_id desc,id ",4,1,4

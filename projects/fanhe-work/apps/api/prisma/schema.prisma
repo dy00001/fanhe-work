@@ -618,3 +618,192 @@ model EventLog {
   @@index([eventId, createdAt])
   @@map("event_logs")
 }
+
+// ---------------------------------------------------------------------------
+// 运营数据（千牛 / 生意参谋）
+// ---------------------------------------------------------------------------
+//
+// 四张表，全部 `ecom_` 前缀，与账号、纪要、事件这些业务表零耦合。
+//
+// 为什么不是原方案里的十张（见 docs/QIANNIU-OPS-INTEGRATION-2026-10-19.md §4）：
+// 那张设计假定「商品 / 渠道 / 客服 / 推广」都有逐日序列。实际拿到的数据里，
+// 只有支付金额、访客、支付买家、商品访客四项是逐日真值，其余（商品排行、渠道
+// 结构、地域、搜索词、跳失率、停留时长）接口只给 30 天整段值。按原设计建十张表，
+// 其中五张会长期是空表，而空表比没表更糟 —— 后来接手的人会以为「这里本该有数据，
+// 只是还没采」，实际是「这个粒度平台不提供」。
+//
+// 于是收敛成两类事实表：
+//   · ecom_daily_metrics       只存可加的逐日量
+//   · ecom_dimension_snapshots 存整段维度，**带自己的窗口**（stat_from / stat_to）
+// 加 ecom_shops（店铺维度）与 ecom_collect_runs（批次可观测性）。新增维度不需要
+// 迁移，加一行 `dim_type` 即可。
+
+/// 店铺平台。
+enum EcomPlatform {
+  taobao
+  tmall
+
+  @@map("ecom_platform")
+}
+
+/// 数据来源。报表导出与接口直取在个别指标上口径不同，对账时靠这一列区分。
+enum EcomCollectSource {
+  report
+  api
+
+  @@map("ecom_collect_source")
+}
+
+/// 采集批次状态。partial 表示部分页面采到、部分空采，需要人看一眼。
+enum EcomCollectStatus {
+  running
+  succeeded
+  partial
+  failed
+
+  @@map("ecom_collect_status")
+}
+
+/// 维度类型。`summary` 是「一行一个指标」的整段值（客单价、跳失率、停留时长），
+/// 与前五种「一行一个对象」不同类，见共享包 `OPS_DIMENSION_TYPES` 的注释。
+enum EcomDimensionType {
+  item
+  channel
+  area
+  keyword
+  content
+  summary
+
+  @@map("ecom_dimension_type")
+}
+
+/// 店铺。当前部署只有一家，表结构保留多店维度 —— 加店只是多一行，不动事实表。
+model EcomShop {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 稳定代号，采集器用它认店（`fanhe-main`）。不用店铺 id，因为 id 会随重建变化。
+  code String @unique @db.VarChar(40)
+  name String @db.VarChar(120)
+
+  platform   EcomPlatform @default(taobao)
+  sellerNick String?      @map("seller_nick") @db.VarChar(80)
+
+  /// 业务日时区。生意参谋按东八区切日，固定写死，不跟服务器时区走。
+  timezone String  @default("Asia/Shanghai") @db.VarChar(40)
+  enabled  Boolean @default(true)
+
+  /// 最近一次成功采集完成的时刻。新鲜度徽标读这一列，不另建健康表。
+  lastCollectedAt DateTime? @map("last_collected_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  daily     EcomDailyMetric[]
+  snapshots EcomDimensionSnapshot[]
+  runs      EcomCollectRun[]
+
+  @@map("ecom_shops")
+}
+
+/// 店铺日指标。只放可加量。
+///
+/// **金额单位是分，列类型 Int。** 单日上限约 2147 万元，超过说明上游把元当成分
+/// 传了 —— 这个上限本身就是一道校验。区间求和由查询侧做，不在这里存汇总行：
+/// 存了就要维护，而汇总是随时可算的。
+///
+/// **业务日是 Date，不是 Timestamptz。** 生意参谋的「日」是自然日，跨时区换算会
+/// 把 10 月 1 日的单子算到 9 月 30 日，而这类错位只在月初月末暴露。采集时刻另存
+/// `collected_at`。
+///
+/// 四个指标都可空。**空 ≠ 0**：0 是「当天确实没有」，空是「那一天没采到」。
+/// 补 0 会让日均被系统性拉低，而且看不出来。
+model EcomDailyMetric {
+  id       String   @id @default(uuid(7)) @db.Uuid
+  shopId   String   @map("shop_id") @db.Uuid
+  statDate DateTime @map("stat_date") @db.Date
+
+  payAmountFen Int? @map("pay_amount_fen")
+  visitors     Int?
+  payBuyers    Int? @map("pay_buyers")
+  itemVisitors Int? @map("item_visitors")
+
+  source      EcomCollectSource @default(report)
+  /// 平台会回溯改数。同一业务日多次写入时，这一列标出「本次覆盖了不同的值」。
+  revised     Boolean           @default(false)
+  collectedAt DateTime          @default(now()) @map("collected_at") @db.Timestamptz(3)
+
+  shop EcomShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, statDate])
+  /// 区间查询恒带这两列，唯一约束的前缀已经覆盖，单建一条是为了让「按店取全部
+  /// 日期」这种扫描也走索引，不额外依赖唯一索引的名字。
+  @@index([shopId, statDate])
+  @@map("ecom_daily_metrics")
+}
+
+/// 整段维度快照。一行 = 某店某窗口某维度某对象。
+///
+/// **窗口进主键。** 同一批商品在 9 月与 10 月各有一份 30 天排行，它们是两份不同的
+/// 事实，不能互相覆盖。查询时取「覆盖目标区间的最新一份」，而不是简单取最新 —
+/// 否则补采一次历史数据，看板上的当前窗口会退回到历史区间。
+///
+/// `metrics` 用 Json 而不是为每种维度加列：渠道有转化率、商品有加购金额、地域有
+/// 下单转化率，列集合各不相同，摊平成列要么几十个空列，要么每次加指标改一次迁移。
+/// 代价是库侧无类型约束，读出来由 `metricNumber()` 收口（读不到就当缺失，不当 0）。
+model EcomDimensionSnapshot {
+  id      String            @id @default(uuid(7)) @db.Uuid
+  shopId  String            @map("shop_id") @db.Uuid
+  dimType EcomDimensionType @map("dim_type")
+
+  statFrom DateTime @map("stat_from") @db.Date
+  statTo   DateTime @map("stat_to") @db.Date
+
+  /// 稳定键。商品用平台商品 id，渠道 / 地域 / 关键词用归一后的名称。
+  dimKey   String @map("dim_key") @db.VarChar(120)
+  /// 展示名。商品标题会改，这里存的是快照时点的标题。
+  dimLabel String @map("dim_label") @db.VarChar(300)
+
+  metrics Json
+
+  collectedAt DateTime @default(now()) @map("collected_at") @db.Timestamptz(3)
+
+  shop EcomShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, dimType, statFrom, statTo, dimKey])
+  @@index([shopId, dimType, statFrom, statTo])
+  @@map("ecom_dimension_snapshots")
+}
+
+/// 采集批次。这张表是「昨天为什么没数」唯一能回答的地方。
+///
+/// 与 `audit_logs` 分工：审计记人做了什么，批次记系统做了什么。自动采集不写审计
+/// （计划任务里没有操作者），它的可观测性全部落在这里。
+model EcomCollectRun {
+  id     String   @id @default(uuid(7)) @db.Uuid
+  shopId String   @map("shop_id") @db.Uuid
+
+  statFrom DateTime @map("stat_from") @db.Date
+  statTo   DateTime @map("stat_to") @db.Date
+
+  /// schedule / manual / backfill。用 VarChar 而不是枚举：新增触发方式不该要一次迁移。
+  trigger String            @db.VarChar(20)
+  source  EcomCollectSource
+  status  EcomCollectStatus @default(running)
+
+  dailyRows     Int @default(0) @map("daily_rows")
+  dimensionRows Int @default(0) @map("dimension_rows")
+
+  /// 原始文件相对路径。只记相对路径 —— 工作区在 U 盘上，盘符会变。
+  rawPath      String? @map("raw_path") @db.VarChar(300)
+  errorMessage String? @map("error_message") @db.Text
+
+  startedAt  DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime? @map("finished_at") @db.Timestamptz(3)
+  durationMs Int?      @map("duration_ms")
+
+  shop EcomShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, startedAt])
+  @@index([shopId, statTo])
+  @@map("ecom_collect_runs")
+}

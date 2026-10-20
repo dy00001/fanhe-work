@@ -26,3 +26,10 @@ data/
 
 # Reference UI mockups are frozen artefacts already reviewed as rendered pages.
 docs/mockups/
+
+# 千牛采集器（tools/collector）。这套脚本是从独立工作区移植进来的，与采集源
+# 保持一致的价值高于统一格式：它在两台机器之间整目录拷贝，任何一次重新格式化
+# 都会让「哪台机器上是哪一版」变得不可比。里面还有 .ps1 与 Python 脚本，
+# 它们本就不在 prettier 的处理范围内，混在一起只会增加误改风险。
+# 该目录同时加入 .gitignore 之外的 eslint ignores —— 三处必须一起维护。
+tools/collector/

@@ -30,6 +30,7 @@ import { test } from 'node:test'
 import {
   NAV_CODES,
   NAV_FOOTER_CODES,
+  PERMISSIONS,
   NAV_GROUPS,
   NAV_ITEMS,
   ROLE_PERMISSIONS,
@@ -89,16 +90,22 @@ const ALL_PATHS = [
 ]
 
 /**
- * 不设权限门槛的十六项（`module === null`），对已认证用户一律可见。
+ * 不设权限门槛的十五项（`module === null`），对已认证用户一律可见。
  *
- * 清单里只有两项带门槛：首页绑 `personal`、系统设置绑 `system`。
+ * 清单里有三项带门槛：首页绑 `personal`、系统设置绑 `system`、数据看板绑 `ops`
+ * （2026-10-20 接入千牛运营数据后从占位项转正，店铺金额不再对全体成员开放）。
  */
 const UNGATED_CODES = ALL_CODES.filter(
-  (code) => code !== NAV_CODES.WORKBENCH && code !== NAV_CODES.SYSTEM_SETTINGS,
+  (code) =>
+    code !== NAV_CODES.WORKBENCH &&
+    code !== NAV_CODES.SYSTEM_SETTINGS &&
+    code !== NAV_CODES.DASHBOARD,
 )
 
-/** 除系统设置外的十七项。member 与 viewer 的可见范围就是它。 */
-const WITHOUT_SYSTEM_SETTINGS = ALL_CODES.filter((code) => code !== NAV_CODES.SYSTEM_SETTINGS)
+/** 除系统设置与数据看板外的十六项。member 与 viewer 的可见范围就是它。 */
+const WITHOUT_SYSTEM_SETTINGS = ALL_CODES.filter(
+  (code) => code !== NAV_CODES.SYSTEM_SETTINGS && code !== NAV_CODES.DASHBOARD,
+)
 
 test('导航清单为十八项，编号唯一且顺序稳定', () => {
   assert.equal(NAV_ITEMS.length, 18)
@@ -114,16 +121,26 @@ test('admin 可见全部十八项：有 personal 全权，也有 system.user.rea
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.admin)), ALL_CODES)
 })
 
-test('member 看不到系统设置，其余十七项可见', () => {
+test('member 看不到系统设置与数据看板，其余十六项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.member))
   assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
+  // 运营数据默认对成员不可见：店铺 GMV 与客单价属于经营机密。
+  assert.ok(!visible.includes(NAV_CODES.DASHBOARD))
 })
 
-test('viewer 看不到系统设置，其余十七项可见', () => {
+test('viewer 看不到系统设置与数据看板，其余十六项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.viewer))
   assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
+  assert.ok(!visible.includes(NAV_CODES.DASHBOARD))
+})
+
+test('单独授予 ops.shop.read 后成员能看到数据看板', () => {
+  // 这是本模块的核心用法：不给角色，给账号。断言权限点与导航项的绑定真的生效，
+  // 否则「导航项绑了 module」这件事只是注释里的一句话。
+  const granted = [...ROLE_PERMISSIONS.member, PERMISSIONS.OPS_SHOP_READ]
+  assert.ok(codesOf(filterNavigation(granted)).includes(NAV_CODES.DASHBOARD))
 })
 
 test('首页对四种角色都可见', () => {
@@ -136,7 +153,7 @@ test('首页对四种角色都可见', () => {
   }
 })
 
-test('尚无权限点可绑的十六项对已认证用户一律可见', () => {
+test('尚无权限点可绑的十五项对已认证用户一律可见', () => {
   for (const role of ['owner', 'admin', 'member', 'viewer']) {
     const visible = codesOf(filterNavigation(ROLE_PERMISSIONS[role]))
     for (const code of UNGATED_CODES) {
@@ -145,7 +162,7 @@ test('尚无权限点可绑的十六项对已认证用户一律可见', () => {
   }
 })
 
-test('没有权限点时只剩不设门槛的十六项', () => {
+test('没有权限点时只剩不设门槛的十五项', () => {
   // 当前四个内置角色都持有 personal 段权限，走不到这一支；断言它存在，是为了
   // 钉住「module 为 null 即不设门槛」这条规则本身。
   assert.deepEqual(codesOf(filterNavigation([])), UNGATED_CODES)
@@ -167,8 +184,8 @@ test('canSeeNavItem 对不设门槛的项直接返回 true', () => {
 
 test('激活项解析：请求的是可见项时就用它', () => {
   const visible = filterNavigation(ROLE_PERMISSIONS.member)
-  const active = resolveActiveNav(visible, NAV_CODES.DASHBOARD)
-  assert.equal(active?.code, NAV_CODES.DASHBOARD)
+  const active = resolveActiveNav(visible, NAV_CODES.CUSTOMER_OVERVIEW)
+  assert.equal(active?.code, NAV_CODES.CUSTOMER_OVERVIEW)
 })
 
 test('激活项解析：请求的是不可见项时回退到第一项', () => {
