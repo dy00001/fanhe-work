@@ -1388,7 +1388,7 @@ T7-01 的完整实施文档是 `docs/T7-01-ACCOUNT-ADMIN.md`（权限模型、�
 5. **采集端**：`tools/collector/`（原 `E:/qianniu-shuju` 整目录迁入，含 30 天基线 `data/csv30`、20 个脚本、10 份口径文档、原型页面），新增 `scripts/export-ingest.mjs`（csv30 → 契约 JSON）；`apps/api/src/tools/ops-import.ts` 为回填入口。
 6. **忽略规则三处同改**：`.gitignore`（采集器 profile / daily / raw / 截图）、`eslint.config.js` 的 `ignores`、`.prettierignore` 均加 `tools/collector`。
 
-**实测（2026-10-20）：** 四道门禁 **887 项 0 失败**（shared 119 + web 240 + desktop 287 + api 241，含 5 项数据库设计性跳过）；`lint` 0 问题、`typecheck` 通过、`format:check` 通过。迁移 7 → 8、表 13 → 17、权限点 12 → 15。入库 30 天基线：逐日 30 行、维度 50 行，支付金额 10,800,000 分（¥108,000），与 `csv30` 四处锚点一致；同一 payload 连跑两次 `revisedDays = 0`。接口反例：错 token → 401、未配 token → 503、窗口倒置 → 400、逐日日期越窗 → 400、未登录读接口 → 401。
+**实测（2026-10-20）：** 四道门禁 **892 项 0 失败**（shared 119 + web 240 + desktop 287 + api 246，含 5 项数据库设计性跳过）；`lint` 0 问题、`typecheck` 通过、`format:check` 通过。迁移 7 → 8、表 13 → 17、权限点 12 → 15。入库 30 天基线：逐日 30 行、维度 50 行，支付金额 10,800,000 分（¥108,000），与 `csv30` 四处锚点一致；同一 payload 连跑两次 `revisedDays = 0`。接口反例：错 token → 401、未配 token → 503、窗口倒置 → 400、逐日日期越窗 → 400、未登录读接口 → 401。
 
 **新增文档：** `docs/ops/README.md`（模块边界、权限、口径、欠账）、`docs/ops/DATA-CONTRACT.md`（上报契约）、`docs/ops/RUNBOOK.md`（每日采集、回填、故障判据）。
 
