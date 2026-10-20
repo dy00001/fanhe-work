@@ -99,7 +99,11 @@ export function OpsTrendChart(props: {
           <div className="flex gap-3">
             {/* 纵轴只标顶与底。中间刻度在这类柱状图上是装饰，读数靠悬停更准。 */}
             <div className="flex w-14 shrink-0 flex-col justify-between py-0.5 text-right text-[11px] text-muted-foreground-weak tabular-nums">
-              <span>{meta.format(ceiling)}</span>
+              {/*
+                全为 0 时不要标 `ceiling`：它的兜底值是 1（分），照直显示会变成
+                「¥0.01」—— 一个既不是数据、也解释不了的刻度。这时标 0 才是实情。
+              */}
+              <span>{meta.format(ceiling === 1 && peak < 0 ? 0 : ceiling)}</span>
               <span>0</span>
             </div>
 

@@ -67,6 +67,23 @@ export function isOpsPreset(value: string | null): value is OpsPreset {
   return OPS_PRESETS.some((preset) => preset.key === value)
 }
 
+/**
+ * 从地址参数解析出「当前是哪个区间档」。
+ *
+ * `p` 缺省、但地址里带了一对合法的 `from` / `to` 时，按**自定义**理解。这一条不是
+ * 锦上添花：看板的链接经常是手拼的（发给同事、贴进工单、从采集日期反查），只写两端
+ * 日期是最自然的写法。若这时静默回落到「近 30 天」，页面会显示一个既不是链接里那个、
+ * 也没有任何提示的区间 —— 用户会以为「那天就是这些数」。
+ *
+ * `p` 有值但不是合法档位（拼错、旧链接），且两端日期合法时，同样按自定义理解：
+ * 能确定的事实优先于猜错的标签。
+ */
+export function resolvePreset(presetParam: string | null, custom: OpsDateRange | null): OpsPreset {
+  if (isOpsPreset(presetParam)) return presetParam
+  if (custom !== null && opsRangeDays(custom) > 0) return 'custom'
+  return '30d'
+}
+
 /** 预设 → 天数。`custom` / 月份类没有固定天数，返回 null。 */
 export function presetDays(preset: OpsPreset): number | null {
   switch (preset) {

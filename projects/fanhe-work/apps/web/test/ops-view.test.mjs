@@ -19,6 +19,7 @@ import {
   presetDays,
   presetQuery,
   presetRange,
+  resolvePreset,
   rangeCaption,
   viewFromNav,
 } from '../src/lib/ops-view.ts'
@@ -123,4 +124,21 @@ test('请求参数：固定档交给 days，月份类给具体两端', () => {
 test('区间说明：带数据范围与天数，缺覆盖范围时只说天数', () => {
   assert.equal(rangeCaption(COVERAGE, 30), '数据范围 2026-09-19 ~ 2026-10-18（30 天）')
   assert.equal(rangeCaption(null, 7), '当前区间 7 天')
+})
+
+test('区间档：p 缺省但地址里有合法两端日期时，按自定义理解', () => {
+  // 这是「只写 from/to 的分享链接」必须命中的分支。若这里回落到 30d，页面会
+  // 显示一个既不是链接里那个、也没有任何提示的区间。
+  assert.equal(resolvePreset(null, { from: '2026-10-19', to: '2026-10-19' }), 'custom')
+  assert.equal(resolvePreset(null, { from: '2026-10-01', to: '2026-10-10' }), 'custom')
+})
+
+test('区间档：合法 p 优先，非法 p 与坏区间退回 30 天', () => {
+  assert.equal(resolvePreset('7d', { from: '2026-10-01', to: '2026-10-10' }), '7d')
+  // 拼错的 p 但两端日期合法 → 仍按自定义：能确定的事实优先于猜错的标签。
+  assert.equal(resolvePreset('7days', { from: '2026-10-01', to: '2026-10-10' }), 'custom')
+  assert.equal(resolvePreset(null, null), '30d')
+  assert.equal(resolvePreset('oops', null), '30d')
+  // 顺序颠倒不是合法区间，不能当自定义。
+  assert.equal(resolvePreset(null, { from: '2026-10-10', to: '2026-10-01' }), '30d')
 })

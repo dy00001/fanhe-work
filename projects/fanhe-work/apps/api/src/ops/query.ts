@@ -21,7 +21,7 @@ import {
 
 import { prisma } from '../db/prisma.js'
 import type { PermissionCode } from '@fanhe/shared'
-import { fromDbDate, toDbDate } from './date.js'
+import { fromDbDate, pickSnapshotIndex, toDbDate } from './date.js'
 
 /**
  * 看板的读模型。
@@ -253,7 +253,20 @@ async function loadDimensionGroup(
     select: { statFrom: true, statTo: true, dimKey: true, dimLabel: true, metrics: true },
   })
 
-  const latest = candidates[0]
+  /*
+   * 按「与查询区间最贴合」挑快照，不按最新挑。
+   *
+   * 日增采集上线后，同一维度会同时存在一份 30 天快照和此后每天一份的单日快照。
+   * 只看 `statTo` 最新的话，查「近 30 天」时商品榜会换成「最新一天的前 5 名」——
+   * 那份数据自己不说「我只覆盖一天」，页面上就成了两个不同窗口的数字并排。
+   * 选择规则与理由见 `pickSnapshotIndex`。
+   */
+  const windows = candidates.map((row) => ({
+    from: fromDbDate(row.statFrom) ?? '',
+    to: fromDbDate(row.statTo) ?? '',
+  }))
+  const picked = pickSnapshotIndex(windows, range)
+  const latest = picked < 0 ? undefined : candidates[picked]
   if (latest === undefined) {
     return { type, window: null, rows: [] }
   }

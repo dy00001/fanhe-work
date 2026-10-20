@@ -68,10 +68,36 @@ export function OpsMultiLineChart(props: {
         })}
       </div>
 
-      {usable.length < 2 ? (
+      {usable.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground-weak">
           这段时间没有可画的逐日数据
         </p>
+      ) : usable.length === 1 ? (
+        /*
+         * 只有一天时不画线，改为把四个指标直接列出来。
+         *
+         * 原实现是 `usable.length < 2` 一律显示「没有可画的逐日数据」，于是查单日
+         * 时页面会声称「没数据」—— 那一天明明有 67 个访客。空态与「只有一格」
+         * 是两件事：前者该说没数据，后者该给数、并说明为什么没有图。
+         */
+        <div className="py-4">
+          <p className="text-center text-sm text-muted-foreground-weak">
+            只有一天的数据，画不出趋势；四个指标的读数如下。
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {OPS_SCREEN_SERIES.map((item) => (
+              <div key={item.key} className="rounded-md border border-border-soft px-2.5 py-2">
+                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: item.color }} />
+                  {item.label}
+                </div>
+                <div className="mt-1 text-sm text-foreground tabular-nums">
+                  {item.format(first === undefined ? null : valueOf(first, item.key))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : (
         <>
           <svg

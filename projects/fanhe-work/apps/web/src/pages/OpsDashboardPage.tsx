@@ -2,6 +2,8 @@ import {
   NAV_CODES,
   PERMISSIONS,
   navPath,
+  opsRangeDays,
+  parseOpsDate,
   type NavCode,
   type NavItem,
   type OpsDailyPoint,
@@ -52,7 +54,7 @@ import {
   OPS_PENDING_SERVICE,
 } from '../lib/ops-pending'
 import { OPS_SCREEN_SERIES, type OpsScreenSeriesKey } from '../lib/ops-series'
-import { isOpsPreset, presetQuery, viewFromNav, type OpsPreset } from '../lib/ops-view'
+import { presetQuery, resolvePreset, viewFromNav, type OpsPreset } from '../lib/ops-view'
 import { useOpsDashboard, useOpsHealth, useOpsShopBoards } from '../lib/use-ops-dashboard'
 
 /**
@@ -99,10 +101,17 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
 
   const view = viewFromNav(item.code)
   const presetParam = params.get('p')
-  const preset: OpsPreset = isOpsPreset(presetParam) ? presetParam : '30d'
   const customFrom = params.get('from') ?? ''
   const customTo = params.get('to') ?? ''
-  const custom = customFrom !== '' && customTo !== '' ? { from: customFrom, to: customTo } : null
+  // 两端都必须是合法日期且顺序正确，否则当作没有自定义区间 —— 一个 `from=abc`
+  // 不该把整页打回「近 30 天」而不出声，也不该把非法值原样送给服务端。
+  const custom =
+    parseOpsDate(customFrom) !== null &&
+    parseOpsDate(customTo) !== null &&
+    opsRangeDays({ from: customFrom, to: customTo }) > 0
+      ? { from: customFrom, to: customTo }
+      : null
+  const preset: OpsPreset = resolvePreset(presetParam, custom)
   const shopCode = params.get('shop')
 
   /* 第一份响应之前还不知道数据覆盖范围：固定天数类预设直接交给服务端的 `days`；
