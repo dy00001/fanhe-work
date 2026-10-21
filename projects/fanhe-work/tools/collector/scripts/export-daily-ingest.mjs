@@ -110,24 +110,58 @@ if (!IS_DATE.test(targetDate)) {
 
 /* ── 读取工具 ─────────────────────────────────────────────────────────── */
 
+/**
+ * 每个模块最近一次扫描的结果。用来把「读不到」拆成三种修法完全不同的原因：
+ *
+ *   1. 目录不存在 / 目录里没有 json —— 采集没落盘，要重采。
+ *   2. 有 json 但文件名不匹配 —— 接口换了命名，要改匹配规则，重采没用。
+ *   3. 文件匹配上了、读到了，但里面没有可用行 —— 页面结构变了，或这一页确实为空。
+ *
+ * 原来三种都打印「未采到」，于是看到提示的人一律去重采；第 2、3 种重采一遍还是
+ * 同样的结果，白跑一轮，而且会让人以为采集端坏了。
+ */
+const scanLog = new Map()
+
 /** 读目录下第一个文件名匹配的 JSON。没有返回 null；有但解析失败直接抛。 */
 function readFirst(module, pattern) {
   const dir = path.join(dayDir, module)
-  if (!fs.existsSync(dir)) return null
-  const files = fs
+  if (!fs.existsSync(dir)) {
+    scanLog.set(module, { dirExists: false, files: [], pattern, matched: null })
+    return null
+  }
+  const all = fs
     .readdirSync(dir)
-    .filter((name) => name.endsWith('.json') && pattern.test(name))
+    .filter((name) => name.endsWith('.json'))
     .sort()
+  const entry = { dirExists: true, files: all, pattern, matched: null }
+  scanLog.set(module, entry)
+  const files = all.filter((name) => pattern.test(name))
   for (const name of files) {
     const file = path.join(dir, name)
     const raw = fs.readFileSync(file, 'utf8')
     try {
-      return { file, name, json: JSON.parse(raw) }
+      const json = JSON.parse(raw)
+      entry.matched = name
+      return { file, name, json }
     } catch (error) {
       throw new Error(`${module}/${name} 不是合法 JSON：${error.message}`)
     }
   }
   return null
+}
+
+/** 把「读不到」翻译成一句可执行的原因。 */
+function explainMissing(module) {
+  const log = scanLog.get(module)
+  if (log === undefined) return `${module}/ 未被读取`
+  if (!log.dirExists) return `${module}/ 目录不存在`
+  if (log.files.length === 0) return `${module}/ 目录里没有 json，采集这一页没落盘`
+  if (log.matched === null) {
+    const preview = log.files.slice(0, 4).join('、')
+    const more = log.files.length > 4 ? ` 等 ${log.files.length} 个` : ''
+    return `${module}/ 有 ${preview}${more}，但没有一个匹配 ${log.pattern} —— 这个接口要么没被触发（补采集规则），要么文件名变了（改匹配规则）；原样重采不会产生它`
+  }
+  return `${module}/${log.matched} 读到了，但里面没有可用行 —— 页面结构变了，或这一页确实为空`
 }
 
 /**
@@ -233,8 +267,15 @@ const amountMismatch =
 const dimensions = []
 const groups = []
 
-function group(name, source, rows, note) {
-  groups.push({ name, source, rows: rows.length, note: note ?? null })
+/**
+ * 收一组维度行。
+ *
+ * `source` 由扫描记录派生，不再由调用处手写 —— 手写时「未采到 xxx」与实际读到的
+ * 文件名容易走偏，而这一列是报告里唯一能指出「这份数据来自哪个文件」的地方。
+ */
+function group(name, module, rows, note) {
+  const log = scanLog.get(module)
+  groups.push({ name, module, source: log?.matched ?? '未采到', rows: rows.length, note: note ?? null })
   dimensions.push(...rows)
 }
 
@@ -264,7 +305,7 @@ function group(name, source, rows, note) {
       }
     }
   }
-  group('商品', file === null ? '未采到 item_view_top' : file.name, rows, pageNote('item-rank'))
+  group('商品', 'item-rank', rows, pageNote('item-rank'))
 }
 
 /* 3.2 地域：flow-visitor/listAreas。 */
@@ -291,7 +332,7 @@ function group(name, source, rows, note) {
       }
     }
   }
-  group('地域', file === null ? '未采到 listAreas' : file.name, rows, pageNote('flow-visitor'))
+  group('地域', 'flow-visitor', rows, pageNote('flow-visitor'))
 }
 
 /* 3.3 搜索词：flow-keyword/drainageSearch。 */
@@ -313,7 +354,7 @@ function group(name, source, rows, note) {
       }
     }
   }
-  group('搜索词', file === null ? '未采到 drainageSearch' : file.name, rows, pageNote('flow-keyword'))
+  group('搜索词', 'flow-keyword', rows, pageNote('flow-keyword'))
 }
 
 /* 3.4 渠道：flow-shopsource 的渠道树（children 是被序列化的数组）。 */
@@ -349,7 +390,7 @@ function group(name, source, rows, note) {
   } else {
     note = '未采到渠道树（本日只采到总览）'
   }
-  group('渠道', file === null ? '未采到 tree_platform_support' : file.name, rows, note)
+  group('渠道', 'flow-shopsource', rows, note)
 }
 
 /* 3.5 整段结构指标：来自 flow-overview 的同一份响应，窗口 = 当天。 */
@@ -383,12 +424,7 @@ function group(name, source, rows, note) {
       })
     }
   }
-  group(
-    '结构指标',
-    overview === null ? '未采到 flow-overview/overview' : overview.name,
-    rows,
-    pageNote('flow-overview'),
-  )
+  group('结构指标', 'flow-overview', rows, pageNote('flow-overview'))
 }
 
 /* ── 4. 店铺身份 ──────────────────────────────────────────────────────── */
@@ -446,7 +482,26 @@ if (shop === null) {
 
 if (daily.length === 0) {
   console.error(`没有可入库的逐日数据：${path.relative(ROOT, dayDir)} 里认不出 flow-overview 总览。`)
+  console.error(`  ${explainMissing('flow-overview')}`)
   console.error('先看清单里这一页是否偏薄，或跑 check_daily.mjs 复核。')
+  process.exit(1)
+}
+
+/*
+ * 响应日期与目标日不一致，直接拒绝产出，不写文件。
+ *
+ * 这条原来只是 push 进 failures、把退出码降成 2 —— 文件照写。而文件里的
+ * `window.from/to` 用的是 targetDate，`daily[0].date` 也是 targetDate，装进去的
+ * 数值却属于 overviewDate 那一天。紧接着打印的 `pnpm db:ops-import <这个文件>`
+ * 会把这批数入库到**错误的日期**，而且入库之后没有任何地方能看出错位：窗口合法、
+ * 行数正常、状态 succeeded、金额看着也合理。
+ *
+ * 结构性问题不能降级成「待确认」，因为它的下游动作是不可逆的写入。
+ */
+if (overviewDate !== null && overviewDate !== targetDate) {
+  console.error(`响应里的 statDate 是 ${overviewDate}，与目标日 ${targetDate} 不一致。`)
+  console.error('这批数据不能入库：文件里的 window 会写成目标日，而数值属于另一天。')
+  console.error('先确认报表页的日期是否真的切到了目标日（dateType 与日期参数），再重跑。')
   process.exit(1)
 }
 
@@ -457,16 +512,16 @@ const failures = []
 
 if (dailyMetrics.visitors === null) failures.push('访客数缺失（flow-overview 未回 uv）')
 if (dailyMetrics.payAmountFen === null) failures.push('支付金额缺失（flow-overview 未回 payAmt）')
-if (overviewDate !== null && overviewDate !== targetDate) {
-  failures.push(`响应里的 statDate 是 ${overviewDate}，与目标日 ${targetDate} 不一致`)
-}
 if (amountMismatch) {
   failures.push(
     `两处支付金额不一致：总览 ${dailyMetrics.payAmountFen} 分，交易明细 ${tendencyFen} 分（以总览为准）`,
   )
 }
 for (const entry of groups) {
-  if (entry.rows === 0) failures.push(`${entry.name}无数据${entry.note === null ? '' : `：${entry.note}`}`)
+  if (entry.rows > 0) continue
+  failures.push(
+    `${entry.name}无数据${entry.note === null ? '' : `：${entry.note}`} —— ${explainMissing(entry.module)}`,
+  )
 }
 
 if (flag('stdout')) {

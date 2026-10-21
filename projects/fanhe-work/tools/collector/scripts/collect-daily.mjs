@@ -36,6 +36,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { missingEndpoints } from './lib/required-endpoints.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 9222;
@@ -309,6 +310,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const RETRY_WAIT = Number(process.env.RETRY_WAIT || WAIT + 30000);
   const isThin = saved => saved.length < 2 || saved.reduce((t, x) => t + x.bytes, 0) < 800;
 
+  /* 每页「必须拿到」的接口。判定表放在 lib/required-endpoints.mjs，与校验脚本共用
+     同一份 —— 采集按 A 判、校验按 B 判，等于没有判据。
+
+     这里只记录、不改退出码：渠道树在当前页面结构下不会触发（已知缺口，见
+     docs/ops/PIPELINE-2026-10-21.md），把它算成偏薄会让日增每天都红，告警就废了。
+     记录进 manifest 后，verify-daily.mjs 能把它作为「缺口」单独报出来。 */
+  const missingRequired = (name, saved) => missingEndpoints(name, saved);
+
   const results = [];
   for (const [name, rawPath, third] of list){
     /* 第三位可能是 dateType 覆盖（字符串），也可能是「已知空页」标记（布尔） */
@@ -321,7 +330,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const dt = dtOverride || process.env.DATE_TYPE || 'day';
     const url = BASE + rawPath + `?dateType=${dt}&dateRange=${encodeURIComponent(target + '|' + target)}`;
 
-    let attempt = 0, saved = [], bodyHead = '', thin = true;
+    let attempt = 0, saved = [], bodyHead = '', thin = true, missing = [];
     while (attempt <= RETRY){
       attempt++;
       const wait = attempt === 1 ? WAIT : RETRY_WAIT;
@@ -371,10 +380,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       saved = ctx.saved.slice();
       const bytes = saved.reduce((t, x) => t + x.bytes, 0);
       thin = isThin(saved);
+      const missingNow = expectEmpty ? [] : missingRequired(name, saved);
+      missing = missingNow;
       const tag = thin ? (expectEmpty ? '   ← 空（已知）' : '   ← 偏薄') : '';
+      const missingStr = missing.length ? `   ← 缺接口 ${missing.join('、')}` : '';
       const emptyStr = ctx.emptyBody ? `  空体 ${ctx.emptyBody}` : '';
       const modeStr = freshTab ? ' 新标签' : '';
-      console.log(`  ${name.padEnd(17)} 第${attempt}次${modeStr} ${String(saved.length).padStart(2)} 个接口 ${String(bytes).padStart(7)} 字节${emptyStr}${tag}`);
+      console.log(`  ${name.padEnd(17)} 第${attempt}次${modeStr} ${String(saved.length).padStart(2)} 个接口 ${String(bytes).padStart(7)} 字节${emptyStr}${tag}${missingStr}`);
 
       if (tmpTab){
         conn.close();
@@ -388,7 +400,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       await sleep(3000);
     }
 
-    results.push({ name, url, attempts: attempt, thin, expectEmpty, saved, bodyHead });
+    results.push({ name, url, attempts: attempt, thin, expectEmpty, missing, saved, bodyHead });
   }
 
   try { await req('GET', '/json/close/' + ctrlTab.id); } catch {}
@@ -424,6 +436,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const thinPages = results.filter(r => r.thin && !r.expectEmpty).map(r => r.name);
   const emptyPages = results.filter(r => r.thin && r.expectEmpty).map(r => r.name);
   if (emptyPages.length) console.log(`已知空页 ${emptyPages.length} 个（基线同样为空，不算失败）：${emptyPages.join('、')}`);
+  /* 接口缺失与偏薄分开报：偏薄是「这一页整体没加载出来」，缺接口是「页面在、但关键
+     那一个请求没发」。后者体量足够，重试也不会变，重采一遍同样没有 —— 两者混在一起
+     报，看到的人会去重试一个不会变的东西。 */
+  const gapPages = results.filter(r => Array.isArray(r.missing) && r.missing.length > 0);
+  if (gapPages.length){
+    console.log(`接口缺失 ${gapPages.length} 个页面（体量够，但关键接口没触发）：`);
+    for (const r of gapPages) console.log(`    · ${r.name.padEnd(17)} 缺 ${r.missing.join('、')}`);
+  }
   if (thinPages.length){
     console.log(`重试后仍偏薄的页面 ${thinPages.length} 个：${thinPages.join('、')}`);
     console.log(`（用 scripts/check_daily.mjs 复核，必要时 scripts/probe-page.mjs 单页探针）`);

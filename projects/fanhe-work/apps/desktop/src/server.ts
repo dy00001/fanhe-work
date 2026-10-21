@@ -60,6 +60,15 @@ const MIME_TYPES: Record<string, string> = {
   '.ttf': 'font/ttf',
 }
 
+/**
+ * 反代读请求的上游超时。
+ *
+ * 20 秒的依据：前端对运营看板设了 15 秒（`OPS_READ_TIMEOUT_MS`），壳这边要比它宽，
+ * 让前端的超时先触发 —— 用户看到的是「请求超时」，而不是一个来自网关的 504。
+ * 壳这边的超时是兜底，防的是前端已经放弃、请求却还挂在 Node 里。
+ */
+const UPSTREAM_READ_TIMEOUT_MS = 20_000
+
 /** 逐跳首部，按 HTTP 语义不该被代理转发。 */
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -107,6 +116,14 @@ export type StaticServerOptions = {
    * 设置丢了。改这里之前先读 `shell-origin.ts`。
    */
   preferredPorts?: readonly number[]
+  /**
+   * 反代读请求（GET / HEAD）的上游超时，毫秒。默认 `UPSTREAM_READ_TIMEOUT_MS`。
+   *
+   * 之所以做成可传：默认值是 20 秒，而超时这件事只有真的等过一次才算验过。
+   * 测试里传 100 毫秒，才能在一个用例的时长内确认「卡住的上游会得到 504」。
+   * 不做成环境变量：它是行为参数，不是部署参数，暴露给运维只会多一个配错的地方。
+   */
+  upstreamReadTimeoutMs?: number
 }
 
 export type StaticServerHandle = {
@@ -135,10 +152,11 @@ export type StaticServerHandle = {
 export async function startStaticServer(options: StaticServerOptions): Promise<StaticServerHandle> {
   const root = resolve(options.root)
   const apiBaseUrl = options.apiBaseUrl.replace(/\/+$/, '')
+  const readTimeoutMs = options.upstreamReadTimeoutMs ?? UPSTREAM_READ_TIMEOUT_MS
 
   const server = createServer((request, response) => {
     // 单个请求出错不应拖垮整个服务，因此这里接住 Promise 的拒绝。
-    void handleRequest(request, response, root, apiBaseUrl)
+    void handleRequest(request, response, root, apiBaseUrl, readTimeoutMs)
   })
 
   const candidates = [...(options.preferredPorts ?? [])]
@@ -235,11 +253,12 @@ async function handleRequest(
   response: ServerResponse,
   root: string,
   apiBaseUrl: string,
+  readTimeoutMs: number,
 ): Promise<void> {
   try {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      await proxyToService(request, response, url, apiBaseUrl)
+      await proxyToService(request, response, url, apiBaseUrl, readTimeoutMs)
       return
     }
     await serveStatic(request, response, root, url.pathname)
@@ -339,6 +358,7 @@ async function proxyToService(
   response: ServerResponse,
   url: URL,
   apiBaseUrl: string,
+  readTimeoutMs: number,
 ): Promise<void> {
   const method = request.method ?? 'GET'
   const target = `${apiBaseUrl}${url.pathname}${url.search}`
@@ -357,17 +377,55 @@ async function proxyToService(
   const init: RequestInit = { method, headers }
   if (body !== undefined) init.body = body
 
-  const upstream = await fetch(target, init)
+  /*
+   * 读请求的上游超时。
+   *
+   * 为什么只给 GET / HEAD：备份、恢复、导出这类写请求的正常耗时可以到分钟级，
+   * 给它们设一个「看起来合理」的上限会在正常使用时误杀，而且失败发生在写了
+   * 一半的时候 —— 那比不设超时更难收拾。
+   *
+   * 为什么读请求必须有：没有超时时，上游卡住（进程活着但不回包，例如数据库连接
+   * 池被占满）会让这个反代永远等下去，浏览器那边就是一个永不结束的请求。前端
+   * 15 秒会自己放弃，但那个请求仍然挂在壳里，攒多了会把 Node 的连接占满。
+   * 20 秒比前端的 15 秒宽：让前端的超时先触发，用户看到的是「请求超时」而不是
+   * 网关错误，同时壳这边也有了兜底。
+   */
+  const isRead = method === 'GET' || method === 'HEAD'
+  const controller = isRead ? new AbortController() : null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  if (controller !== null) {
+    timer = setTimeout(() => {
+      controller.abort()
+    }, readTimeoutMs)
+    init.signal = controller.signal
+  }
 
-  const responseHeaders = new Headers()
-  upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP_HEADERS.has(key) || STRIPPED_RESPONSE_HEADERS.has(key)) return
-    responseHeaders.set(key, value)
-  })
+  try {
+    const upstream = await fetch(target, init)
 
-  const payload = Buffer.from(await upstream.arrayBuffer())
-  response.writeHead(upstream.status, Object.fromEntries(responseHeaders.entries()))
-  response.end(payload)
+    const responseHeaders = new Headers()
+    upstream.headers.forEach((value, key) => {
+      if (HOP_BY_HOP_HEADERS.has(key) || STRIPPED_RESPONSE_HEADERS.has(key)) return
+      responseHeaders.set(key, value)
+    })
+
+    // 读响应体也在超时窗口内：只给 fetch 计时会漏掉「响应头回来了、体一直不来」
+    // 这种半通状态，而那正是上游被拖垮时最常见的形态。
+    const payload = Buffer.from(await upstream.arrayBuffer())
+    response.writeHead(upstream.status, Object.fromEntries(responseHeaders.entries()))
+    response.end(payload)
+  } catch (error) {
+    if (controller !== null && controller.signal.aborted) {
+      if (!response.headersSent) {
+        response.writeHead(504, { 'content-type': 'text/plain; charset=utf-8' })
+      }
+      response.end('上游服务没有在 20 秒内响应')
+      return
+    }
+    throw error
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
 }
 
 function readBody(request: IncomingMessage): Promise<Buffer> {

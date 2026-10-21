@@ -55,6 +55,7 @@ import {
 } from '../lib/ops-pending'
 import { OPS_SCREEN_SERIES, type OpsScreenSeriesKey } from '../lib/ops-series'
 import { presetQuery, resolvePreset, viewFromNav, type OpsPreset } from '../lib/ops-view'
+import { useNow } from '../lib/use-now'
 import { useOpsDashboard, useOpsHealth, useOpsShopBoards } from '../lib/use-ops-dashboard'
 
 /**
@@ -137,7 +138,9 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
     enabled: healthOpen && data !== null && canReadHealth,
   })
 
-  const now = new Date()
+  /* 每分钟推进一次。写 `new Date()` 的话，「现在」会冻在渲染那一刻 —— 页面不重渲染
+     就永远显示「数据新鲜」，哪怕它已经是两天前的数据。 */
+  const now = useNow()
   const freshness = freshnessOf(selectedShop?.lastCollectedAt ?? null, now)
 
   /** 写地址栏。空值删除参数，避免 `?p=&shop=` 这类噪声进入分享链接。 */

@@ -4,6 +4,7 @@ import {
   isValidOpsRange,
   opsRangeDays,
   type OpsCollectSource,
+  type OpsCollectStatus,
   type OpsDimensionType,
   type OpsIngestRequest,
   type OpsIngestResponse,
@@ -174,156 +175,229 @@ export async function ingestOpsSnapshot(payload: OpsIngestRequest): Promise<Inge
   const source: OpsCollectSource = payload.source
   const startedAt = Date.now()
 
-  const result = await prisma.$transaction(async (tx) => {
-    const shop = await tx.ecomShop.upsert({
-      where: { code: shopCode },
-      create: {
-        code: shopCode,
-        name: shopName,
-        platform: payload.shop.platform,
-        sellerNick: payload.shop.sellerNick,
-      },
-      update: {
-        name: shopName,
-        platform: payload.shop.platform,
-        sellerNick: payload.shop.sellerNick,
-      },
-      select: { id: true },
-    })
+  /*
+   * 店铺身份与运行记录都在事务**外**落地。
+   *
+   * 原来这两步在事务里，事务一抛异常就整批回滚 —— 包括那条 `running` 的运行记录。
+   * 结果是「采集中断」在库里完全不可见：没有记录、没有错误、没有时间点，运维只能
+   * 看到「今天没有新数据」，而这条现象和「今天没采」长得一模一样。运行记录本身是
+   * 审计事实，不该随业务数据一起被回滚。
+   *
+   * 代价是失败的批次也会留下店铺行。这是对的：店铺身份不是业务数据，一次失败的
+   * 采集确实发生在这家店上。
+   */
+  const shop = await prisma.ecomShop.upsert({
+    where: { code: shopCode },
+    create: {
+      code: shopCode,
+      name: shopName,
+      platform: payload.shop.platform,
+      sellerNick: payload.shop.sellerNick,
+    },
+    update: {
+      name: shopName,
+      platform: payload.shop.platform,
+      sellerNick: payload.shop.sellerNick,
+    },
+    select: { id: true },
+  })
 
-    const run = await tx.ecomCollectRun.create({
-      data: {
-        shopId: shop.id,
-        statFrom,
-        statTo,
-        trigger: payload.trigger.slice(0, OPS_LIMITS.TRIGGER_MAX),
-        source,
-        status: 'running',
-        rawPath:
-          payload.rawPath === null ? null : payload.rawPath.slice(0, OPS_LIMITS.RAW_PATH_MAX),
-      },
-      select: { id: true },
-    })
+  const run = await prisma.ecomCollectRun.create({
+    data: {
+      shopId: shop.id,
+      statFrom,
+      statTo,
+      trigger: payload.trigger.slice(0, OPS_LIMITS.TRIGGER_MAX),
+      source,
+      status: 'running',
+      rawPath: payload.rawPath === null ? null : payload.rawPath.slice(0, OPS_LIMITS.RAW_PATH_MAX),
+    },
+    select: { id: true },
+  })
 
-    const existing = await tx.ecomDailyMetric.findMany({
-      where: { shopId: shop.id, statDate: { in: dailyRows.map((row) => row.statDate) } },
-      select: {
-        statDate: true,
-        payAmountFen: true,
-        visitors: true,
-        payBuyers: true,
-        itemVisitors: true,
-      },
-    })
-    const existingByDate = new Map(
-      existing.map((row) => [
-        fromDbDate(row.statDate) ?? '',
-        {
-          payAmountFen: row.payAmountFen,
-          visitors: row.visitors,
-          payBuyers: row.payBuyers,
-          itemVisitors: row.itemVisitors,
+  const result = await prisma
+    .$transaction(async (tx) => {
+      const existing = await tx.ecomDailyMetric.findMany({
+        where: { shopId: shop.id, statDate: { in: dailyRows.map((row) => row.statDate) } },
+        select: {
+          statDate: true,
+          payAmountFen: true,
+          visitors: true,
+          payBuyers: true,
+          itemVisitors: true,
         },
-      ]),
-    )
-
-    let revisedDays = 0
-    for (const row of dailyRows) {
-      const next = {
-        payAmountFen: row.values.payAmountFen,
-        visitors: row.values.visitors,
-        payBuyers: row.values.payBuyers,
-        itemVisitors: row.values.itemVisitors,
-      }
-      const prev = existingByDate.get(row.date)
-      const revised = prev !== undefined && isRevised(next, prev)
-      if (revised) revisedDays += 1
-
-      await tx.ecomDailyMetric.upsert({
-        where: { shopId_statDate: { shopId: shop.id, statDate: row.statDate } },
-        create: { shopId: shop.id, statDate: row.statDate, ...next, source },
-        update: { ...next, source, revised, collectedAt: new Date() },
       })
-    }
+      const existingByDate = new Map(
+        existing.map((row) => [
+          fromDbDate(row.statDate) ?? '',
+          {
+            payAmountFen: row.payAmountFen,
+            visitors: row.visitors,
+            payBuyers: row.payBuyers,
+            itemVisitors: row.itemVisitors,
+          },
+        ]),
+      )
 
-    for (const row of dimensionRows) {
-      await tx.ecomDimensionSnapshot.upsert({
-        where: {
-          shopId_dimType_statFrom_statTo_dimKey: {
+      let revisedDays = 0
+      for (const row of dailyRows) {
+        const next = {
+          payAmountFen: row.values.payAmountFen,
+          visitors: row.values.visitors,
+          payBuyers: row.values.payBuyers,
+          itemVisitors: row.values.itemVisitors,
+        }
+        const prev = existingByDate.get(row.date)
+        const revised = prev !== undefined && isRevised(next, prev)
+        if (revised) revisedDays += 1
+
+        await tx.ecomDailyMetric.upsert({
+          where: { shopId_statDate: { shopId: shop.id, statDate: row.statDate } },
+          create: { shopId: shop.id, statDate: row.statDate, ...next, source },
+          update: { ...next, source, revised, collectedAt: new Date() },
+        })
+      }
+
+      for (const row of dimensionRows) {
+        await tx.ecomDimensionSnapshot.upsert({
+          where: {
+            shopId_dimType_statFrom_statTo_dimKey: {
+              shopId: shop.id,
+              dimType: row.type,
+              statFrom,
+              statTo,
+              dimKey: row.key,
+            },
+          },
+          create: {
             shopId: shop.id,
             dimType: row.type,
             statFrom,
             statTo,
             dimKey: row.key,
+            dimLabel: row.label,
+            metrics: row.metrics,
           },
-        },
-        create: {
-          shopId: shop.id,
-          dimType: row.type,
-          statFrom,
-          statTo,
-          dimKey: row.key,
-          dimLabel: row.label,
-          metrics: row.metrics,
-        },
-        update: { dimLabel: row.label, metrics: row.metrics, collectedAt: new Date() },
-      })
-    }
+          update: { dimLabel: row.label, metrics: row.metrics, collectedAt: new Date() },
+        })
+      }
 
-    /*
-     * 清掉同一窗口里本次没上报的旧行。
-     *
-     * 为什么必须清：商品下架、渠道改名后，旧行会永远留在库里，而看板是「按窗口取
-     * 这一批行」，多出来的行不会报错，只会让排行里出现早已不存在的对象。只清本窗口
-     * 的行，历史窗口一行不动 —— 历史是既成事实，不该被今天的采集改写。
-     */
-    const keep = new Map<OpsDimensionType, string[]>()
-    for (const row of dimensionRows) {
-      const list = keep.get(row.type) ?? []
-      list.push(row.key)
-      keep.set(row.type, list)
-    }
-    for (const type of OPS_DIMENSION_TYPES) {
-      const keys = keep.get(type) ?? []
-      await tx.ecomDimensionSnapshot.deleteMany({
-        where: {
-          shopId: shop.id,
-          dimType: type,
-          statFrom,
-          statTo,
-          dimKey: { notIn: keys.length === 0 ? [''] : keys },
+      /*
+       * 清掉同一窗口里本次没上报的旧行。
+       *
+       * 为什么必须清：商品下架、渠道改名后，旧行会永远留在库里，而看板是「按窗口取
+       * 这一批行」，多出来的行不会报错，只会让排行里出现早已不存在的对象。只清本窗口
+       * 的行，历史窗口一行不动 —— 历史是既成事实，不该被今天的采集改写。
+       */
+      const keep = new Map<OpsDimensionType, string[]>()
+      for (const row of dimensionRows) {
+        const list = keep.get(row.type) ?? []
+        list.push(row.key)
+        keep.set(row.type, list)
+      }
+      for (const type of OPS_DIMENSION_TYPES) {
+        const keys = keep.get(type)
+        /*
+         * 本次一条都没上报的类型，一行都不清。
+         *
+         * 这里原来写的是 `notIn: keys.length === 0 ? [''] : keys` —— 读起来像「没有
+         * 要保留的，就把旧行全清掉」，实际是把「这个类型今天没采到」当成了「这个
+         * 类型今天空了」。上午采到渠道 5 行、下午重采时渠道页偏薄只回了商品榜，就会
+         * 把上午的渠道金额删掉，而这次运行仍记 succeeded，事后没有任何痕迹可查。
+         */
+        if (keys === undefined || keys.length === 0) continue
+        await tx.ecomDimensionSnapshot.deleteMany({
+          where: {
+            shopId: shop.id,
+            dimType: type,
+            statFrom,
+            statTo,
+            dimKey: { notIn: keys },
+          },
+        })
+      }
+
+      /*
+       * 三态，不是二值。
+       *
+       * `OPS_COLLECT_STATUSES` 里本来就有 `partial`，展示层也照着它写了文案（「部分
+       * 成功」），但这里只产出 failed / succeeded —— 于是「逐日拿到了、维度全没拿到」
+       * 这种最常见的半截采集被记成成功：看板上商品榜一片「—」，运行记录却是绿的，
+       * 而人只会去看运行记录。
+       *
+       * 判据取「逐日与维度有一方为空」。不按维度类型逐个要求，是因为 keyword 与
+       * content 在当前授权下本来就采不到（17 页里 4 页结构为空），按类型要求会让
+       * 每一天都变成 partial，等于把这个状态用废 —— 一个天天出现的告警等于没有告警。
+       */
+      const dailyMissing = dailyRows.length === 0
+      const dimensionsMissing = dimensionRows.length === 0
+      const status: OpsCollectStatus =
+        dailyMissing && dimensionsMissing
+          ? 'failed'
+          : dailyMissing || dimensionsMissing
+            ? 'partial'
+            : 'succeeded'
+
+      await tx.ecomCollectRun.update({
+        where: { id: run.id },
+        data: {
+          status,
+          dailyRows: dailyRows.length,
+          dimensionRows: dimensionRows.length,
+          finishedAt: new Date(),
+          durationMs: Date.now() - startedAt,
+          errorMessage:
+            status === 'failed'
+              ? '上报内容为空'
+              : status === 'partial'
+                ? dailyMissing
+                  ? '只有维度数据，逐日数据为空'
+                  : '只有逐日数据，维度数据为空'
+                : null,
         },
       })
-    }
 
-    const status = dailyRows.length === 0 && dimensionRows.length === 0 ? 'failed' : 'succeeded'
-    await tx.ecomCollectRun.update({
-      where: { id: run.id },
-      data: {
-        status,
-        dailyRows: dailyRows.length,
-        dimensionRows: dimensionRows.length,
-        finishedAt: new Date(),
-        durationMs: Date.now() - startedAt,
-        errorMessage: status === 'failed' ? '上报内容为空' : null,
-      },
+      /*
+       * partial 也要更新 lastCollectedAt：这次确实采到了东西，界面据此显示「数据截止
+       * 到某时」是对的。把它排除在外会让一次半截采集把整个店铺推回「待接入」。
+       */
+      if (status !== 'failed') {
+        await tx.ecomShop.update({
+          where: { id: shop.id },
+          data: { lastCollectedAt: new Date() },
+        })
+      }
+
+      return {
+        shopId: shop.id,
+        runId: run.id,
+        dailyWritten: dailyRows.length,
+        dimensionsWritten: dimensionRows.length,
+        revisedDays,
+      }
     })
-
-    if (status === 'succeeded') {
-      await tx.ecomShop.update({
-        where: { id: shop.id },
-        data: { lastCollectedAt: new Date() },
-      })
-    }
-
-    return {
-      shopId: shop.id,
-      runId: run.id,
-      dailyWritten: dailyRows.length,
-      dimensionsWritten: dimensionRows.length,
-      revisedDays,
-    }
-  })
+    .catch(async (error: unknown) => {
+      /*
+       * 事务已经回滚，运行记录还在（它在事务外）。补写成 failed，把原因留下。
+       *
+       * 补写失败时不再抛：原始错误信息量更大，不能被一条写库失败盖掉。这类「补写
+       * 也失败了」的情况会表现为运行记录停在 running —— 界面把它显示成「采集中」
+       * 并配告警色，不会无声无息，但它没有过期判定，会一直挂在那里。这是已知缺口，
+       * 不是这一层能解决的（判「多久算超时」要跟着采集耗时分布走）。
+       */
+      await prisma.ecomCollectRun
+        .update({
+          where: { id: run.id },
+          data: {
+            status: 'failed',
+            finishedAt: new Date(),
+            durationMs: Date.now() - startedAt,
+            errorMessage: `写入中断：${error instanceof Error ? error.message : String(error)}`,
+          },
+        })
+        .catch(() => undefined)
+      throw error
+    })
 
   return {
     ok: true,

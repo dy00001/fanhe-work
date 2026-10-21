@@ -15,7 +15,7 @@ import {
   type OpsIngestRequest,
   type OpsIngestResponse,
 } from '@fanhe/shared'
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
 import { requirePermission } from '../auth/guard.js'
 import { env } from '../config/env.js'
@@ -45,6 +45,44 @@ import {
  */
 
 const UNAUTHORIZED_BODY = { error: 'unauthorized', message: '请先登录' } as const
+
+/**
+ * 带 ETag 的 JSON 响应。
+ *
+ * 为什么值得做：这三个接口的数据一天变一次，而界面在切标签页、切区间、点重试时会
+ * 反复取同一份内容。没有 ETag 时每次都是完整响应体；有了之后内容没变就是 304、
+ * 零字节。这不是为了省流量，是为了让「切回来就静默重取」这个动作变得没有代价 ——
+ * 否则每次切标签页都要拉一遍几十 KB 的榜单，弱网下还会把界面拖成加载态。
+ *
+ * `max-age=0, must-revalidate` 是刻意选的，不是 `max-age=60`：后者在 60 秒内直接
+ * 吃本地缓存，会让「刚采完数据、刷新页面」看到旧数。每次回源验证、内容没变就 304，
+ * 既保住即时性，又省掉重复传输。
+ *
+ * `private` 必须有：响应里是带登录态、且经过权限裁剪的金额，任何中间缓存都不该留存。
+ *
+ * ETag 用弱校验（`W/`）：同一个对象序列化出来的字节可能因为键序不同而不同，但语义
+ * 一致，这里要的正是语义比较。
+ */
+function sendJsonWithEtag<T>(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  payload: T,
+): FastifyReply {
+  const body = JSON.stringify(payload)
+  const etag = `W/"${createHash('sha1').update(body).digest('base64url')}"`
+  reply.header('etag', etag)
+  reply.header('cache-control', 'private, max-age=0, must-revalidate')
+
+  const header = request.headers['if-none-match']
+  if (typeof header === 'string') {
+    const candidates = header.split(',').map((value) => value.trim())
+    if (candidates.includes(etag) || candidates.includes('*')) {
+      // 304 不带响应体。浏览器会沿用本地那份，界面的数据与请求前完全一致。
+      return reply.code(304).send()
+    }
+  }
+  return reply.code(200).type('application/json; charset=utf-8').send(body)
+}
 
 /** 日期参数的形状校验。合法性（2 月 31 日这类）交给 `parseOpsDate`。 */
 const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$'
@@ -276,7 +314,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
         return reply.code(404).send({ error: 'shop_not_found', message: '还没有配置任何店铺' })
       }
       const body: OpsDashboardResponse = dashboard
-      return reply.code(200).send(body)
+      return sendJsonWithEtag(request, reply, body)
     },
   )
 
@@ -293,7 +331,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
         return reply.code(404).send({ error: 'shop_not_found', message: '还没有配置任何店铺' })
       }
       const body: OpsHealthResponse = health
-      return reply.code(200).send(body)
+      return sendJsonWithEtag(request, reply, body)
     },
   )
 
@@ -319,7 +357,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
         range: range.value,
         viewer: { permissions: request.authContext.permissions },
       })
-      return reply.code(200).send(board)
+      return sendJsonWithEtag(request, reply, board)
     },
   )
 

@@ -108,6 +108,16 @@ type RequestOptions = {
    * 「看起来合理」的值会让它们在正常使用时被误杀。
    */
   signal?: AbortSignal
+  /**
+   * 单次请求的超时（毫秒）。只给「知道正常耗时上限」的接口用。
+   *
+   * 不给全局设默认值，理由与上面 signal 那段相同：备份、启动配置这些接口的正常
+   * 耗时远长于查版本，一个「看起来合理」的默认值会让它们在正常使用时被误杀。
+   * 运营看板三个读接口的耗时是已知的（单店、单区间、纯读库），所以它们单独设。
+   *
+   * 与 `signal` 互斥：两者都表达「什么时候放弃等待」，同时给会互相覆盖。
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -160,16 +170,48 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
     init.signal = options.signal
   }
 
+  /*
+   * 超时用 AbortController 实现，而不是 Promise.race。
+   *
+   * race 只让「等待」提前结束，请求本身还在跑，响应回来之后仍然会占着连接；
+   * abort 会真的把请求掐掉。差别在弱网下很明显：race 攒下一堆悬挂请求，abort 不会。
+   */
+  const limitMs = options.timeoutMs
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let controller: AbortController | null = null
+  if (limitMs !== undefined && options.signal === undefined) {
+    controller = new AbortController()
+    init.signal = controller.signal
+    timer = setTimeout(() => {
+      controller?.abort()
+    }, limitMs)
+  }
+
   let response: Response
+  let body: string
   try {
     response = await fetch(`${API_BASE_URL}${path}`, init)
+    // 读响应体也在超时窗口内：只给 fetch 计时会在「响应头回来了、响应体一直不来」
+    // 这种半通状态下漏掉 —— 而桌面壳反代最常见的失败正是这一种。
+    body = await response.text()
   } catch {
+    // 超时与网络失败在 fetch 眼里都是 AbortError，靠自己的 signal 状态区分。
+    if (controller !== null && controller.signal.aborted) {
+      throw new ApiError(
+        0,
+        'timeout',
+        `服务器超过 ${Math.round((limitMs ?? 0) / 1000)} 秒没有响应`,
+        null,
+      )
+    }
     // fetch 只在网络层面失败时抛异常。这里统一成 status 0，与「拿到了响应但
     // 状态码是错误」区分开：前者重试有意义，后者重试只是重复同样的拒绝。
     throw new ApiError(0, 'network_error', '无法连接服务器，请确认后端已启动', null)
+  } finally {
+    if (timer !== null) clearTimeout(timer)
   }
 
-  const payload = parseJson(await response.text())
+  const payload = parseJson(body)
 
   if (!response.ok) {
     const { code, message } = readErrorPayload(payload)
@@ -711,6 +753,16 @@ export function roleListRequest(accessToken: string): Promise<RoleListResponse> 
 }
 
 /**
+ * 运营看板三个读接口的超时。
+ *
+ * 15 秒的取值依据：本机实测这三个接口在 30 天区间上都是几十毫秒，跨一层桌面壳反代
+ * 也在百毫秒级。给到 15 秒是留给「机器刚开机、数据库冷启动、磁盘在扫描」这类情况，
+ * 而不是留给正常路径。原来的实现没有超时，网络半通时界面会永久停在加载态，用户
+ * 看到的只有转圈，没有任何可操作的信息。
+ */
+const OPS_READ_TIMEOUT_MS = 15_000
+
+/**
  * 运营看板。查询参数只有三项：区间两端与店铺代号。
  *
  * 与 `notesRequest` 同一条约定：**只在有值时发送**。服务端 schema 是
@@ -732,6 +784,7 @@ export function opsDashboardRequest(
     {
       method: 'GET',
       accessToken,
+      timeoutMs: OPS_READ_TIMEOUT_MS,
     },
   )
 }
@@ -750,6 +803,7 @@ export function opsHealthRequest(
     {
       method: 'GET',
       accessToken,
+      timeoutMs: OPS_READ_TIMEOUT_MS,
     },
   )
 }
@@ -766,6 +820,6 @@ export function opsShopBoardsRequest(
   const queryString = search.toString()
   return request<OpsShopBoardsResponse>(
     `/api/ops/overview-shops${queryString === '' ? '' : `?${queryString}`}`,
-    { method: 'GET', accessToken },
+    { method: 'GET', accessToken, timeoutMs: OPS_READ_TIMEOUT_MS },
   )
 }

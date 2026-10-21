@@ -45,11 +45,38 @@ export function useOpsDashboard(input: {
   enabled: boolean
 }): { state: OpsLoadState; reload: () => void } {
   const [ticket, setTicket] = useState(0)
+  /*
+   * 静默重取的计数器。它**不进指纹** —— 指纹一变界面就回到加载态，而静默重取的
+   * 全部意义就是「不打断已经显示出来的内容」。取到新数据后指纹不变，界面原地替换
+   * 数值；取不到就保留旧数据，靠新鲜度标签表达「这份数据是几点的」。
+   */
+  const [refreshToken, setRefreshToken] = useState(0)
   const [entry, setEntry] = useState<DashboardEntry | null>(null)
 
   const key = dashboardKey(input, ticket)
   const state: OpsLoadState =
     entry !== null && entry.key === key ? entry.state : { status: 'loading' }
+
+  /*
+   * 切回这个标签页时静默重取一次。
+   *
+   * 运维数据一天变一次，但它「什么时候变的」没人能预知 —— 计划任务可能在凌晨跑，
+   * 也可能因为登录态失效被推迟到上午。原来页面只在挂载与参数变化时取一次，挂着
+   * 一整个上午的窗口会一直显示昨天的数，而界面没有任何提示说它是旧的。
+   *
+   * 只在 `visible` 时触发：后台标签页重取没有意义，还会在用户切回来的一瞬间
+   * 抢带宽。不上 SSE / WebSocket —— 一天一次的数据不值得三套长连接逻辑。
+   */
+  useEffect(() => {
+    if (!input.enabled) return
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') setRefreshToken((value) => value + 1)
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [input.enabled])
 
   useEffect(() => {
     if (!input.enabled) return
@@ -68,19 +95,28 @@ export function useOpsDashboard(input: {
       })
       .catch((error: unknown) => {
         if (!active) return
-        setEntry({
-          key,
-          state: {
-            status: 'error',
-            error: error instanceof ApiError ? error : new ApiError(0, 'unknown', '加载失败', null),
-          },
+        setEntry((prev) => {
+          /*
+           * 静默重取失败时保留已有数据。用户看到的是「上一次成功的数据 + 采集时间」，
+           * 这比整页翻成错误态更接近事实：数据还在，只是这次没取到。真正的失败
+           * （首次加载、换区间）仍然走错误态 —— 那时 prev 的指纹对不上。
+           */
+          if (prev !== null && prev.key === key && prev.state.status === 'ready') return prev
+          return {
+            key,
+            state: {
+              status: 'error',
+              error:
+                error instanceof ApiError ? error : new ApiError(0, 'unknown', '加载失败', null),
+            },
+          }
         })
       })
 
     return () => {
       active = false
     }
-  }, [input.days, input.from, input.to, input.shop, input.enabled, key])
+  }, [input.days, input.from, input.to, input.shop, input.enabled, key, refreshToken])
 
   return {
     state,
@@ -110,6 +146,9 @@ export function useOpsHealth(input: { shop: string | null; enabled: boolean }): 
   reload: () => void
 } {
   const [ticket, setTicket] = useState(0)
+  /* 静默重取的计数器，不进指纹。理由同 `useOpsDashboard`：切回来时要换数，但不要
+     把面板打回「加载中」。健康面板尤其需要这个 —— 它显示的就是「最近一次采集」。 */
+  const [refreshToken, setRefreshToken] = useState(0)
   const [entry, setEntry] = useState<HealthEntry | null>(null)
 
   const key = [input.shop ?? '', ticket].join('|')
@@ -121,6 +160,17 @@ export function useOpsHealth(input: { shop: string | null; enabled: boolean }): 
 
   useEffect(() => {
     if (!input.enabled) return
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') setRefreshToken((value) => value + 1)
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [input.enabled])
+
+  useEffect(() => {
+    if (!input.enabled) return
     let active = true
 
     loadOpsHealth({ shop: input.shop, limit: 20 })
@@ -128,13 +178,16 @@ export function useOpsHealth(input: { shop: string | null; enabled: boolean }): 
         if (active) setEntry({ key, data })
       })
       .catch(() => {
-        if (active) setEntry({ key, data: null })
+        /* 静默重取失败时保留上一次的批次列表：它虽然旧，但仍然是真实发生过的记录，
+           换成 null 会让面板显示「无记录」，那是在说一件没发生的事。 */
+        if (active)
+          setEntry((prev) => (prev !== null && prev.key === key ? prev : { key, data: null }))
       })
 
     return () => {
       active = false
     }
-  }, [input.shop, input.enabled, key])
+  }, [input.shop, input.enabled, key, refreshToken])
 
   return {
     state,

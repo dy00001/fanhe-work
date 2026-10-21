@@ -244,3 +244,91 @@ test('与「端口被占」无关的错误直接抛出，不顺延', async () =>
     (error) => error instanceof RangeError || error.code === 'ERR_SOCKET_BAD_PORT',
   )
 })
+
+/**
+ * 读请求的上游超时。
+ *
+ * 这一条只有真等过一次才算验过：默认值是 20 秒，测试里传 100 毫秒才跑得动。
+ * 卡住的上游用一个「接了连接但永不回包」的服务器模拟 —— 那正是数据库连接池被
+ * 占满时的形态：进程活着、端口在听、请求就是没有响应。
+ *
+ * 没有超时时，这个反代会让请求永远挂着，浏览器那边就是一个永不结束的加载态，
+ * 而壳里攒下的连接也不会释放。
+ */
+test('上游不回包时，GET 在读超时后返回 504', async () => {
+  const hanging = createServer(() => {
+    /* 刻意什么都不做：不写头、不结束响应。 */
+  })
+  const hangingPort = await new Promise((resolvePort) => {
+    hanging.listen(0, '127.0.0.1', () => {
+      const address = hanging.address()
+      resolvePort(typeof address === 'object' && address ? address.port : 0)
+    })
+  })
+
+  const handle = await startStaticServer({
+    root: productRoot,
+    apiBaseUrl: `http://127.0.0.1:${hangingPort}`,
+    upstreamReadTimeoutMs: 100,
+  })
+
+  try {
+    const started = Date.now()
+    const response = await fetch(`http://127.0.0.1:${handle.port}/api/ops/dashboard`)
+    assert.equal(response.status, 504, '上游卡住必须变成 504，不能永远等下去')
+    assert.match(await response.text(), /没有在/)
+    assert.ok(Date.now() - started < 5000, '超时应当按配置生效，而不是等默认的 20 秒')
+  } finally {
+    await handle.close()
+    hanging.closeAllConnections()
+    await new Promise((resolveClosed) => hanging.close(resolveClosed))
+  }
+})
+
+/**
+ * 写请求不受读超时约束。
+ *
+ * 备份、恢复、导出这些接口的正常耗时可以到分钟级。给它们套一个「看起来合理」的
+ * 上限，会在正常使用时把请求掐断，而且断在写了一半的时候 —— 那比慢更难收拾。
+ *
+ * 断言方式：上游延迟 200 毫秒回包，读超时设 50 毫秒。GET 会被掐断，POST 必须
+ * 完整拿到 200。两条放一起才说明「按方法区分」这件事真的做到了。
+ */
+test('写请求不套用读超时，慢上游也能完整回包', async () => {
+  const slow = createServer((request, response) => {
+    request.resume()
+    request.on('end', () => {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ ok: true, method: request.method }))
+      }, 200)
+    })
+  })
+  const slowPort = await new Promise((resolvePort) => {
+    slow.listen(0, '127.0.0.1', () => {
+      const address = slow.address()
+      resolvePort(typeof address === 'object' && address ? address.port : 0)
+    })
+  })
+
+  const handle = await startStaticServer({
+    root: productRoot,
+    apiBaseUrl: `http://127.0.0.1:${slowPort}`,
+    upstreamReadTimeoutMs: 50,
+  })
+
+  try {
+    const base = `http://127.0.0.1:${handle.port}`
+
+    const read = await fetch(`${base}/api/ops/dashboard`)
+    assert.equal(read.status, 504, '读请求应当被 50 毫秒的超时掐断')
+
+    const write = await fetch(`${base}/api/backup`, { method: 'POST', body: '{}' })
+    assert.equal(write.status, 200, '写请求不能被读超时掐断，否则备份会在中途失败')
+    assert.deepEqual(await write.json(), { ok: true, method: 'POST' })
+  } finally {
+    await handle.close()
+    slow.closeAllConnections()
+    await new Promise((resolveClosed) => slow.close(resolveClosed))
+  }
+})
