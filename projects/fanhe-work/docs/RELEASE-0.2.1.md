@@ -153,3 +153,31 @@ GH_TOKEN=<GCM 取出的令牌> ./node_modules/.bin/electron-builder publish \
 ### 7.5 核对脚本的反例测试
 
 核对脚本按惯例做了反例：把线上 `latest.yml` 的 `size` 改 1 字节 → `SIZE_VS_LOCAL_EXE` 与 `ONLINE_YML_EQUALS_LOCAL_YML` 两条转红、退出码 1；还原后回到 `RESULT=OK`。解析器本身也踩过一次坑：列表项写作 `- url: ...`，不剥掉行首短横则 `/^url:/` 永不匹配、`url` 读成 `undefined` 而不报错 —— 与 `verify-pack.mjs` 那次缩进假设同源，**解析器的错都是静默的**。
+
+### 7.6 容器重建（发布之后的补账）
+
+「升级须知」第 3 条要求重建 `api` 与 `web`。**发布当时没做**：批次 2 的锚点修复只在宿主代码里，容器跑的是 3 小时前的旧镜像，线上行为与 0.2.0 相同。补做：
+
+```
+infra/portable/ws-compose.cmd build api web          # 1 分 22 秒，EXIT=0
+infra/portable/ws-compose.cmd up -d --force-recreate api web
+```
+
+判据分两层，**只看第一层会把问题漏掉**：
+
+| 层 | 检查 | 结果 |
+| --- | --- | --- |
+| 镜像 | 容器内 `apps/api/dist/**` 含 `latestCoveredDateAllShops` | 命中 `ops/query.js`、`routes/ops.js` |
+| 运行时 | 带 `shop` 的请求 `range.to` 是否跟店铺走 | 见下 |
+
+实测（库里 `fanhe-main` 末日 `2026-10-19`、`s2` 无数据）：
+
+| 请求 | 区间 | 说明 |
+| --- | --- | --- |
+| `/api/ops/dashboard`（默认店） | `2026-09-20 ~ 2026-10-19` | 止于该店数据末日 |
+| `/api/ops/dashboard?shop=s2` | `2026-09-22 ~ 2026-10-21` | 无数据 → 退回以今天为锚；**旧代码这里会给 `2026-10-19`** |
+| `/api/ops/overview-shops` | `2026-09-20 ~ 2026-10-19` | 并列口径取全库最大 |
+
+三条均带 `etag`；经 nginx（`:8080`）复跑同样三条，结果一致，反代链路正常。反例：把探针对 `s2` 的期望值改成旧口径 `2026-10-19`，**只有这一条转红**，证明断言比的是实际值而不是恒真。
+
+容器内前端另做核对：`index-*.js` 哈希与本地 `apps/web/dist` 不同（构建期把时间戳烧进包，本轮 14:04:48 对 13:21:46），但版本串同为 `0.2.1`、`visibilitychange` 计数同为 2 —— **哈希不同不等于内容不同**，这两项才是可比判据。
