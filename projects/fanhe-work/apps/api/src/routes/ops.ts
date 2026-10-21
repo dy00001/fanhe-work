@@ -23,6 +23,7 @@ import { isLoopbackAddress } from '../launch/loopback.js'
 import { ingestFailureMessage, ingestOpsSnapshot } from '../ops/ingest.js'
 import {
   latestCoveredDate,
+  latestCoveredDateAllShops,
   listOpsShops,
   loadOpsDashboard,
   loadOpsHealth,
@@ -258,14 +259,22 @@ type HealthQuery = { shop?: string; limit?: number }
  *      `latestCoveredDate` 的注释，锚点错了会让 KPI 与维度窗口错位。
  *   3. 都不给：近 30 天，同样以库里最新一天为锚。
  *
+ * 锚点由调用方以函数形式传入，而不是在这一层自己算。原因是**不同接口该用哪个锚点
+ * 并不相同**：单店看板要跟着它自己看的那家店，五店并列要取全库最大。若在这里写死
+ * 一种口径，另一个接口就必然是错的，而且错得很安静（区间照样返回、接口照样 200，
+ * 只是窗口悄悄偏了几天）。
+ *
+ * 传函数还有一个附带好处：自定义区间那条分支根本不会调用它，省掉一次聚合查询。
+ *
  * 三个分支的失败都必须给出**可读的原因**，因为自定义区间是用户在地址栏里手输的：
  * 静默回退到默认区间，用户会以为自己输错了却没被提示。
  */
 async function resolveRange(
   query: DashboardQuery,
+  anchorOf: () => Promise<string | null>,
 ): Promise<{ ok: true; value: OpsDateRange } | { ok: false; message: string }> {
   if (query.from === undefined && query.to === undefined) {
-    const anchor = (await latestCoveredDate()) ?? new Date().toISOString().slice(0, 10)
+    const anchor = (await anchorOf()) ?? new Date().toISOString().slice(0, 10)
     const days = query.days ?? OPS_LIMITS.DEFAULT_RANGE_DAYS
     return { ok: true, value: opsRangeEndingAt(anchor, days) }
   }
@@ -300,7 +309,10 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const range = await resolveRange(request.query)
+      /* 锚点跟着「这次要看的那家店」走，与下面 loadOpsDashboard 的选店规则同源。 */
+      const range = await resolveRange(request.query, () =>
+        latestCoveredDate(request.query.shop ?? null),
+      )
       if (!range.ok) {
         return reply.code(400).send({ error: 'invalid_range', message: range.message })
       }
@@ -349,7 +361,8 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const range = await resolveRange(request.query)
+      /* 五店同屏比较，锚点取全库最大；这里不认 `shop` 参数，因为它比较的就是全部店铺。 */
+      const range = await resolveRange(request.query, latestCoveredDateAllShops)
       if (!range.ok) {
         return reply.code(400).send({ error: 'invalid_range', message: range.message })
       }

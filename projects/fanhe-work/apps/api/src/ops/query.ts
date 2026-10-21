@@ -604,16 +604,43 @@ export async function loadOpsDashboard(input: {
 }
 
 /**
- * 库里最新一天的业务日。
+ * 某个店铺库里最新一天的业务日。
  *
  * 默认区间要用它而不是「今天」：采集是攒出来的，库里最新一天往往比今天早一两天
  * （T-1 采集 + 周末）。以今天为锚点算「近 30 天」，开头会多出两三天空白，而
  * **整段口径的窗口也随之后移**，于是首屏的 KPI 与商品榜单取自两个不同窗口 ——
  * 两个数字各自都对，放在一起却不是一个故事。
  *
- * 返回 null 表示库里还没有任何逐日数据，调用方退回以今天为锚。
+ * **锚点必须跟着店铺走**，不能跨店取全局最大。单店时期两者等价，多店之后就不再是：
+ * A 店采到 10-19、B 店停在 10-15，而看板看的是 A 店，全局最大仍是 10-19，看似无事；
+ * 一旦 A 店落后于 B 店（补采顺序、某个账号掉登录都足以造成），A 店的「近 30 天」
+ * 就会越过它自己的数据末日、整体后移，首屏出现一段没有数据的窗口，而接口一路成功、
+ * 没有任何报错。
+ *
+ * `shopCode` 传 null 表示「默认店铺」，选店规则与 `loadShop` 完全一致（启用中、
+ * 最早建档）。两处必须同源，否则锚点取的是 A 店、数据取的是 B 店，正是上面那个
+ * 症状的另一种成因。
+ *
+ * 返回 null 表示这家店还没有任何逐日数据、或者根本没有这家店，调用方退回以今天为锚。
  */
-export async function latestCoveredDate(): Promise<string | null> {
+export async function latestCoveredDate(shopCode: string | null = null): Promise<string | null> {
+  const shop = await loadShop(shopCode)
+  if (shop === null) return null
+  const row = await prisma.ecomDailyMetric.aggregate({
+    where: { shopId: shop.id },
+    _max: { statDate: true },
+  })
+  return fromDbDate(row._max.statDate)
+}
+
+/**
+ * 全部店铺里最新一天的业务日。
+ *
+ * 只给「五店并列」用：那张表同屏比较五家店，窗口必须对五家一视同仁，锚点取全库最大，
+ * 谁家落后就在自己那列留白 —— 这恰恰是要看的信息。单店看板不能用这个口径，
+ * 理由见上一条。
+ */
+export async function latestCoveredDateAllShops(): Promise<string | null> {
   const row = await prisma.ecomDailyMetric.aggregate({ _max: { statDate: true } })
   return fromDbDate(row._max.statDate)
 }
