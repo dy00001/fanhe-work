@@ -142,7 +142,7 @@ export function OpsHealthPanel(props: {
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">{run.trigger}</TableCell>
                 <TableCell>
-                  <OpsCollectStatusChip status={run.status} />
+                  <OpsCollectStatusChip status={run.status} stale={run.stale} />
                 </TableCell>
                 <TableCell className="text-right text-xs tabular-nums">{run.dailyRows}</TableCell>
                 <TableCell className="text-right text-xs tabular-nums">

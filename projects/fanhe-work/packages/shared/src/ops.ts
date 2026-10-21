@@ -37,6 +37,18 @@ export const OPS_LIMITS = {
   RAW_PATH_MAX: 300,
   INGEST_DIMENSION_MAX: 2000,
   TRIGGER_MAX: 20,
+  /**
+   * 一条 `running` 记录停留多久算超时（毫秒）。
+   *
+   * **取值依据**：库里 4 次成功入库的耗时是 0.107 / 0.107 / 0.129 / 0.200 秒
+   * （含一次 30 天回填），量级是「一次事务」。10 分钟是实测最大值的 3000 倍，
+   * 余量足够覆盖进程被换出、库连接等待、GC 长停顿这类偶发卡顿，又不至于让一条
+   * 真挂死的记录在界面上挂一整天。
+   *
+   * 注意它衡量的是**入库这一步**，不是浏览器抓取那一段 —— 抓取耗时不在
+   * `ecom_collect_runs` 里，采集器是先抓完再调 `POST /api/ops/ingest`。
+   */
+  COLLECT_RUNNING_TIMEOUT_MS: 10 * 60 * 1000,
 } as const
 
 /**
@@ -67,6 +79,26 @@ export type OpsCollectTrigger = (typeof OPS_COLLECT_TRIGGERS)[number]
 
 export const OPS_COLLECT_STATUSES = ['running', 'succeeded', 'partial', 'failed'] as const
 export type OpsCollectStatus = (typeof OPS_COLLECT_STATUSES)[number]
+
+/**
+ * 一条停在 `running` 的采集记录是否已经超时。
+ *
+ * 只有 `running` 会被判超时：其余三种状态本来就带 `finishedAt`，时间再久也只是
+ * 「历史记录」。判据放在共享包里，是为了让后端算出的 `stale` 与前端要展示的
+ * 中文口径同源 —— 两处各写一份阈值，迟早会出现「列表说采集中、顶部说中断」。
+ *
+ * 解析不出时间的当「不超时」：宁可把一条可疑记录继续显示成采集中，也不要把
+ * 一条正常记录误判成中断 —— 后者的代价是运维去查一个不存在的故障。
+ */
+export function isCollectRunStale(
+  run: { status: OpsCollectStatus; startedAt: string },
+  nowMs: number,
+): boolean {
+  if (run.status !== 'running') return false
+  const started = Date.parse(run.startedAt)
+  if (!Number.isFinite(started)) return false
+  return nowMs - started > OPS_LIMITS.COLLECT_RUNNING_TIMEOUT_MS
+}
 
 /** 店铺平台。当前只有淘宝系，字段保留是为了加店时不改事实表。 */
 export const OPS_PLATFORMS = ['taobao', 'tmall'] as const
@@ -234,6 +266,15 @@ export type OpsCollectRunSummary = {
   startedAt: string
   finishedAt: string | null
   durationMs: number | null
+  /**
+   * 这条记录停在 `running` 且已超过 `COLLECT_RUNNING_TIMEOUT_MS`。
+   *
+   * 它不是第五种状态，而是**对 `running` 的时间判定**：库里那一行确实是
+   * `running`（写入中断时补写失败就会留下这种行），但「还在跑」已经不可能。
+   * 放在响应里而不是让前端自己算，是因为判定要两端一致 —— 前端算一遍、后端
+   * 算一遍，两处阈值不同就会出现「列表说采集中、顶部说中断」。
+   */
+  stale: boolean
 }
 
 export type OpsHealthResponse = {

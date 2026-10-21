@@ -150,6 +150,19 @@ test('采集状态：四态文案与色档', () => {
   assert.equal(collectStatusTone(null), 'idle')
 })
 
+test('采集状态：超时的 running 显示「采集中断」，色档降为 bad', () => {
+  // 服务端判好 stale 后传下来，前端只负责文案与色档 —— 不在这里重算阈值。
+  assert.equal(collectStatusLabel('running', true), '采集中断')
+  assert.equal(collectStatusTone('running', true), 'bad')
+  // 未超时仍是「采集中」+ warn，两者必须能区分开，否则挂死的记录会被当成正在跑。
+  assert.equal(collectStatusLabel('running', false), '采集中')
+  assert.equal(collectStatusTone('running', false), 'warn')
+  // stale 只对 running 有意义；别的状态带了这个标记也不能被改写成「中断」，
+  // 否则一条成功批次的记录会变成故障提示。
+  assert.equal(collectStatusLabel('succeeded', true), '成功')
+  assert.equal(collectStatusTone('succeeded', true), 'ok')
+})
+
 test('维度读数：数字、数字字符串、null、缺失一律收敛成数或 null', () => {
   const row = { metrics: { visitors: 12, payRate: '0.5', note: 'abc', missing: null } }
   assert.equal(metricOf(row, 'visitors'), 12)

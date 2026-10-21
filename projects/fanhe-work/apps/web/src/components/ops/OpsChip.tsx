@@ -90,10 +90,10 @@ const STATUS_TONE: Record<CollectStatusTone, Tone> = {
   idle: 'muted',
 }
 
-export function OpsCollectStatusChip(props: { status: OpsCollectStatus | null }) {
+export function OpsCollectStatusChip(props: { status: OpsCollectStatus | null; stale?: boolean }) {
   return (
-    <OpsChip tone={STATUS_TONE[collectStatusTone(props.status)]}>
-      {collectStatusLabel(props.status)}
+    <OpsChip tone={STATUS_TONE[collectStatusTone(props.status, props.stale ?? false)]}>
+      {collectStatusLabel(props.status, props.stale ?? false)}
     </OpsChip>
   )
 }

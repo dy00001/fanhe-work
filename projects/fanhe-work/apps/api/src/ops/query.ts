@@ -2,6 +2,7 @@ import {
   OPS_LIMITS,
   addOpsDays,
   hasPermission,
+  isCollectRunStale,
   opsRangeDays,
   previousOpsRange,
   type OpsCollectRunSummary,
@@ -293,34 +294,42 @@ async function loadDimensionGroup(
   return { type, window, rows: sortDimensionRows(type, visibleRows) }
 }
 
-function toRunSummary(row: {
-  id: string
-  trigger: string
-  source: string
-  status: string
-  statFrom: Date
-  statTo: Date
-  dailyRows: number
-  dimensionRows: number
-  rawPath: string | null
-  errorMessage: string | null
-  startedAt: Date
-  finishedAt: Date | null
-  durationMs: number | null
-}): OpsCollectRunSummary {
+function toRunSummary(
+  row: {
+    id: string
+    trigger: string
+    source: string
+    status: string
+    statFrom: Date
+    statTo: Date
+    dailyRows: number
+    dimensionRows: number
+    rawPath: string | null
+    errorMessage: string | null
+    startedAt: Date
+    finishedAt: Date | null
+    durationMs: number | null
+  },
+  nowMs: number,
+): OpsCollectRunSummary {
+  const startedAt = row.startedAt.toISOString()
+  const status = row.status as OpsCollectStatus
   return {
     id: row.id,
     trigger: row.trigger,
     source: row.source as OpsCollectRunSummary['source'],
-    status: row.status as OpsCollectStatus,
+    status,
     window: { from: fromDbDate(row.statFrom) ?? '', to: fromDbDate(row.statTo) ?? '' },
     dailyRows: row.dailyRows,
     dimensionRows: row.dimensionRows,
     rawPath: row.rawPath,
     errorMessage: row.errorMessage,
-    startedAt: row.startedAt.toISOString(),
+    startedAt,
     finishedAt: row.finishedAt === null ? null : row.finishedAt.toISOString(),
     durationMs: row.durationMs,
+    // 时间基准由调用方传入而不是在这里 `Date.now()`：同一次响应里所有行必须
+    // 用同一个「现在」，否则边界上会出现同一批的两行判定不一致。
+    stale: isCollectRunStale({ status, startedAt }, nowMs),
   }
 }
 
@@ -746,6 +755,11 @@ export async function loadOpsShopBoards(input: {
 export async function loadOpsHealth(
   shopCode: string | null,
   limit = 20,
+  /**
+   * 判定 `running` 是否超时的「现在」。默认取当前时间，只在测试里注入 ——
+   * 没有它就没法把一条记录放到「十分钟前」而不用等十分钟。
+   */
+  nowMs = Date.now(),
 ): Promise<OpsHealthResponse | null> {
   const shop = await loadShop(shopCode)
   if (shop === null) return null
@@ -774,7 +788,7 @@ export async function loadOpsHealth(
   return {
     shop,
     lastCollectedAt: shop.lastCollectedAt,
-    runs: rows.map(toRunSummary),
+    runs: rows.map((row) => toRunSummary(row, nowMs)),
   }
 }
 

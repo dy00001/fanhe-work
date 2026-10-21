@@ -22,6 +22,7 @@ import {
   addOpsDays,
   clampOpsRange,
   formatOpsDate,
+  isCollectRunStale,
   isValidOpsRange,
   opsRangeDays,
   opsRangeEndingAt,
@@ -100,4 +101,46 @@ test('区间合法性：上限为 366 天，超过则靠 clamp 收口', () => {
   assert.equal(opsRangeDays(clamped), OPS_LIMITS.RANGE_MAX_DAYS)
   // 收口保留末日、裁掉开头，不自作主张改 to —— 用户看的是"最近这段"。
   assert.equal(clamped.to, tooLong.to)
+})
+
+/**
+ * 采集记录的「停在 running 太久」判定。
+ *
+ * 这条判定的价值全在边界上：宽松了，一条挂死的记录会一直显示「采集中」，
+ * 运维看到「正在采」就不去查；严格了，慢一点的正常批次会被报成中断，
+ * 运维去查一个不存在的故障。两边都是误判，所以边界要按毫秒钉住。
+ */
+test('running 超时判定：阈值两侧', () => {
+  const started = Date.parse('2026-10-21T12:00:00.000Z')
+  const run = { status: 'running', startedAt: new Date(started).toISOString() }
+  const limit = OPS_LIMITS.COLLECT_RUNNING_TIMEOUT_MS
+
+  // 阈值减 1 毫秒：仍在跑
+  assert.equal(isCollectRunStale(run, started + limit - 1), false)
+  // 恰好等于阈值：不算超时（用 `>` 而不是 `>=`，边界归「还没到」）
+  assert.equal(isCollectRunStale(run, started + limit), false)
+  // 阈值加 1 毫秒：超时
+  assert.equal(isCollectRunStale(run, started + limit + 1), true)
+})
+
+test('running 超时判定：只有 running 会被判超时', () => {
+  const old = '2026-10-21T00:00:00.000Z'
+  const now = Date.parse('2026-10-21T12:00:00.000Z')
+  for (const status of ['succeeded', 'partial', 'failed']) {
+    // 时间再久也只是历史记录，不能因为「老」就报成中断。
+    assert.equal(isCollectRunStale({ status, startedAt: old }, now), false, status)
+  }
+})
+
+test('running 超时判定：时间解析不出来时不报超时', () => {
+  // 宁可把一条可疑记录继续显示成采集中，也不要误报一个不存在的故障。
+  assert.equal(isCollectRunStale({ status: 'running', startedAt: '不是时间' }, Date.now()), false)
+  assert.equal(isCollectRunStale({ status: 'running', startedAt: '' }, Date.now()), false)
+})
+
+test('running 超时阈值有明确取值依据', () => {
+  // 库里 4 次成功入库都是 0.1—0.2 秒量级，阈值必须远大于它，
+  // 否则正常批次会被判超时。10 分钟的余量是 3000 倍。
+  assert.equal(OPS_LIMITS.COLLECT_RUNNING_TIMEOUT_MS, 10 * 60 * 1000)
+  assert.ok(OPS_LIMITS.COLLECT_RUNNING_TIMEOUT_MS >= 60_000)
 })

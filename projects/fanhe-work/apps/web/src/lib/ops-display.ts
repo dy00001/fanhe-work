@@ -226,8 +226,16 @@ export function shareOf(value: number | null, total: number | null): number | nu
   return value / total
 }
 
-/** 采集批次状态的中文与色档。色档给徽标用，不直接写颜色。 */
-export function collectStatusLabel(status: OpsCollectStatus | null): string {
+/**
+ * 采集批次状态的中文与色档。色档给徽标用，不直接写颜色。
+ *
+ * `stale` 不是第五种状态，是「`running` 已经停了但没来得及收尾」——服务端按
+ * `COLLECT_RUNNING_TIMEOUT_MS` 判好后放在响应里。这里只在文案上把它和真正的
+ * 采集区分开：不加这一项，一条挂死的记录会一直显示「采集中」，而运维看到
+ * 「正在采」就不会去查它。
+ */
+export function collectStatusLabel(status: OpsCollectStatus | null, stale = false): string {
+  if (stale && status === 'running') return '采集中断'
   switch (status) {
     case 'running':
       return '采集中'
@@ -244,7 +252,11 @@ export function collectStatusLabel(status: OpsCollectStatus | null): string {
 
 export type CollectStatusTone = 'ok' | 'warn' | 'bad' | 'idle'
 
-export function collectStatusTone(status: OpsCollectStatus | null): CollectStatusTone {
+export function collectStatusTone(
+  status: OpsCollectStatus | null,
+  stale = false,
+): CollectStatusTone {
+  if (stale && status === 'running') return 'bad'
   switch (status) {
     case 'succeeded':
       return 'ok'
