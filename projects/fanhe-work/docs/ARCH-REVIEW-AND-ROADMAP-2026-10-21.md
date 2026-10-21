@@ -303,7 +303,14 @@ cd projects/fanhe-work
 
 判据已达成：`apps/api/test/ops-anchor.test.ts` 8 条用例，覆盖「两店日期不同各自锚点正确」「有店无数据返回 null」「店不存在返回 null」「接口带 shop 时区间止于该店末日」。反例实测两次：去掉按店过滤 → 5 条转红（含接口用例）；把并列接口改成按店 → 第 7 条转红，而只断言「区间止于全库最大」的第 8 条仍绿，说明第 7 条这种「造一家比默认店更新的店」的写法不可省。
 
-**2.2 `running` 过期判定** 按采集耗时分布定阈值，超时视为失败。判据是构造一条停留在 `running` 的记录，界面不再显示「采集中」。
+**2.2 `running` 过期判定（已完成 2026-10-21）** 按采集耗时分布定阈值，超时视为失败。判据是构造一条停留在 `running` 的记录，界面不再显示「采集中」。
+
+实测依据：库里 4 次成功入库耗时 0.107 / 0.107 / 0.129 / 0.200 秒（含一次 30 天回填），量级是「一次事务」，故取 `OPS_LIMITS.COLLECT_RUNNING_TIMEOUT_MS = 10 分钟`（3000 倍余量）。**它衡量的是入库这一步，不是浏览器抓取那一段** —— 抓取耗时不在 `ecom_collect_runs` 里。
+
+实现取舍：判定放 `packages/shared` 的纯函数 `isCollectRunStale`，由 api 算好 `stale` 字段放进 `OpsCollectRunSummary`，web 只负责文案与色档。**不把库里的 `status` 改写成 `failed`** —— 那条 `running` 是审计事实，读路径上改写会让「补写失败」与「真的失败」在库里长得一样。`loadOpsHealth` 的时间基准由参数注入（默认 `Date.now()`），测试才能把记录放到「十一分钟前」而不用等。
+
+判据达成：`packages/shared/test/ops.test.mjs` 4 条（阈值两侧、只有 running 判超时、时间不可解析不误报、阈值取值）+ `apps/api/test/ops-health-stale.test.ts` 3 条（超时标 stale 且 status 不改写 / 未超时不标 / 已完成的记录多老都不标）+ `apps/web/test/ops-display.test.mjs` 1 条（「采集中断」文案与 bad 色档，且 `stale` 只对 running 生效）。变异实测两次：去掉状态守卫 → shared 1 条转红；把 `stale` 恒置 false → api 3 条中 2 条转红。
+
 
 **2.3 渠道树补采** 在真实浏览器里试交互或构造请求，确认 `tree_platform_support` 能否触发。这条需要登录态，做不成也要把「未验证」写进文档，不要标成已完成。
 
