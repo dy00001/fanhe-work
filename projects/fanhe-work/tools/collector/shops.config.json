@@ -1,0 +1,53 @@
+{
+  "$comment": "多店铺采集槽位表。看板固定五列：三家真实店 + 两家占位。code 必须与库中 ecom_shop.code 一致，name 必须与库中名称逐字一致 —— ingest 的 upsert 会用 payload 里的 name 覆盖库里的名字，写错就是把店铺改名。port 是每店独立 Edge 的调试端口；profile 目录由 code 派生（.browser-profile/<code>），不在此处写死。collect=false 的店不进日增循环。qianniu.crashUid 只作人工对照用（千牛实例编号每次启动都会变，不能当稳定键）。本文件不含任何凭据。",
+  "version": 1,
+  "defaults": {
+    "platform": "taobao",
+    "basePort": 9222
+  },
+  "shops": [
+    {
+      "code": "fanhe-main",
+      "name": "梵禾",
+      "port": 9222,
+      "collect": true,
+      "state": "active",
+      "qianniu": { "crashUid": "梵禾定制家具:小阳" },
+      "note": "主店，已有 30 天基线与日增"
+    },
+    {
+      "code": "s2",
+      "name": "雅素",
+      "port": 9223,
+      "collect": true,
+      "state": "pending",
+      "qianniu": { "crashUid": "雅素定制家具:设计总监邓阳" },
+      "note": "千牛已登录；等首次在采集浏览器里登录一次（cookie 过期才需要再登）"
+    },
+    {
+      "code": "s3",
+      "name": "简作",
+      "port": 9224,
+      "collect": true,
+      "state": "pending",
+      "qianniu": { "crashUid": "简作美学定制:小阳" },
+      "note": "千牛已登录；等首次在采集浏览器里登录一次"
+    },
+    {
+      "code": "s4",
+      "name": "分店 4",
+      "port": 9225,
+      "collect": false,
+      "state": "placeholder",
+      "note": "占位店：界面保留第四列，账号到位后把 collect 改成 true 并补 port"
+    },
+    {
+      "code": "s5",
+      "name": "分店 5",
+      "port": 9226,
+      "collect": false,
+      "state": "placeholder",
+      "note": "占位店：界面保留第五列，暂不采集"
+    }
+  ]
+}

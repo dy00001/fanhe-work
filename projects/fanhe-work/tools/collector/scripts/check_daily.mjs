@@ -23,10 +23,12 @@
  * 用法
  *   node scripts/check_daily.mjs
  *   node scripts/check_daily.mjs --date 2026-10-19
+ *   node scripts/check_daily.mjs --shop s2 --date 2026-10-19   查某一店的日增
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveShop } from './lib/shops.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -36,7 +38,22 @@ const date = di >= 0 ? argv[di + 1] : (() => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 })();
 
-const DAY = path.join(ROOT, 'data', 'daily', date);
+/* 店铺槽位决定去哪个目录找数据。不给 --shop 时保持老结构 data/daily/<日期>，
+   单店主店的老命令照旧可用。 */
+const si = argv.indexOf('--shop');
+let shop = null;
+if (si >= 0 && argv[si + 1]) {
+  try {
+    shop = resolveShop(argv[si + 1]);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+}
+
+const DAY = shop === null
+  ? path.join(ROOT, 'data', 'daily', date)
+  : path.join(shop.outRoot, date);
 const MIN_BYTES = 800;
 
 /* 已知无害：交易页两条子接口在单日区间下必报错，主数据另有接口 */
@@ -81,6 +98,7 @@ function bodyCode(text){
 }
 
 console.log(`日增检查 ${date}`);
+if (shop !== null) console.log(`店铺 ${shop.code}（${shop.name}）`);
 console.log(`采集于 ${manifest.capturedAt}`);
 console.log(`范围 ${manifest.scope}\n`);
 

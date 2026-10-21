@@ -26,17 +26,19 @@
  *   node scripts/export-daily-ingest.mjs                     取 data/daily 下最新一天
  *   node scripts/export-daily-ingest.mjs --date 2026-10-19
  *   node scripts/export-daily-ingest.mjs --dir <目录> --out <文件>
+ *   node scripts/export-daily-ingest.mjs --shop s2 --date 2026-10-19   某一家店
  *   node scripts/export-daily-ingest.mjs --stdout            只打印，不落盘
  *   node scripts/export-daily-ingest.mjs --strict            数据不全时以 2 退出
  *
  * 退出码
  *   0 产出完成，核心指标齐全
- *   1 无法产出（目录不存在、认不出任何响应、店铺身份缺失）
+ *   1 无法产出（目录不存在、认不出任何响应、店铺身份缺失、--shop 与目录指向的店不一致）
  *   2 产出完成但数据不全（核心指标缺、或清单里有偏薄页面），需要人看一眼
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { resolveShop as resolveShopSlot, shopFromPath } from './lib/shops.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -57,9 +59,9 @@ function option(name, fallback = null) {
 
 const IS_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-/** `data/daily` 下最新一天。目录名就是业务日，不读文件时间。 */
-function latestDayDir() {
-  const base = path.join(ROOT, 'data', 'daily')
+/** 某个采集根目录下最新一天。目录名就是业务日，不读文件时间。
+ *  多店铺下根目录是 data/daily/<code>，单店老结构是 data/daily。 */
+function latestDayDir(base) {
   if (!fs.existsSync(base)) return null
   const days = fs
     .readdirSync(base, { withFileTypes: true })
@@ -72,17 +74,33 @@ function latestDayDir() {
 
 const explicitDir = option('dir')
 const explicitDate = option('date')
+const shopArg = option('shop')
+
+/* 店铺槽位要先于目录计算解析：它决定去哪找日期目录。
+   给了 --shop 却查不到时直接退，因为「拼错 code」和「配置里没这家店」
+   修法相同，继续跑只会写出一份身份错误的契约。 */
+let shopSlot = null
+if (shopArg !== null) {
+  try {
+    shopSlot = resolveShopSlot(shopArg)
+  } catch (e) {
+    console.error(e.message)
+    process.exit(1)
+  }
+}
+
+const BASE_DAILY = shopSlot === null ? path.join(ROOT, 'data', 'daily') : shopSlot.outRoot
 
 let targetDate = explicitDate
 let dayDir = explicitDir === null ? null : path.resolve(explicitDir)
 
 if (dayDir === null) {
   if (explicitDate !== null) {
-    dayDir = path.join(ROOT, 'data', 'daily', explicitDate)
+    dayDir = path.join(BASE_DAILY, explicitDate)
   } else {
-    const latest = latestDayDir()
+    const latest = latestDayDir(BASE_DAILY)
     if (latest === null) {
-      console.error('data/daily 下没有任何按日期命名的目录。先跑一次 run-daily.ps1。')
+      console.error(`${path.relative(ROOT, BASE_DAILY)} 下没有任何按日期命名的目录。先跑一次 run-daily.ps1。`)
       process.exit(1)
     }
     targetDate = latest.date
@@ -429,26 +447,59 @@ function group(name, module, rows, note) {
 
 /* ── 4. 店铺身份 ──────────────────────────────────────────────────────── */
 // 名称必须与库里一致：ingest 的 upsert 会把 name 覆盖成 payload 里的值，随手
-// 写一个「梵禾」就会把店铺改名。因此默认沿用回填契约里的身份，其次才是命令行。
-function resolveShop() {
+// 写一个「梵禾」就会把店铺改名。所以名称只认两个来源：槽位表 shops.config.json，
+// 或显式 --shop-name。
+//
+// 优先级（2026-10-21 修正）：命令行 / 目录路径 > 回填基线。
+// 原来基线优先，四家店导出时会被全部写成主店 fanhe-main —— 这件事不报错，
+// 只会在看板上表现为「其他店永远没数据、主店数字异常翻倍」。
+function resolveShopIdentity() {
+  const nameArg = option('shop-name')
+  const fromPath = shopFromPath(dayDir)
+
+  // ① 显式 --shop：以槽位表为准，并拒绝与目录所属店铺冲突的组合
+  if (shopSlot !== null) {
+    if (fromPath !== null && fromPath.code !== shopSlot.code) {
+      console.error(
+        `--shop ${shopSlot.code} 与数据目录所属店铺 ${fromPath.code} 不一致，拒绝产出。\n` +
+          `  目录：${path.relative(ROOT, dayDir)}\n` +
+          `  串店入库不会报错，只会把 ${fromPath.code} 的数据写成 ${shopSlot.code}。`,
+      )
+      process.exit(1)
+    }
+    return {
+      code: shopSlot.code,
+      name: nameArg ?? shopSlot.name,
+      platform: shopSlot.platform,
+      sellerNick: null,
+    }
+  }
+
+  // ② 从目录路径反推（data/daily/<code>/<日期>）。忘了传 --shop 时靠这一层兜住。
+  if (fromPath !== null) {
+    return {
+      code: fromPath.code,
+      name: fromPath.name,
+      platform: fromPath.platform,
+      sellerNick: null,
+    }
+  }
+
+  // ③ 老结构 data/daily/<日期>：主店单店时代的数据，沿用回填契约里的身份
   const baseline = path.join(ROOT, 'data', 'ingest', 'ops-ingest.json')
   if (fs.existsSync(baseline)) {
     try {
       const parsed = JSON.parse(fs.readFileSync(baseline, 'utf8'))
       if (parsed?.shop?.code && parsed?.shop?.name) return parsed.shop
     } catch {
-      // 回填契约坏了不该挡住日增：落到命令行与报错分支。
+      // 回填契约坏了不该挡住日增：落到下面的报错分支。
     }
   }
-  const code = option('shop')
-  const name = option('shop-name')
-  if (code !== null && name !== null) {
-    return { code, name, platform: 'taobao', sellerNick: null }
-  }
+
   return null
 }
 
-const shop = resolveShop()
+const shop = resolveShopIdentity()
 
 /* ── 5. 产出 ──────────────────────────────────────────────────────────── */
 
@@ -461,7 +512,7 @@ const shop = resolveShop()
 const relativeRawPath = path.relative(ROOT, dayDir).split(path.sep).join('/')
 const storedRawPath =
   relativeRawPath.startsWith('..') || path.isAbsolute(relativeRawPath)
-    ? `data/daily/${targetDate}`
+    ? `data/daily/${shop === null ? '' : shop.code + '/'}${targetDate}`
     : relativeRawPath
 
 const payload = {
@@ -476,7 +527,8 @@ const payload = {
 }
 
 if (shop === null) {
-  console.error('店铺身份缺失：data/ingest/ops-ingest.json 不存在，且没有给 --shop 与 --shop-name。')
+  console.error('店铺身份缺失：目录不在 data/daily/<店铺>/<日期> 结构下，也没有给 --shop。')
+  console.error('  先在 shops.config.json 里登记这家店，再传 --shop <code>。')
   process.exit(1)
 }
 

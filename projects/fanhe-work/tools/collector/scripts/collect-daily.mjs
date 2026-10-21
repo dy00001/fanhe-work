@@ -17,29 +17,38 @@
  *   干净渲染进程，实测这是 30 天基线能全页成功的原因。/qos/** 仍走页内跳转。
  *
  * 用法
- *   node scripts/collect-daily.mjs                 抓前一天，全部页面
+ *   node scripts/collect-daily.mjs                 抓前一天，全部页面（单店老模式）
  *   node scripts/collect-daily.mjs qos-core        只抓某一页
  *   node scripts/collect-daily.mjs trade-detail,qos-core   抓多页
  *   node scripts/collect-daily.mjs --date 2026-10-19
+ *   node scripts/collect-daily.mjs --shop s2       抓「雅素」（端口/profile/目录都跟店铺走）
  * 环境变量：WAIT（每页等待毫秒，默认 60000）、BOOT（首页启动等待，默认 14000）、
  *          DATE_TYPE（默认 day，不要改 recent30：它会把区间改写成 30 天）、
  *          RETRY（偏薄重试次数，默认 2）、RETRY_WAIT（重试等待，默认 WAIT+30000）、
- *          OUT_ROOT（默认 data/daily）、SKIP_PREFLIGHT=1（跳过登录态判定，排查用）
+ *          OUT_ROOT（覆盖输出根目录）、SHOP（等价于 --shop）、
+ *          SKIP_PREFLIGHT=1（跳过登录态判定，排查用）
  *
  * 退出码：0 全部采到；2 有页面重试后仍偏薄（数据已落盘，可先用 check_daily.mjs 复核）；
- *        3 登录态检查未通过，一个页面都没采
+ *        3 登录态检查未通过，一个页面都没采；
+ *        4 页面没加载出来（about:blank / 读不到页面），无法判定登录态 —— 查 Edge、端口、
+ *          首启向导，不要误以为是账号过期去重新登录
  *
- * 前置：Edge 已带 --remote-debugging-port=9222 且已登录生意参谋。
- *      登录态由脚本自行判定，结果落在 data/daily/_preflight.json。
+ * 前置：该店铺槽位对应的 Edge 已启动（带 shops.config.json 里配的调试端口）且已登录生意参谋。
+ *      登录态由脚本自行判定，结果落在 <输出根>/_preflight.json。
+ *      多店铺的起停与登录见 scripts/shop-login.ps1 与 scripts/run-all-shops.ps1。
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { missingEndpoints } from './lib/required-endpoints.mjs';
+import { resolveShop } from './lib/shops.mjs';
+import { checkLogin } from './lib/login-check.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 9222;
+/* 端口由店铺槽位决定（一店一个调试端口，见 shops.config.json）。
+   不给 --shop 时退回 9222，保持单店老命令可用。 */
+let PORT = 9222;
 const BASE = 'https://sycm.taobao.com';
 const WAIT = Number(process.env.WAIT || 60000);
 const BOOT = Number(process.env.BOOT || 12000);
@@ -54,6 +63,29 @@ const argv = process.argv.slice(2);
 let target = yesterday();
 const di = argv.indexOf('--date');
 if (di >= 0 && argv[di + 1]){ target = argv[di + 1]; argv.splice(di, 2); }
+
+/* 店铺槽位：--shop <code> 或环境变量 SHOP（run-daily.ps1 用后者传）。
+   必须在这里就从 argv 里摘掉，否则 "s2" 会被下面的 onlyArg 当成页面名。
+   给了 --shop 就同时决定三件事：调试端口、profile、输出根目录 —— 三者必须同源，
+   分开传会出现「用 A 店的浏览器采数据、写进 B 店的目录」。 */
+let shop = null;
+const si = argv.indexOf('--shop');
+const shopCode = si >= 0 && argv[si + 1] ? argv[si + 1] : (process.env.SHOP || null);
+if (si >= 0 && argv[si + 1]) argv.splice(si, 2);
+if (shopCode){
+  try {
+    shop = resolveShop(shopCode);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  if (shop.port === null){
+    console.error(`店铺 ${shop.code} 没有配置调试端口（collect=false 的占位店不参与采集）。`);
+    process.exit(1);
+  }
+  PORT = shop.port;
+}
+
 /* 页面名支持逗号分隔多个：node scripts/collect-daily.mjs trade-detail,qos-core */
 const onlyArg = argv.find(a => !a.startsWith('-'));
 const only = onlyArg ? onlyArg.split(',').map(s => s.trim()).filter(Boolean) : null;
@@ -63,7 +95,10 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(target)){
   process.exit(1);
 }
 
-const OUT_ROOT = process.env.OUT_ROOT || path.join(ROOT, 'data', 'daily');
+/* 输出根目录：有店铺时 data/daily/<code>/<日期>/，无店铺时保持老结构 data/daily/<日期>/。
+   店铺维度放在日期之上，是因为 .trash 与 _manifest.json 都属于「一次采集批次」，
+   放进日期目录里再分店，这两个单批次文件就没有归属了。 */
+const OUT_ROOT = process.env.OUT_ROOT || (shop === null ? path.join(ROOT, 'data', 'daily') : shop.outRoot);
 const OUT_DAY  = path.join(OUT_ROOT, target);
 
 /* 第三个元素为 true 表示「这一页本来就没有数据」。
@@ -130,6 +165,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     console.error('以下页面名不存在，已跳过: ' + miss.join(', '));
   }
 
+  if (shop === null){
+    console.log('店铺     未指定（单店老模式，端口 ' + PORT + '）');
+  } else {
+    console.log(`店铺     ${shop.code}（${shop.name}）  端口 ${PORT}  profile .browser-profile/${shop.code}`);
+  }
   console.log(`目标日期 ${target}（单日增量，不回溯）`);
   console.log(`输出目录 ${OUT_DAY}`);
   console.log(`页面数 ${list.length}，首页启动 ${BOOT}ms，每页 ${WAIT}ms\n`);
@@ -233,33 +273,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
      check_daily 只会报 FAIL，事后很难区分「页面退化」与「没登录」。
      10-20 上午已经踩过一次同型误判（把账号限流当成脚本 bug 查了很久），
      所以这里在动任何页面之前先拦一道，宁可不采，也不产出一天的空数据。
-     SKIP_PREFLIGHT=1 可跳过，供排查页面问题时使用。 */
-  async function checkLogin(send){
-    let info = { href: '', title: '', text: '', len: 0 };
-    try {
-      const r = await send('Runtime.evaluate', {
-        expression: `(()=>{const t=document.body?document.body.innerText:'';return JSON.stringify({href:location.href,title:document.title,text:t.slice(0,500),len:t.length})})()`,
-        returnByValue: true
-      });
-      info = Object.assign(info, JSON.parse(r.result.value || '{}'));
-    } catch (e) {
-      return Object.assign(info, { ok: false, reason: '无法读取页面状态（' + e.message + '）' });
-    }
+     SKIP_PREFLIGHT=1 可跳过，供排查页面问题时使用。
 
-    /* 三个信号分别对应三种失败：被踢到登录页、页面出现登录表单、登录过期提示。
-       登录表单类信号要求页面文本稀疏（实测登录页 innerText 只有一两百字），
-       正常首页文本量大，避免把首页里的「立即登录」之类营销文案误判成未登录。 */
-    const LOGIN_URL  = /login\.taobao\.com|login\.tmall\.com|passport\.taobao\.com|\/member\/login|\/custom\/login/i;
-    const LOGIN_FORM = /扫码登录|账号密码登录|密码登录|亲，请登录/;
-    const EXPIRED    = /登录超时|会话已失效|登录信息已失效|请重新登录/;
-    const sparse     = Number(info.len || 0) < 1500;
-
-    if (!info.href || info.href === 'about:blank') return Object.assign(info, { ok: false, reason: '控制标签没有加载出页面' });
-    if (LOGIN_URL.test(info.href))                       return Object.assign(info, { ok: false, reason: '被重定向到登录页' });
-    if (EXPIRED.test(info.text))                         return Object.assign(info, { ok: false, reason: '页面提示登录已过期' });
-    if (sparse && LOGIN_FORM.test(info.text))            return Object.assign(info, { ok: false, reason: '页面出现登录表单（正文仅 ' + info.len + ' 字）' });
-    return Object.assign(info, { ok: true, reason: '' });
-  }
+     判据本身在 lib/login-check.mjs，与 shop-login.ps1 的登录引导共用一份 ——
+     采集按 A 判、引导按 B 判，就会出现「人以为登好了，采集说没登」。 */
 
   const created = await req('PUT', '/json/new?' + encodeURIComponent(BASE + '/'));
   const ctrlTab = JSON.parse(created.body);
@@ -277,6 +294,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       fs.mkdirSync(OUT_ROOT, { recursive: true });
       fs.writeFileSync(path.join(OUT_ROOT, '_preflight.json'), JSON.stringify({
         checkedAt: new Date().toISOString(),
+        shop: shop === null ? null : { code: shop.code, name: shop.name, port: shop.port },
         targetDate: target,
         ok: pf.ok,
         reason: pf.reason || '',
@@ -288,16 +306,34 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     } catch {}
 
     if (!pf.ok){
-      console.error('\n[登录态检查未通过] ' + pf.reason);
+      /* 「页面没加载」与「没登录」修法完全不同：前者要查 Edge / 端口 / 首启向导，
+         后者要人去登录。混成一个退出码，人就会去重新登录一个其实还有效的账号。 */
+      const envIssue = pf.code === 'no-page' || pf.code === 'read-error';
+      console.error('\n[' + (envIssue ? '无法判定登录态' : '登录态检查未通过') + '] ' + pf.reason);
+      if (shop !== null) console.error('  店铺     : ' + shop.code + '（' + shop.name + '）');
       console.error('  当前地址 : ' + (pf.href || '（空）'));
       console.error('  页面标题 : ' + (pf.title || '（空）'));
       if (pf.text) console.error('  页面文字 : ' + pf.text.replace(/\s+/g, ' ').slice(0, 120));
-      console.error('\n处理办法 : 运行 start-edge-debug.cmd，在打开的 Edge 里登录生意参谋，');
-      console.error('           关闭该窗口后重跑本脚本。cookie 已落盘，重跑不需要再扫码。');
+      if (envIssue){
+        console.error('\n处理办法 : 端口 ' + PORT + ' 的标签停在空白页，先确认这三点：');
+        console.error('           ① 该端口确实属于 ' + (shop === null ? '这家店' : shop.code) + '（shops.config.json 里的 port）');
+        console.error('           ② Edge 已带 --user-data-dir=' + (shop === null ? '.browser-profile' : '.browser-profile\\' + shop.code));
+        console.error('           ③ 窗口没有被「首次运行 / 导入数据」向导挡住');
+        if (shop !== null){
+          console.error('           用 scripts\\shop-login.ps1 -Shop ' + shop.code + ' 重新起一次窗口最省事。');
+        }
+      } else if (shop !== null){
+        console.error('\n处理办法 : 运行 scripts\\shop-login.ps1 -Shop ' + shop.code);
+        console.error('           在打开的 Edge 里登录「' + shop.name + '」的生意参谋，登录态会落在');
+        console.error('           ' + path.relative(ROOT, shop.profileDir) + ' 这份独立 profile 里，不影响其他店铺。');
+      } else {
+        console.error('\n处理办法 : 运行 start-edge-debug.cmd，在打开的 Edge 里登录生意参谋，');
+        console.error('           关闭该窗口后重跑本脚本。cookie 已落盘，重跑不需要再扫码。');
+      }
       console.error('  本次未采集任何页面，避免产出一天的空数据反被当成「页面退化」。\n');
       try { await req('GET', '/json/close/' + ctrlTab.id); } catch {}
       ctrl.close();
-      process.exit(3);
+      process.exit(envIssue ? 4 : 3);
     }
     console.log('登录态正常（' + (pf.title || 'sycm.taobao.com') + '）\n');
   } else {
@@ -423,6 +459,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const pages = [...merged.values()].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
 
   fs.writeFileSync(mfPath, JSON.stringify({
+    /* 店铺身份写进手册：目录已经按店隔离，但导出与入库时仍要靠这里核对
+       「这份数据是哪家店的」。四店并行跑起来后，串店是唯一不报错的严重错误。 */
+    shop: shop === null ? null : { code: shop.code, name: shop.name, port: shop.port },
     targetDate: target,
     capturedAt: new Date().toISOString(),
     scope: 'single-day increment only',

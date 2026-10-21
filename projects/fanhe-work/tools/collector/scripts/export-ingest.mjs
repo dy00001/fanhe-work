@@ -170,7 +170,7 @@ const payload = {
   contractVersion: 1,
   shop: {
     code: 'fanhe-main',
-    name: '梵禾美学全屋定制家具',
+    name: '梵禾',
     platform: 'taobao',
     sellerNick: null,
   },

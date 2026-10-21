@@ -42,6 +42,8 @@ Thumbs.db
 
 # Edge 自动化 profile：DPAPI 加密绑定本机账户，换机必失效，单目录数百 MB
 tools/collector/.browser-profile*/
+# 从千牛导出的登录态（明文 cookie，等同密码）。只在本机存在，用完即删。
+tools/collector/.secrets/
 # 日增采集产物：一天一个目录，入库后可由 data/ingest 重建
 tools/collector/data/daily/
 # 30 天原始 JSON：19MB，可重爬
