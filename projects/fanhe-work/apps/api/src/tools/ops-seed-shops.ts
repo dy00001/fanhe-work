@@ -13,10 +13,17 @@
  */
 import { prisma } from '../db/prisma.js'
 
-/** 已授权的主店由采集器建档（code=fanhe-main），不在这里重复创建。 */
+/**
+ * 已授权的主店由采集器建档（code=fanhe-main），不在这里重复创建。
+ *
+ * s2 与 s3 已有真名（雅素、简作）并完成千牛登录，只是还没采到数据；
+ * s4 与 s5 仍是占位。这里的名字只在新建时生效，已有记录走 update 分支不会改名。
+ * 名称必须与 `tools/collector/shops.config.json` 逐字一致，否则首次采集会被
+ * ingest 的 upsert 覆盖成配置里的写法。
+ */
 const PLACEHOLDER_SHOPS = [
-  { code: 's2', name: '分店 2' },
-  { code: 's3', name: '分店 3' },
+  { code: 's2', name: '雅素' },
+  { code: 's3', name: '简作' },
   { code: 's4', name: '分店 4' },
   { code: 's5', name: '分店 5' },
 ] as const
