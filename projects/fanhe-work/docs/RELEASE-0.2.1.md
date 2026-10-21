@@ -96,7 +96,7 @@
 | 4. `pnpm --filter @fanhe/web build` | 完成，产物自报 `0.2.1` |
 | 5. `pnpm --filter @fanhe/desktop dist` | 完成，`EXIT=0`，产物落盘 21:30:41 |
 | 6. `verify:sign` + `verify:pack` | 完成，签名 `RESULT=OK`，包内 47 项全过 |
-| 7. 发布与三项核对 | **待发布** |
+| 7. 发布与三项核对 | 完成，见下方 7.1—7.3 |
 
 ### 本轮实测
 
@@ -112,7 +112,44 @@
 | `verify:sign` | 10 个 exe（含历史包）全 `STATUS=Valid`、`STATUS_VALUE=0`、`NOT_VALID_COUNT=0`、`RESULT=OK`；主体 `CN=Fanhe Work`，指纹 `095CB390…` |
 | `verify:pack` | **47 项断言全过**；`resources/web` 与 `apps/web/dist` 逐字节一致；`resources/agent/agent.ts` 与源码一致；`latest.yml` 的 sha512/size 与实际安装包一致；两条反例（commonjs、注入语法错误）均如预期失败 |
 | 打包态冒烟 | **PASS**：渲染元素 1、标题「梵禾 Work」、预加载桥有、console 错误 0、反代到达上游、启动自检可用、凭据通道可用 |
-| 发布 | 待发布 |
-| 核对一：未认证 by-tag | 待发布 |
-| 核对二：线上 `latest.yml` | 待发布 |
-| 核对三：线上 exe sha512 | 待发布 |
+| 发布 | 完成，`v0.2.1` 公开于 `2026-10-21T13:58:12Z`（release id `419625037`） |
+| 核对一：未认证 by-tag | **PASS**，`GET /releases/tags/v0.2.1` 未带凭据返回 200 |
+| 核对二：线上 `latest.yml` | **PASS**，与本地 349 字节**逐字节一致**（`cmp` 无差异） |
+| 核对三：线上 exe sha512 | **PASS**，线上清单 `sha512`/`size` 与本地安装包一致（`112,402,776`） |
+
+### 7.1 推送与打 tag
+
+`main`、`dev` 同时推到 `c268bee`（`dev` 先 `git branch -f dev main` 对齐，否则推 dev 必被拒）。随后打**注解 tag** `v0.2.1`（解引用 `c268bee`）并单推。
+
+### 7.2 发布命令
+
+```bash
+cd apps/desktop
+GH_TOKEN=<GCM 取出的令牌> ./node_modules/.bin/electron-builder publish \
+  -f release/fanhe-work-setup-0.2.1.exe \
+  -f release/fanhe-work-setup-0.2.1.exe.blockmap \
+  -f release/latest.yml \
+  -v 0.2.1 -p always
+```
+
+两点注意：`-v` 在 `publish` 子命令里是**版本号**不是 `--version`；`-f` 必须三个文件成套点名，漏一个不报错但后果静默。
+
+### 7.3 草稿转公开
+
+`publish` 建出来的是**草稿**（`draft:true`、`published_at:null`），此时未认证 by-tag 返回 404 —— 那是「不可见」不是「没发上去」。用一次 `PATCH /releases/419625037` 带 `{"draft":false,"body":...}` 关掉草稿，`published_at` 才落值。
+
+### 7.4 追加的第四条核对（本轮新增）
+
+前三条只证明「清单与本地一致」，**不能证明传上去的字节就是本地那份**。GitHub 资产对象带 `sha256` 摘要，与本机三件套逐一比对：
+
+| 资产 | 线上 sha256 | 结果 |
+| --- | --- | --- |
+| `fanhe-work-setup-0.2.1.exe` | `b838074e4c941f23…` | MATCH |
+| `.exe.blockmap` | `443c732a7c4365b0…` | MATCH |
+| `latest.yml` | `f9ddbab8961d0ec7…` | MATCH |
+
+三项 MATCH 才等于「发出去的就是本机这份」，此前三条缺的正是这一环。
+
+### 7.5 核对脚本的反例测试
+
+核对脚本按惯例做了反例：把线上 `latest.yml` 的 `size` 改 1 字节 → `SIZE_VS_LOCAL_EXE` 与 `ONLINE_YML_EQUALS_LOCAL_YML` 两条转红、退出码 1；还原后回到 `RESULT=OK`。解析器本身也踩过一次坑：列表项写作 `- url: ...`，不剥掉行首短横则 `/^url:/` 永不匹配、`url` 读成 `undefined` 而不报错 —— 与 `verify-pack.mjs` 那次缩进假设同源，**解析器的错都是静默的**。
