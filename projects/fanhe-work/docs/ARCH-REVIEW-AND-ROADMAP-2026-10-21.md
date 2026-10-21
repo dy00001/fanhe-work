@@ -291,7 +291,7 @@ cd projects/fanhe-work
 
 **1.1 定名** 已完成。对外全称定为「梵禾」「雅素」「简作」（主店 / s2 / s3），`ecom_shops` 与 `shops.config.json` 已逐字一致，`ops-seed-shops.ts` 的 create 分支与 `export-ingest.mjs` 的回填 payload 同步改过。s4、s5 仍为占位名。
 
-**1.2 提交** 已完成，共 18 个文件分三笔：`feat(infra)` 链接脚本 1 个，`feat(collector)` 16 个，`fix(ops)` 种子脚本 1 个。均显式列路径。文档一笔待提交。
+**1.2 提交** 已完成，共 26 个文件分五笔：`feat(infra)` 链接脚本 1 个，`docs(infra)` 依赖机制说明 1 个，`feat(collector)` 16 个，`fix(ops)` 种子脚本 1 个，`docs` 交接与运维 9 个。均显式列路径。四道门禁在改动后重跑全绿。
 
 **判据** `git status` 只剩按惯例不入库的目录；`git ls-remote origin HEAD` 与本地一致。
 
