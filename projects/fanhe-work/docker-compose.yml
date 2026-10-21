@@ -242,6 +242,22 @@ services:
     container_name: fanhe-work-cloudflared
     restart: unless-stopped
     # **注意这里刻意没有 `ports:`。** 见上面的说明。
+    #
+    # `TUNNEL_TRANSPORT_PROTOCOL=http2` 是 2026-10-21 加的，起因是一次真实断线：
+    # 宿主机上开着 Clash Verge 的 TUN 模式时，cloudflared 默认走的 QUIC 是
+    # **UDP**，被 TUN 接管后表现为「连得上又断、再连再断」，日志反复出现
+    # `failed to accept QUIC stream: timeout: no recent network activity` 与
+    # `there are no free edge addresses left to resolve to`，最后 Cloudflare
+    # 侧返回 **530 / error 1033**（隧道未连接），而本机容器全部 healthy、
+    # `127.0.0.1:8787` 与 `:8080` 都是 200。**「本地全绿 + 外网 530」就是隧道
+    # 掉线的特征**，不要去查后端。
+    #
+    # 换成 http2 就走 **TCP 443**，代理对 TCP 的支持普遍好于 UDP，且 443 是最
+    # 不容易被规则误伤的端口。代价是长连接会有队头阻塞，对这套「低频后台请求」
+    # 的场景没有可感知影响。**不要在没验证的情况下改回 quic** —— 换回前先确认
+    # 宿主机没开 TUN。
+    environment:
+      TUNNEL_TRANSPORT_PROTOCOL: http2
     command: tunnel --no-autoupdate run --token ${FANHE_TUNNEL_TOKEN:?FANHE_TUNNEL_TOKEN 未设置，见 .env.compose}
 
     depends_on:
