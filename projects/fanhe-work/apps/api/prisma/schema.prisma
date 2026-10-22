@@ -646,6 +646,19 @@ enum EcomPlatform {
   @@map("ecom_platform")
 }
 
+/// 采集浏览器的登录态。由采集器回写，平台侧只存与展示，不自己推断。
+///
+/// 三档而不是两档：`unknown` 表示「还没验过」，与 `needs_login`（验过且失效）
+/// 是两件事。合并成一个会让刚绑定的店铺一进来就顶着「需要重新登录」的红标，
+/// 用户会去点一个本来就没问题的按钮。
+enum OpsLoginState {
+  unknown
+  authenticated
+  needs_login
+
+  @@map("ops_login_state")
+}
+
 /// 数据来源。报表导出与接口直取在个别指标上口径不同，对账时靠这一列区分。
 enum EcomCollectSource {
   report
@@ -694,6 +707,36 @@ model EcomShop {
 
   /// 最近一次成功采集完成的时刻。新鲜度徽标读这一列，不另建健康表。
   lastCollectedAt DateTime? @map("last_collected_at") @db.Timestamptz(3)
+
+  /// ---- 绑定状态。这一组字段由「店铺绑定入口」写、由采集器回写，别处只读。 ----
+  ///
+  /// 绑定的时刻。null 表示这行是种子或 ingest upsert 建出来的，从未经过绑定入口。
+  boundAt DateTime? @map("bound_at") @db.Timestamptz(3)
+
+  /// 采集浏览器的登录态。判据只有一个来源：采集器的 `login-check.mjs`。
+  /// 平台侧不猜，避免「界面说有登录、采集器说没有」两套结论。
+  loginState OpsLoginState @default(unknown) @map("login_state")
+
+  /// 最近一次校验登录态的时刻。与 `loginState` 成对读：没有这个时间戳的
+  /// `authenticated` 是「很久以前验过」，界面要按时间显示新鲜度而不是一个绿点。
+  loginCheckedAt DateTime? @map("login_checked_at") @db.Timestamptz(3)
+
+  /// 该店铺专属的 Edge 调试端口。与 `shops.config.json` 里的 port 必须一致，
+  /// 不一致时采集器会按配置文件走，这个字段只用于绑定入口做冲突检测与提示。
+  collectPort Int? @map("collect_port")
+
+  /// 「请求同步」的标记。绑定成功、或人在界面上点「立即同步」时置为当前时刻，
+  /// 采集器轮询到这里就把该店排进这一轮。采完（无论成败）由采集器清空。
+  ///
+  /// 为什么用一列时间戳而不是消息队列：采集器必须能在平台不可达时继续按本地
+  /// 配置跑（`tools/collector/README.md` 的边界），所以触发信号只能是一个「可
+  /// 丢失也无所谓」的提示，不能是投递即消费的队列。丢了就等下一次定时。
+  syncRequestedAt DateTime? @map("sync_requested_at") @db.Timestamptz(3)
+
+  /// 最近一次同步失败的原因（采集器回写）。成功后清空。
+  /// 与 `lastCollectedAt` 配合读：时间戳停在昨天、这一列有值时，界面直接显示原因，
+  /// 不必让人去翻脚本日志。
+  lastSyncError String? @map("last_sync_error") @db.VarChar(500)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -778,6 +821,28 @@ model EcomDimensionSnapshot {
 ///
 /// 与 `audit_logs` 分工：审计记人做了什么，批次记系统做了什么。自动采集不写审计
 /// （计划任务里没有操作者），它的可观测性全部落在这里。
+/// 采集器心跳。单行表，`id` 固定为 `watch`。
+///
+/// 为什么需要它：绑定入口点「立即同步」只是置一个时间戳，真正干活的是宿主机的
+/// 常驻进程。那个进程没在跑时，界面会一直显示「等待采集器」，用户无法区分
+/// 「还在排队」与「根本没人接单」—— 这是整个链路里最误导人的一处。
+///
+/// 为什么不做成多行事件表：心跳只回答「最近一次有人来拉待办是什么时候」，
+/// 历史没有用途。单行 upsert 避免这张表无限增长，也避免每次查询都要排序。
+model OpsCollectorHeartbeat {
+  /// 固定值 `watch`。留成主键而不是加一行 id，是为了让 upsert 永远命中同一行。
+  id String @id @db.VarChar(32)
+
+  lastSeenAt DateTime @map("last_seen_at") @db.Timestamptz(3)
+
+  /// 谁在拉待办（`http` / `local`），排查「换了传输方式但心跳没跟上」时有用。
+  source String? @map("source") @db.VarChar(20)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("ops_collector_heartbeats")
+}
+
 model EcomCollectRun {
   id     String   @id @default(uuid(7)) @db.Uuid
   shopId String   @map("shop_id") @db.Uuid

@@ -1,0 +1,274 @@
+/**
+ * 店铺绑定的写模型。
+ *
+ * ## 一次绑定实际改了三处
+ *
+ *   1. `ecom_shops`：登记店铺本体，并置 `syncRequestedAt` 作为「请采集器尽快采一次」的信号。
+ *   2. `shops.config.json`：采集器认店的唯一来源（能写就写，写不了返回 manual）。
+ *   3. 登录态：**不由这里写**。绑定入口没有能力判断浏览器里那个号还能不能用，
+ *      判据只有采集器的 `login-check.mjs`。这里只把 `loginState` 置为 `unknown`。
+ *
+ * 第 3 条是这一层最重要的边界。平台侧一旦开始「推断」登录态，就会出现界面说
+ * 已登录、采集器说没登录的两套结论，而人只会相信界面上那个绿点。
+ *
+ * ## 为什么写操作都不删行
+ *
+ * 解绑走 `enabled = false`。逐日指标、维度快照、采集批次都以 `shopId` 为外键，
+ * 删店等于级联删历史，而历史是唯一能解释「上个月的数字为什么是这样」的东西。
+ * 重新绑定同一个 code 时，历史自然接上。
+ */
+import { validateShopBindInput, validateShopStateReport, type OpsShopSummary } from '@fanhe/shared'
+
+import { prisma } from '../db/prisma.js'
+import { OPS_SHOP_SUMMARY_SELECT, toOpsShopSummary } from './query.js'
+import { disableSlot, upsertSlot, type SlotSyncResult } from './shop-slots.js'
+
+export type ShopMutationFailure = {
+  ok: false
+  reason: 'invalid' | 'duplicate' | 'port_conflict' | 'not_found' | 'not_bound'
+  message: string
+}
+
+export type ShopMutationSuccess = {
+  ok: true
+  shop: OpsShopSummary
+  slot: SlotSyncResult
+}
+
+export type ShopMutationResult = ShopMutationSuccess | ShopMutationFailure
+
+/** 端口唯一性。只比「启用中的店」：解绑的店保留端口占位没有意义。 */
+async function portTaken(port: number, exceptCode: string): Promise<string | null> {
+  const occupied = await prisma.ecomShop.findFirst({
+    where: { enabled: true, collectPort: port, code: { not: exceptCode } },
+    select: { code: true },
+  })
+  return occupied === null ? null : occupied.code
+}
+
+/**
+ * 绑定一家店。
+ *
+ * `syncRequestedAt` 在创建时就置为当前时刻，这是「绑定后自动同步」的触发点：
+ * 采集器的 `sync-shops.mjs` 轮询 `GET /api/ops/shops/pending`，看到这家店就
+ * 立刻跑一轮采集。**不在这里直接调采集器**，因为 API 可能跑在容器里，碰不到
+ * 宿主机的 Edge 与调试端口。
+ */
+export async function bindShop(input: unknown): Promise<ShopMutationResult> {
+  const validated = validateShopBindInput(input)
+  if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.message }
+  const value = validated.value
+
+  const existing = await prisma.ecomShop.findUnique({
+    where: { code: value.code },
+    select: { id: true, enabled: true },
+  })
+  if (existing !== null && existing.enabled) {
+    return {
+      ok: false,
+      reason: 'duplicate',
+      message: `店铺代号 ${value.code} 已被占用，换一个代号或先在列表里解绑`,
+    }
+  }
+
+  const takenBy = await portTaken(value.collectPort, value.code)
+  if (takenBy !== null) {
+    return {
+      ok: false,
+      reason: 'port_conflict',
+      message: `端口 ${value.collectPort} 已被店铺 ${takenBy} 使用`,
+    }
+  }
+
+  const now = new Date()
+  /* 同一个 code 之前解绑过时走「重新启用」，历史数据原地接上，不新建行。 */
+  const row =
+    existing === null
+      ? await prisma.ecomShop.create({
+          data: {
+            code: value.code,
+            name: value.name,
+            platform: value.platform,
+            sellerNick: value.sellerNick,
+            collectPort: value.collectPort,
+            boundAt: now,
+            loginState: 'unknown',
+            syncRequestedAt: now,
+          },
+          select: OPS_SHOP_SUMMARY_SELECT,
+        })
+      : await prisma.ecomShop.update({
+          where: { code: value.code },
+          data: {
+            name: value.name,
+            platform: value.platform,
+            sellerNick: value.sellerNick,
+            collectPort: value.collectPort,
+            enabled: true,
+            boundAt: now,
+            loginState: 'unknown',
+            loginCheckedAt: null,
+            lastSyncError: null,
+            syncRequestedAt: now,
+          },
+          select: OPS_SHOP_SUMMARY_SELECT,
+        })
+
+  /* 槽位写入失败不算绑定失败：库里已经有了，采集器下次读配置仍能按 code 采。 */
+  const slot = upsertSlot({ code: value.code, name: value.name, port: value.collectPort })
+
+  return { ok: true, shop: toOpsShopSummary(row), slot }
+}
+
+/**
+ * 修改店铺。只允许改名称、掌柜、端口、启用状态。
+ *
+ * 代号不可改：它同时是槽位键、采集目录名、ingest 的 upsert 键。改代号等于
+ * 把这家店的历史留在一个再也采不到的地方。
+ */
+export async function updateShop(code: string, patch: unknown): Promise<ShopMutationResult> {
+  const current = await prisma.ecomShop.findUnique({
+    where: { code },
+    select: {
+      code: true,
+      name: true,
+      platform: true,
+      sellerNick: true,
+      collectPort: true,
+      enabled: true,
+    },
+  })
+  if (current === null) {
+    return { ok: false, reason: 'not_found', message: `店铺 ${code} 不存在` }
+  }
+
+  const raw = typeof patch === 'object' && patch !== null ? (patch as Record<string, unknown>) : {}
+  const merged = {
+    code: current.code,
+    name: raw.name ?? current.name,
+    platform: current.platform,
+    sellerNick: raw.sellerNick === undefined ? current.sellerNick : raw.sellerNick,
+    collectPort: raw.collectPort ?? current.collectPort,
+  }
+  const validated = validateShopBindInput(merged)
+  if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.message }
+  const value = validated.value
+
+  const takenBy = await portTaken(value.collectPort, code)
+  if (takenBy !== null) {
+    return {
+      ok: false,
+      reason: 'port_conflict',
+      message: `端口 ${value.collectPort} 已被店铺 ${takenBy} 使用`,
+    }
+  }
+
+  const enabled = raw.enabled === undefined ? current.enabled : raw.enabled === true
+  const row = await prisma.ecomShop.update({
+    where: { code },
+    data: {
+      name: value.name,
+      sellerNick: value.sellerNick,
+      collectPort: value.collectPort,
+      enabled,
+    },
+    select: OPS_SHOP_SUMMARY_SELECT,
+  })
+
+  const slot = enabled
+    ? upsertSlot({ code, name: value.name, port: value.collectPort })
+    : disableSlot(code)
+
+  return { ok: true, shop: toOpsShopSummary(row), slot }
+}
+
+/** 解绑。软删，历史保留；槽位表的 collect 置 false 而不是删行。 */
+export async function unbindShop(code: string): Promise<ShopMutationResult> {
+  const current = await prisma.ecomShop.findUnique({ where: { code }, select: { id: true } })
+  if (current === null) {
+    return { ok: false, reason: 'not_found', message: `店铺 ${code} 不存在` }
+  }
+  const row = await prisma.ecomShop.update({
+    where: { code },
+    data: { enabled: false, syncRequestedAt: null },
+    select: OPS_SHOP_SUMMARY_SELECT,
+  })
+  return { ok: true, shop: toOpsShopSummary(row), slot: disableSlot(code) }
+}
+
+/**
+ * 请求立即同步。界面上那个「立即同步」按钮就调它。
+ *
+ * 只写一个时间戳，不等待采集结果：采集一轮要几十秒到几分钟，把它做成同步
+ * 请求会让界面长时间转圈，而且超时后无法区分「没采」与「采了但慢」。
+ */
+export async function requestShopSync(code: string): Promise<ShopMutationResult> {
+  const current = await prisma.ecomShop.findUnique({
+    where: { code },
+    select: { enabled: true },
+  })
+  if (current === null) {
+    return { ok: false, reason: 'not_found', message: `店铺 ${code} 不存在` }
+  }
+  if (!current.enabled) {
+    return { ok: false, reason: 'not_bound', message: `店铺 ${code} 已解绑，重新绑定后才能同步` }
+  }
+  const row = await prisma.ecomShop.update({
+    where: { code },
+    data: { syncRequestedAt: new Date(), lastSyncError: null },
+    select: OPS_SHOP_SUMMARY_SELECT,
+  })
+  return { ok: true, shop: toOpsShopSummary(row), slot: { kind: 'synced', path: '' } }
+}
+
+/**
+ * 采集器拉取待同步的店铺。
+ *
+ * 返回 code 而不是整行：采集器只需要知道「该跑哪家」，其余信息它从本地
+ * `shops.config.json` 取。让采集器依赖平台的数据形状，等于把两个进程的发布
+ * 绑在一起。
+ */
+export async function listPendingShopCodes(limit = 5): Promise<string[]> {
+  const rows = await prisma.ecomShop.findMany({
+    where: { enabled: true, syncRequestedAt: { not: null } },
+    orderBy: { syncRequestedAt: 'asc' },
+    take: Math.min(Math.max(limit, 1), 20),
+    select: { code: true },
+  })
+  return rows.map((row) => row.code)
+}
+
+export type ShopStateReportResult = { ok: true; shop: OpsShopSummary } | ShopMutationFailure
+
+/**
+ * 采集器回写登录态与失败原因。
+ *
+ * `clearSyncRequest` 为真时清空 `syncRequestedAt`。清空的条件由采集器判断：
+ * 只有「这一轮确实处理过这家店」才置真。崩溃时不置真，下一轮自动重试。
+ */
+export async function reportShopState(report: unknown): Promise<ShopStateReportResult> {
+  const validated = validateShopStateReport(report)
+  if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.message }
+  const value = validated.value
+
+  const current = await prisma.ecomShop.findUnique({
+    where: { code: value.code },
+    select: { id: true },
+  })
+  if (current === null) {
+    return { ok: false, reason: 'not_found', message: `店铺 ${value.code} 不存在` }
+  }
+
+  const row = await prisma.ecomShop.update({
+    where: { code: value.code },
+    data: {
+      loginState: value.loginState,
+      loginCheckedAt: new Date(),
+      lastSyncError: value.lastSyncError,
+      ...(value.collectedAt === null ? {} : { lastCollectedAt: new Date(value.collectedAt) }),
+      ...(value.clearSyncRequest ? { syncRequestedAt: null } : {}),
+    },
+    select: OPS_SHOP_SUMMARY_SELECT,
+  })
+  return { ok: true, shop: toOpsShopSummary(row) }
+}

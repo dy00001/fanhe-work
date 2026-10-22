@@ -17,7 +17,14 @@
  *      显示成 0，会让使用者据此做决策。
  */
 
-import type { OpsCollectStatus, OpsDimensionRow, OpsMetricSource } from '@fanhe/shared'
+import type {
+  OpsCollectStatus,
+  OpsCollectorStatus,
+  OpsDimensionRow,
+  OpsLoginState,
+  OpsMetricSource,
+  OpsShopSummary,
+} from '@fanhe/shared'
 
 /** 千分位 + 最多两位小数，去掉无意义的尾零。 */
 function groupNumber(value: number, digits = 0): string {
@@ -391,5 +398,120 @@ export function formatSummary(key: string, value: number | null): string | null 
       return formatPercent(value, 1)
     case 'second':
       return formatDuration(value)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 店铺绑定与同步状态
+// ---------------------------------------------------------------------------
+
+/**
+ * 这三条规则放在 `ops-display` 而不是单独开一个文件：它们要复用上面的
+ * `freshnessOf`，而前端测试用 `node --experimental-strip-types` 直接跑源码，
+ * 跨文件的相对导入（不带扩展名）在那种加载方式下解析不到。合成一份既省掉
+ * 一处重复的阈值定义，也让「同步状态」与「数据新鲜度」永远用同一套判据。
+ */
+
+export type ShopStateTone = 'ok' | 'warn' | 'error' | 'muted'
+
+export const LOGIN_STATE_META: Record<
+  OpsLoginState,
+  { label: string; tone: ShopStateTone; hint: string }
+> = {
+  /* `unknown` 不是错误态：刚绑定的店还没被采集器验过。用红色会让人去点一个
+     本来就不需要点的「重新登录」。 */
+  unknown: { label: '未校验', tone: 'muted', hint: '还没有采集器校验过这个浏览器里的登录态' },
+  authenticated: { label: '已登录', tone: 'ok', hint: '采集器最近一次校验通过' },
+  needs_login: {
+    label: '需重新登录',
+    tone: 'error',
+    hint: '采集浏览器里的登录态已失效，需要在采集浏览器里登录一次',
+  },
+}
+
+export type ShopSyncView = {
+  label: string
+  tone: ShopStateTone
+  /** 第二行说明，通常是时刻或失败原因。 */
+  detail: string
+}
+
+/**
+ * 同步状态。判定顺序是有意的：
+ *
+ *   1. **待处理优先。** 已经请求了同步、采集器还没来，此时哪怕上一次失败过，
+ *      显示的也该是「等待采集」，否则用户会立刻再点一次「立即同步」。
+ *   2. 其次看失败原因。
+ *   3. 最后看新鲜度。
+ */
+export function shopSyncView(shop: OpsShopSummary, now: Date): ShopSyncView {
+  if (shop.syncRequestedAt !== null) {
+    return {
+      label: '等待采集器',
+      tone: 'warn',
+      detail: `请求于 ${formatCollectedAt(shop.syncRequestedAt)}`,
+    }
+  }
+  if (shop.lastSyncError !== null && shop.lastSyncError !== '') {
+    return { label: '同步失败', tone: 'error', detail: shop.lastSyncError }
+  }
+  const freshness = freshnessOf(shop.lastCollectedAt, now)
+  if (freshness.level === 'none') {
+    return { label: '尚未同步', tone: 'muted', detail: '绑定后由采集器自动补齐' }
+  }
+  return {
+    label: freshness.label,
+    tone: freshness.level === 'fresh' ? 'ok' : 'warn',
+    detail: `上次采集 ${formatCollectedAt(shop.lastCollectedAt)}`,
+  }
+}
+
+/** 登录态的第二行：校验时刻。没有它，绿点看不出是今天验的还是上周验的。 */
+export function loginDetail(shop: OpsShopSummary): string {
+  if (shop.loginCheckedAt === null) return LOGIN_STATE_META[shop.loginState].hint
+  return `校验于 ${formatCollectedAt(shop.loginCheckedAt)}`
+}
+
+/** 端口与代号合成一行副标题，表格里省一列。 */
+export function shopSlotText(shop: OpsShopSummary): string {
+  const port = shop.collectPort === null ? '端口未登记' : `端口 ${shop.collectPort}`
+  return `${shop.code} · ${port}`
+}
+
+/**
+ * 采集器状态的一句话说明。
+ *
+ * 「离线」必须与「从未启动」分开：前者是进程掉了，后者是从来没人配过计划任务。
+ * 两者的下一步动作不同（重启 vs 第一次注册），而合并成一句「离线」会让人去重启
+ * 一个根本不存在的东西。
+ */
+export function collectorView(
+  status: OpsCollectorStatus | null,
+  now: Date,
+): { label: string; tone: ShopStateTone; detail: string } {
+  if (status === null) {
+    return { label: '采集器状态未知', tone: 'muted', detail: '店铺列表还没读回来' }
+  }
+  if (status.online) {
+    return {
+      label: '采集器在线',
+      tone: 'ok',
+      detail: `最后心跳 ${formatCollectedAt(status.lastSeenAt)}`,
+    }
+  }
+  if (status.lastSeenAt === null) {
+    return {
+      label: '采集器从未启动',
+      tone: 'error',
+      detail: '在采集机上运行 sync-shops.mjs --watch 60，否则「立即同步」不会被执行',
+    }
+  }
+  const hours = (now.getTime() - new Date(status.lastSeenAt).getTime()) / 3_600_000
+  return {
+    label: '采集器离线',
+    tone: 'warn',
+    detail: `最后心跳 ${formatCollectedAt(status.lastSeenAt)}${
+      Number.isFinite(hours) && hours >= 1 ? `（${Math.floor(hours)} 小时前）` : ''
+    }`,
   }
 }

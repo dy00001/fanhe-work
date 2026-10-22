@@ -21,6 +21,15 @@ import { requirePermission } from '../auth/guard.js'
 import { env } from '../config/env.js'
 import { isLoopbackAddress } from '../launch/loopback.js'
 import { ingestFailureMessage, ingestOpsSnapshot } from '../ops/ingest.js'
+import { readCollectorStatus, touchCollectorHeartbeat } from '../ops/collector-heartbeat.js'
+import {
+  bindShop,
+  listPendingShopCodes,
+  reportShopState,
+  requestShopSync,
+  unbindShop,
+  updateShop,
+} from '../ops/shop-binding.js'
 import {
   latestCoveredDate,
   latestCoveredDateAllShops,
@@ -374,11 +383,18 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     },
   )
 
+  /**
+   * 店铺列表 + 采集器状态。
+   *
+   * 采集器状态放在同一个响应里而不是单开一条接口：界面拿到店铺列表就要顺带回答
+   * 「点了立即同步有没有人接单」，分两次请求只会让这两件事有机会不一致。
+   */
   app.get(
     '/api/ops/shops',
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_READ) },
     async (_request, reply) => {
-      return reply.code(200).send({ shops: await listOpsShops() })
+      const [shops, collector] = await Promise.all([listOpsShops(), readCollectorStatus()])
+      return reply.code(200).send({ shops, collector })
     },
   )
 
@@ -409,6 +425,124 @@ export function registerOpsRoutes(app: FastifyInstance): void {
 
       const body: OpsIngestResponse = result.data
       return reply.code(201).send(body)
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // 店铺绑定
+  //
+  // 读接口（`GET /api/ops/shops`）在上面，权限是 `ops.shop.read`。
+  // 下面这几条都要求 `ops.shop.bind`：改采集配置与看数是两件事。
+  // -------------------------------------------------------------------------
+
+  /** 失败原因到状态码的映射。集中一处，避免每个 handler 各写一套。 */
+  const mutationStatus: Record<string, number> = {
+    invalid: 400,
+    duplicate: 409,
+    port_conflict: 409,
+    not_found: 404,
+    not_bound: 409,
+  }
+
+  app.post<{ Body: unknown }>(
+    '/api/ops/shops',
+    { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const result = await bindShop(request.body)
+      if (!result.ok) {
+        return reply
+          .code(mutationStatus[result.reason] ?? 400)
+          .send({ error: result.reason, message: result.message })
+      }
+      return reply.code(201).send({ shop: result.shop, slot: result.slot })
+    },
+  )
+
+  app.patch<{ Params: { code: string }; Body: unknown }>(
+    '/api/ops/shops/:code',
+    { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const result = await updateShop(request.params.code, request.body)
+      if (!result.ok) {
+        return reply
+          .code(mutationStatus[result.reason] ?? 400)
+          .send({ error: result.reason, message: result.message })
+      }
+      return reply.code(200).send({ shop: result.shop, slot: result.slot })
+    },
+  )
+
+  app.delete<{ Params: { code: string } }>(
+    '/api/ops/shops/:code',
+    { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const result = await unbindShop(request.params.code)
+      if (!result.ok) {
+        return reply
+          .code(mutationStatus[result.reason] ?? 400)
+          .send({ error: result.reason, message: result.message })
+      }
+      return reply.code(200).send({ shop: result.shop, slot: result.slot })
+    },
+  )
+
+  /**
+   * 请求立即同步。只置一个时间戳，采集器下一轮轮询会看到它。
+   *
+   * 不做成同步等待：一轮采集几十秒起，HTTP 等待会把「慢」与「失败」混在一起，
+   * 而这两件事在界面上要给完全不同的提示。
+   */
+  app.post<{ Params: { code: string } }>(
+    '/api/ops/shops/:code/sync',
+    { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const result = await requestShopSync(request.params.code)
+      if (!result.ok) {
+        return reply
+          .code(mutationStatus[result.reason] ?? 400)
+          .send({ error: result.reason, message: result.message })
+      }
+      return reply.code(202).send({ shop: result.shop })
+    },
+  )
+
+  /**
+   * 采集器拉取待同步店铺。
+   *
+   * 鉴权与 ingest 同一套（token + 回环）：这两条接口的调用方都是本机的采集进程，
+   * 不属于任何登录用户。走 `requirePermission` 反而无解 —— 计划任务没有会话。
+   */
+  app.get<{ Querystring: { limit?: number } }>('/api/ops/shops/pending', async (request, reply) => {
+    const denied = checkIngestAccess(request)
+    if (denied !== null) return reply.code(denied.status).send(denied.body)
+    /* 「有人来拉待办」就是心跳，不需要另开一条心跳接口。写失败不影响主流程。 */
+    await touchCollectorHeartbeat('http')
+    const limit = Number(request.query.limit ?? 5)
+    const codes = await listPendingShopCodes(Number.isFinite(limit) ? limit : 5)
+    return reply.code(200).send({ codes })
+  })
+
+  /** 采集器回写登录态与失败原因。语义见 `reportShopState` 的注释。 */
+  app.post<{ Params: { code: string }; Body: unknown }>(
+    '/api/ops/shops/:code/state',
+    async (request, reply) => {
+      const denied = checkIngestAccess(request)
+      if (denied !== null) return reply.code(denied.status).send(denied.body)
+      const body = {
+        ...(typeof request.body === 'object' && request.body !== null ? request.body : {}),
+        code: request.params.code,
+      }
+      const result = await reportShopState(body)
+      if (!result.ok) {
+        return reply
+          .code(mutationStatus[result.reason] ?? 400)
+          .send({ error: result.reason, message: result.message })
+      }
+      return reply.code(200).send({ shop: result.shop })
     },
   )
 }

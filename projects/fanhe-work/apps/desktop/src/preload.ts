@@ -67,6 +67,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 import type { UpdateStatus } from './update.js'
 import type { CredentialState, CredentialStatusResult } from './credential-vault.js'
+import type { ShopLoginResult } from './ops-shop-login.js'
 
 /**
  * 运行期的应用版本号（T7-05）。
@@ -359,6 +360,18 @@ const desktopBridge = Object.freeze({
    */
   deleteCredential: (profileId: string): Promise<CredentialWriteReply> =>
     ipcRenderer.invoke('credential:delete', { profileId }) as Promise<CredentialWriteReply>,
+  /**
+   * 打开采集浏览器的登录窗口（仅桌面壳）。
+   *
+   * 采集器脚本要起一个带调试端口的 Edge，容器里的 API 与浏览器页面都碰不到宿主机
+   * 进程，所以这条能力只在外壳里有意义。**入参只是一个店铺代号**，主进程会重新校验
+   * 它的形态（它要拼进命令行，前端校验不算边界）。
+   *
+   * 失败时返回 `collector_missing` 并带上手工命令 —— 安装包不含 `tools/collector`，
+   * 这在安装态是常态，界面要能把命令显示出来。
+   */
+  openShopLogin: (code: string): Promise<ShopLoginResult> =>
+    ipcRenderer.invoke('ops:shop-login', code) as Promise<ShopLoginResult>,
   /** 更新通道的当前状态。界面挂载时问一次，之后按需要重问。 */
   getUpdateStatus: (): Promise<UpdateStatus> =>
     ipcRenderer.invoke('update:status') as Promise<UpdateStatus>,

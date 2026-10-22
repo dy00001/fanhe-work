@@ -25,6 +25,7 @@ import { OpsMultiLineChart } from '../components/ops/OpsMultiLineChart'
 import { OpsPendingPanel } from '../components/ops/OpsPendingPanel'
 import { OpsRankList } from '../components/ops/OpsRankList'
 import { OpsSection } from '../components/ops/OpsSection'
+import { OpsShopBindingPanel } from '../components/ops/OpsShopBindingPanel'
 import { OpsShopStrip } from '../components/ops/OpsShopStrip'
 import { OpsSummaryGrid } from '../components/ops/OpsSummaryGrid'
 import { OpsToolbar } from '../components/ops/OpsToolbar'
@@ -249,6 +250,9 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
           </button>
         </div>
       </div>
+
+      {/* ── 店铺绑定与管理。默认收起，且只有持有 `ops.shop.bind` 的账号能看到。 ── */}
+      <OpsShopBindingPanel />
 
       {/* ── 时间条：整段快照页不提供区间控件（原型 snapshotBar） ── */}
       <OpsToolbar

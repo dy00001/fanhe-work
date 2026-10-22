@@ -26,7 +26,10 @@ import type {
   NoteResponse,
   OpsDashboardResponse,
   OpsHealthResponse,
+  OpsCollectorStatus,
+  OpsShopBindInput,
   OpsShopBoardsResponse,
+  OpsShopSummary,
   NoteTagListResponse,
   PermissionCatalogResponse,
   PermissionCode,
@@ -822,4 +825,72 @@ export function opsShopBoardsRequest(
     `/api/ops/overview-shops${queryString === '' ? '' : `?${queryString}`}`,
     { method: 'GET', accessToken, timeoutMs: OPS_READ_TIMEOUT_MS },
   )
+}
+
+// ---------------------------------------------------------------------------
+// 店铺绑定
+// ---------------------------------------------------------------------------
+
+export type OpsShopListResponse = {
+  shops: OpsShopSummary[]
+  /** 采集器状态。与店铺列表同一次响应，避免两处读到不一致的时点。 */
+  collector: OpsCollectorStatus
+}
+
+export type OpsShopMutationResponse = {
+  shop: OpsShopSummary
+  /** 槽位文件的写入结果。`manual` 时界面要把 `snippet` 显示出来。 */
+  slot?: { kind: 'synced'; path: string } | { kind: 'manual'; reason: string; snippet: string }
+}
+
+export function opsShopsRequest(accessToken: string): Promise<OpsShopListResponse> {
+  return request<OpsShopListResponse>('/api/ops/shops', {
+    method: 'GET',
+    accessToken,
+    timeoutMs: OPS_READ_TIMEOUT_MS,
+  })
+}
+
+export function bindOpsShopRequest(
+  accessToken: string,
+  input: OpsShopBindInput,
+): Promise<OpsShopMutationResponse> {
+  return request<OpsShopMutationResponse>('/api/ops/shops', {
+    method: 'POST',
+    accessToken,
+    body: input,
+  })
+}
+
+export function updateOpsShopRequest(
+  accessToken: string,
+  code: string,
+  patch: { name?: string; sellerNick?: string | null; collectPort?: number; enabled?: boolean },
+): Promise<OpsShopMutationResponse> {
+  return request<OpsShopMutationResponse>(`/api/ops/shops/${encodeURIComponent(code)}`, {
+    method: 'PATCH',
+    accessToken,
+    body: patch,
+  })
+}
+
+export function unbindOpsShopRequest(
+  accessToken: string,
+  code: string,
+): Promise<OpsShopMutationResponse> {
+  return request<OpsShopMutationResponse>(`/api/ops/shops/${encodeURIComponent(code)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+/** 请求立即同步。返回 202，只表示「信号已置」，不表示采完了。 */
+export function syncOpsShopRequest(
+  accessToken: string,
+  code: string,
+): Promise<{ shop: OpsShopSummary }> {
+  return request<{ shop: OpsShopSummary }>(`/api/ops/shops/${encodeURIComponent(code)}/sync`, {
+    method: 'POST',
+    accessToken,
+  })
 }

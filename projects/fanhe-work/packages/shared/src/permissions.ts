@@ -48,6 +48,11 @@ export const PERMISSIONS = {
   OPS_SHOP_READ: 'ops.shop.read',
   OPS_FINANCE_READ: 'ops.finance.read',
   OPS_COLLECT_READ: 'ops.collect.read',
+
+  // 绑定、改名、解绑、请求同步。与 `ops.shop.read` 分开的理由：读是看数，
+  // 写是改采集配置。把「能看五家店」等同于「能新增一家店并分配调试端口」，
+  // 等于让任何能看报表的人都能改动采集链路。
+  OPS_SHOP_BIND: 'ops.shop.bind',
 } as const
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -76,6 +81,7 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.OPS_SHOP_READ]: '进入运营看板并查看非金额指标',
   [PERMISSIONS.OPS_FINANCE_READ]: '查看运营看板中的金额类指标',
   [PERMISSIONS.OPS_COLLECT_READ]: '查看采集批次与数据新鲜度',
+  [PERMISSIONS.OPS_SHOP_BIND]: '绑定、修改与解绑店铺，请求立即同步',
 }
 
 export type PermissionMeta = {
@@ -161,6 +167,7 @@ export const ROLES: readonly RoleDefinition[] = [
       PERMISSIONS.OPS_SHOP_READ,
       PERMISSIONS.OPS_FINANCE_READ,
       PERMISSIONS.OPS_COLLECT_READ,
+      PERMISSIONS.OPS_SHOP_BIND,
     ],
   },
   {

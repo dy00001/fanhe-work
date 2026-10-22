@@ -22,6 +22,7 @@ import {
 
 import { prisma } from '../db/prisma.js'
 import type { PermissionCode } from '@fanhe/shared'
+import type { Prisma } from '../generated/prisma/client.js'
 import { fromDbDate, pickSnapshotIndex, toDbDate } from './date.js'
 
 /**
@@ -204,21 +205,10 @@ async function loadShop(shopCode: string | null): Promise<OpsShopSummary | null>
   const row = await prisma.ecomShop.findFirst({
     where: shopCode === null ? { enabled: true } : { code: shopCode },
     orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      platform: true,
-      sellerNick: true,
-      timezone: true,
-      lastCollectedAt: true,
-    },
+    select: OPS_SHOP_SUMMARY_SELECT,
   })
   if (row === null) return null
-  return {
-    ...row,
-    lastCollectedAt: row.lastCollectedAt === null ? null : row.lastCollectedAt.toISOString(),
-  }
+  return toOpsShopSummary(row)
 }
 
 /**
@@ -673,19 +663,12 @@ export async function loadOpsShopBoards(input: {
   const fromDate = toDbDate(input.range.from)
   const toDate = toDbDate(input.range.to)
 
-  const shops = await prisma.ecomShop.findMany({
+  const shopRows = await prisma.ecomShop.findMany({
     where: { enabled: true },
     orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      platform: true,
-      sellerNick: true,
-      timezone: true,
-      lastCollectedAt: true,
-    },
+    select: OPS_SHOP_SUMMARY_SELECT,
   })
+  const shops = shopRows.map(toOpsShopSummary)
 
   const rows =
     fromDate === null || toDate === null || shops.length === 0
@@ -733,10 +716,7 @@ export async function loadOpsShopBoards(input: {
     )
 
     return {
-      shop: {
-        ...shop,
-        lastCollectedAt: shop.lastCollectedAt === null ? null : shop.lastCollectedAt.toISOString(),
-      },
+      shop,
       hasData,
       coveredDays: daily.filter((row) => row.payAmountFen !== null || row.visitors !== null).length,
       payAmountFen: canReadFinance ? payAmount.sum : null,
@@ -793,22 +773,58 @@ export async function loadOpsHealth(
 }
 
 /** 店铺清单。多店接入前只有一个，界面用它渲染店铺选择器。 */
+/**
+ * 店铺投影的唯一 select。
+ *
+ * 看板列表与绑定入口读同一份：两处各写一份 select，迟早会出现「绑定页能看到
+ * 端口、看板列表看不到」这类字段漂移，而 TypeScript 不会报错（两处都是
+ * `OpsShopSummary` 的子集）。
+ */
+export const OPS_SHOP_SUMMARY_SELECT = {
+  id: true,
+  code: true,
+  name: true,
+  platform: true,
+  sellerNick: true,
+  timezone: true,
+  lastCollectedAt: true,
+  boundAt: true,
+  loginState: true,
+  loginCheckedAt: true,
+  collectPort: true,
+  syncRequestedAt: true,
+  lastSyncError: true,
+} as const
+
+type ShopSummaryRow = Prisma.EcomShopGetPayload<{ select: typeof OPS_SHOP_SUMMARY_SELECT }>
+
+const isoOrNull = (value: Date | null): string | null =>
+  value === null ? null : value.toISOString()
+
+/** 库行 → 对外投影。日期统一转 ISO，别让 `Date` 对象漏到 JSON 序列化层。 */
+export function toOpsShopSummary(row: ShopSummaryRow): OpsShopSummary {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    platform: row.platform,
+    sellerNick: row.sellerNick,
+    timezone: row.timezone,
+    lastCollectedAt: isoOrNull(row.lastCollectedAt),
+    boundAt: isoOrNull(row.boundAt),
+    loginState: row.loginState,
+    loginCheckedAt: isoOrNull(row.loginCheckedAt),
+    collectPort: row.collectPort,
+    syncRequestedAt: isoOrNull(row.syncRequestedAt),
+    lastSyncError: row.lastSyncError,
+  }
+}
+
 export async function listOpsShops(): Promise<OpsShopSummary[]> {
   const rows = await prisma.ecomShop.findMany({
     where: { enabled: true },
     orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      platform: true,
-      sellerNick: true,
-      timezone: true,
-      lastCollectedAt: true,
-    },
+    select: OPS_SHOP_SUMMARY_SELECT,
   })
-  return rows.map((row) => ({
-    ...row,
-    lastCollectedAt: row.lastCollectedAt === null ? null : row.lastCollectedAt.toISOString(),
-  }))
+  return rows.map(toOpsShopSummary)
 }

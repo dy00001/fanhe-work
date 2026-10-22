@@ -138,6 +138,24 @@ export type OpsShopSummary = {
    * 成功采过 —— 与「很久没采」是两件事，前者该引导去配置采集器。
    */
   lastCollectedAt: string | null
+
+  /**
+   * ---- 绑定状态。由绑定入口写入、采集器回写，界面只读。 ----
+   *
+   * 没有绑定过（种子或 ingest upsert 建出来的行）时 `boundAt` 为 null，
+   * 界面据此区分「登记过的占位店」与「真正绑定过的店」。
+   */
+  boundAt: string | null
+  /** 采集浏览器登录态。判据只有采集器一份，平台不猜。 */
+  loginState: OpsLoginState
+  /** 最近一次校验登录态的时刻。绿点旁边要显示这个时间，否则看不出是不是上周验的。 */
+  loginCheckedAt: string | null
+  /** 该店专属的 Edge 调试端口，与 `shops.config.json` 必须一致。 */
+  collectPort: number | null
+  /** 待处理的同步请求时刻。非空表示「已请求，采集器还没处理」。 */
+  syncRequestedAt: string | null
+  /** 最近一次同步失败的原因，成功后清空。 */
+  lastSyncError: string | null
 }
 
 /** 业务日区间，闭区间。两端都是 `YYYY-MM-DD`，不带时区。 */
@@ -423,4 +441,212 @@ export function clampOpsRange(range: OpsDateRange): OpsDateRange {
   if (days <= 0) return range
   if (days <= OPS_LIMITS.RANGE_MAX_DAYS) return range
   return { from: addOpsDays(range.to, -(OPS_LIMITS.RANGE_MAX_DAYS - 1)), to: range.to }
+}
+
+// ---------------------------------------------------------------------------
+// 店铺绑定
+// ---------------------------------------------------------------------------
+
+/**
+ * 采集浏览器登录态。与 Prisma 的 `OpsLoginState` 一一对应。
+ *
+ * 三档而非两档：`unknown` 是「还没验过」。刚绑定的店一进来就顶着
+ * 「需要重新登录」的红标，会让人去点一个本来没问题的按钮。
+ */
+export const OPS_LOGIN_STATES = ['unknown', 'authenticated', 'needs_login'] as const
+export type OpsLoginState = (typeof OPS_LOGIN_STATES)[number]
+
+export function isOpsLoginState(value: unknown): value is OpsLoginState {
+  return typeof value === 'string' && (OPS_LOGIN_STATES as readonly string[]).includes(value)
+}
+
+/**
+ * 店铺代号的字面规则。**必须与 `tools/collector/scripts/lib/shops.mjs` 的
+ * `CODE_RE` 完全一致** —— 两处不一致时，绑定入口能建出一条采集器读不出来的
+ * 槽位，表现是「绑定成功但永远没有数据」，且没有任何报错。
+ */
+export const OPS_SHOP_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
+
+/**
+ * 采集端口下限。9222 是 Chromium 调试端口的惯用起点，`shops.config.json` 的
+ * `basePort` 也从这里起。低于它的端口属于系统与常用服务，绑定入口不该占用。
+ */
+export const OPS_COLLECT_PORT_MIN = 9222
+export const OPS_COLLECT_PORT_MAX = 65535
+
+/** 绑定入口的入参。`collectPort` 由人给，不自动分配：自动分配会和手工配置的槽位撞车。 */
+export type OpsShopBindInput = {
+  code: string
+  name: string
+  platform: OpsPlatform
+  sellerNick?: string | null
+  collectPort: number
+}
+
+export type OpsShopBindValidated = {
+  code: string
+  name: string
+  platform: OpsPlatform
+  sellerNick: string | null
+  collectPort: number
+}
+
+export type OpsShopBindValidation =
+  { ok: true; value: OpsShopBindValidated } | { ok: false; message: string }
+
+/**
+ * 绑定入参校验。纯函数，便于反例测试。
+ *
+ * 只做「格式与范围」，不查重（查重要读库，属于路由层）。这一层拒绝的每一条都
+ * 对应一种会安静出事的情况：
+ *
+ *   - code 不合法 → 采集器 `loadShops()` 直接抛错，整个采集端起不来；
+ *   - name 含换行 → 写进 CSV 与 ingest 后会把一列拆成两行；
+ *   - 端口越界 → Edge 起不来，但进程退出码与「账号过期」不好区分。
+ */
+export function validateShopBindInput(input: unknown): OpsShopBindValidation {
+  if (typeof input !== 'object' || input === null) {
+    return { ok: false, message: '绑定参数必须是对象' }
+  }
+  const raw = input as Record<string, unknown>
+
+  const code = typeof raw.code === 'string' ? raw.code.trim() : ''
+  if (!OPS_SHOP_CODE_PATTERN.test(code)) {
+    return {
+      ok: false,
+      message: `店铺代号只能是小写字母、数字与连字符，且以字母或数字开头（最长 32 位）：${String(raw.code ?? '')}`,
+    }
+  }
+
+  const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+  if (name.length === 0 || name.length > OPS_LIMITS.SHOP_NAME_MAX) {
+    return { ok: false, message: `店铺名称需为 1 到 ${OPS_LIMITS.SHOP_NAME_MAX} 个字符` }
+  }
+  if (/[\r\n\t]/.test(name)) {
+    return { ok: false, message: '店铺名称不能包含换行或制表符' }
+  }
+
+  const platform = raw.platform
+  if (platform !== 'taobao' && platform !== 'tmall') {
+    return { ok: false, message: `暂不支持该平台：${String(platform ?? '')}` }
+  }
+
+  const sellerNick =
+    raw.sellerNick === undefined || raw.sellerNick === null ? null : String(raw.sellerNick).trim()
+  if (sellerNick !== null && sellerNick.length > 80) {
+    return { ok: false, message: '掌柜昵称最长 80 个字符' }
+  }
+
+  const port = Number(raw.collectPort)
+  if (!Number.isInteger(port) || port < OPS_COLLECT_PORT_MIN || port > OPS_COLLECT_PORT_MAX) {
+    return {
+      ok: false,
+      message: `采集端口必须是 ${OPS_COLLECT_PORT_MIN} 到 ${OPS_COLLECT_PORT_MAX} 之间的整数`,
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      code,
+      name,
+      platform,
+      sellerNick: sellerNick === '' ? null : sellerNick,
+      collectPort: port,
+    },
+  }
+}
+
+/**
+ * 采集器回写的店铺状态。
+ *
+ * `clearSyncRequest` 由采集器决定：只有「这一轮真的处理过这家店」才置真。
+ * 采集中途崩溃时不置真，下一轮会重试；反过来由平台按时间戳判断，会把一次
+ * 崩溃当成「已经处理过」，那家店就再也不会被自动拉起来。
+ */
+export type OpsShopStateReport = {
+  code: string
+  loginState: OpsLoginState
+  lastSyncError: string | null
+  collectedAt: string | null
+  clearSyncRequest: boolean
+}
+
+export type OpsShopStateReportValidation =
+  { ok: true; value: OpsShopStateReport } | { ok: false; message: string }
+
+export function validateShopStateReport(input: unknown): OpsShopStateReportValidation {
+  if (typeof input !== 'object' || input === null) {
+    return { ok: false, message: '状态上报必须是对象' }
+  }
+  const raw = input as Record<string, unknown>
+
+  const code = typeof raw.code === 'string' ? raw.code.trim() : ''
+  if (!OPS_SHOP_CODE_PATTERN.test(code)) {
+    return { ok: false, message: '店铺代号不合法' }
+  }
+  if (!isOpsLoginState(raw.loginState)) {
+    return { ok: false, message: `登录态取值不合法：${String(raw.loginState ?? '')}` }
+  }
+
+  const lastSyncError =
+    raw.lastSyncError === undefined || raw.lastSyncError === null
+      ? null
+      : String(raw.lastSyncError).slice(0, 500)
+  const collectedAt =
+    raw.collectedAt === undefined || raw.collectedAt === null ? null : String(raw.collectedAt)
+  if (collectedAt !== null && Number.isNaN(Date.parse(collectedAt))) {
+    return { ok: false, message: `采集时刻不是合法时间：${collectedAt}` }
+  }
+
+  return {
+    ok: true,
+    value: {
+      code,
+      loginState: raw.loginState,
+      lastSyncError: lastSyncError === '' ? null : lastSyncError,
+      collectedAt,
+      clearSyncRequest: raw.clearSyncRequest === true,
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 采集器心跳
+// ---------------------------------------------------------------------------
+
+/**
+ * 「在线」的判定窗口。
+ *
+ * 常驻轮询默认 60 秒一轮，取三倍即容忍两次丢拍（机器休眠唤醒、一次慢查询）。
+ * 再短会把正常的抖动显示成离线，而离线的提示会让人去重启一个没问题的进程。
+ */
+export const OPS_COLLECTOR_ONLINE_WINDOW_MS = 180_000
+
+/**
+ * 采集器状态。
+ *
+ * `lastSeenAt` 是「最近一次有人来拉待办」的时刻，不是「最近一次采集成功」的
+ * 时刻。两者分开是有意的：采集失败也会更新心跳，因为那证明有人在干活。
+ */
+export type OpsCollectorStatus = {
+  lastSeenAt: string | null
+  online: boolean
+}
+
+/**
+ * 纯函数：给最后心跳时刻与当前时刻，判断是否在线。
+ *
+ * 抽出来是为了能测边界（正好等于窗口、时钟倒退、非法时间串）。这些边界写错
+ * 不会报错，只会让「在线」这个灯常年亮着或者常年灭着。
+ */
+export function isCollectorOnline(lastSeenAt: string | null, nowMs: number): boolean {
+  if (lastSeenAt === null) return false
+  const seen = Date.parse(lastSeenAt)
+  if (Number.isNaN(seen)) return false
+  /* 时钟倒退（换了机器时间、NTP 校正）时差值为负，那说明心跳是「未来」的，
+     按在线处理：真实场景里它更可能是本机时钟被调过，而不是采集器撒谎。 */
+  const elapsed = nowMs - seen
+  if (elapsed < 0) return true
+  return elapsed <= OPS_COLLECTOR_ONLINE_WINDOW_MS
 }

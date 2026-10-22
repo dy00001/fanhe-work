@@ -143,5 +143,18 @@ interface Window {
     deleteCredential: (
       profileId: string,
     ) => Promise<{ ok: true } | { ok: false; reason: string; detail: string }>
+    /**
+     * 打开采集浏览器的登录窗口（桌面态）。结构见 `apps/desktop/src/ops-shop-login.ts`
+     * 的 `ShopLoginResult`。
+     *
+     * 失败时会带 `command`：安装包不含 `tools/collector`，`collector_missing` 在安装态
+     * 是常态，界面要能把手工命令显示出来，而不是给一个点了没反应的按钮。
+     */
+    openShopLogin: (
+      code: string,
+    ) => Promise<
+      | { ok: true; command: string }
+      | { ok: false; reason: string; message: string; command: string }
+    >
   }
 }
