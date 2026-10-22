@@ -111,13 +111,30 @@ API 跑在容器里时看不到宿主机仓库，这一步会返回 `manual` 并
 | 单轮 | `node scripts/sync-shops.mjs` | 手动补一次 |
 | 只看待办 | `node scripts/sync-shops.mjs --dry-run` | 排查「为什么没同步」 |
 
-注册成开机任务（Windows 计划任务，触发器选「登录时」，重复间隔 1 分钟亦可）：
+注册成开机任务（推荐，注册脚本会处理好 node 查找、单实例与日志）：
 
 ```
-schtasks /create /tn "fanhe-ops-sync-watch" /tr "cmd /c cd /d <仓库>\projects\fanhe-work\tools\collector && node scripts\sync-shops.mjs --watch 60" /sc onlogon /rl limited
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\collector\install-sync-task.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\collector\install-sync-task.ps1 -Status
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\collector\install-sync-task.ps1 -Remove
 ```
 
-两处必须对上，否则会出现「界面说在同步、采集器一直 401」这种静默失败：
+任务指向 `start-sync-watch.cmd` 而不是直接指向 node：查找 node、单实例守卫、日志轮转都在那个文件里，注册脚本只负责「什么时候启动它」。日志落在 `tools/collector/data/sync-watch.log`，超过 5 MB 轮转一份。
+
+### 为什么用「重复触发 + 实例互斥」而不是「失败重启」
+
+计划任务的「失败时重启」只覆盖调度器自己认定的失败。从外部杀掉进程（任务管理器、内存回收、误杀）之后任务停在 Ready，不会重启 —— 2026-10-23 实测过：杀掉后 `state=Ready`、`lastResult=4294967295`、没有任何 node 进程。
+
+所以改成：登录时触发一次，另加一个每分钟（默认 5 分钟）重复的触发器；任务设置「不启动新实例」。若采集器活着，新的启动尝试被调度器直接忽略；若它死了，下一次触发把它拉起来。实测：杀掉进程后 85 秒内自动出现新进程，`state` 回到 Running。
+
+两个细节容易踩：
+
+- **重复触发器不能挂在登录触发器上。** 那样设置会被存下来，但 `NextRunTime` 为空、实际不触发（实测）。必须额外建一个 Once 触发器让它一开始就生效。
+- **`tsx.cmd` 内部调的是裸 `node`。** 交互式终端里便携运行时的目录在 PATH 上，本地跑一切正常；由计划任务启动时 PATH 是系统基线，那里没有它，表现是「待办读不出来、心跳写不进去」，而界面上只显示「采集器离线」。`sync-shops.mjs` 已把当前 node 所在目录注入子进程 PATH，修的就是这一条。
+
+### 两处必须对上
+
+否则会出现「界面说在同步、采集器一直 401」这种静默失败：
 
 - **传输方式**：默认 `auto`。先试 HTTP，被拒则自动切 DB 直连（见下）。
 - **密钥**：`OPS_INGEST_TOKEN` 在容器栈的 `.env.compose` 里配置，脚本会先读环境变量、再读该文件。
