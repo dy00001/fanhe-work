@@ -140,8 +140,16 @@ if (!IS_DATE.test(targetDate)) {
  */
 const scanLog = new Map()
 
-/** 读目录下第一个文件名匹配的 JSON。没有返回 null；有但解析失败直接抛。 */
-function readFirst(module, pattern) {
+/**
+ * 读目录下第一个文件名匹配的 JSON。没有返回 null；有但解析失败直接抛。
+ *
+ * `accept` 可选，用来按内容再筛一遍。文件名匹配只说明「名字像」，同一页常返回
+ * 多个语义不同的接口，名字里都带同一个词 —— flow-overview 就是例子：实时退款
+ * 卡片的 `api_refund_live_overview` 和真正的流量总览 `new_guide_trend_overview`
+ * 都匹配 /overview\.json$/i，而前者按文件名排在最前，`data` 里却全是 null。
+ * 只靠文件名取第一个，取到哪个取决于这一趟页面加载了哪些模块，不可复现。
+ */
+function readFirst(module, pattern, accept) {
   const dir = path.join(dayDir, module)
   if (!fs.existsSync(dir)) {
     scanLog.set(module, { dirExists: false, files: [], pattern, matched: null })
@@ -159,6 +167,7 @@ function readFirst(module, pattern) {
     const raw = fs.readFileSync(file, 'utf8')
     try {
       const json = JSON.parse(raw)
+      if (accept !== undefined && !accept(json)) continue
       entry.matched = name
       return { file, name, json }
     } catch (error) {
@@ -246,7 +255,24 @@ function pageNote(module) {
 
 /* ── 1. 逐日与整段：flow-overview ─────────────────────────────────────── */
 
-const overview = readFirst('flow-overview', /overview\.json$/i)
+/* 总览接口按内容认，不按文件名认。
+   本页会同时出现「实时退款总览」（data.data 嵌一层，金额随当天实时值变，与目标日无关）
+   和「流量总览」（data 直接挂 uv / payAmt / payByrCnt）。只按名字取第一个会拿到前者，
+   于是四个指标全 null —— 而采集本身是成功的，看着像数据没采到。 */
+const overview = readFirst(
+  'flow-overview',
+  /overview\.json$/i,
+  (json) => {
+    const data = json?.data
+    return (
+      data !== null &&
+      typeof data === 'object' &&
+      !('data' in data) &&
+      'payAmt' in data &&
+      'uv' in data
+    )
+  },
+)
 const overviewData = overview === null ? null : (overview.json.data ?? null)
 const overviewDate =
   overviewData === null ? null : dateFromEpochMs(value(overviewData.statDate))

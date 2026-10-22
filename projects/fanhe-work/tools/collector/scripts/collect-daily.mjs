@@ -389,9 +389,41 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
          页内 location.href 复用当前渲染进程，健康时最快最稳（首轮 17 页跑出 168 个接口
          就是它）；但它会被今天的反复访问拖到退化，连 item-rank / qos-core 都只剩 2 个。
          全新标签 + Page.navigate 给的是干净渲染进程，退化时能立刻恢复满量。
-         /qos/** 是唯一例外 —— 直接开新标签会被路由守卫弹回数据概览首页，只能页内跳转。 */
-      const freshTab = attempt % 2 === 0 && !rawPath.startsWith('/qos/');
+         /qos/** 是唯一例外 —— 直接开新标签会被路由守卫弹回数据概览首页，只能页内跳转。
+         渠道页保持同一套交替策略，别单独给它强制新标签（实测会失败，见下）。 */
       let conn = ctrl, tmpTab = null;
+
+      /* 渠道页（/flow/monitor/shopsource/construction）的渠道树接口不是「页面一开就发」，
+         它取决于页面从本地存储恢复出来的筛选状态：
+           · 干净状态（首次初始化）→ 会请求 tree_platform_support，日增能更新渠道维度；
+           · 有历史状态 → 恢复成「商品流量」tab，只请求商品维度，渠道树一次都不发。
+         profile 长期复用，这份状态一直在，于是渠道榜停在 30 天回填值上，而采集日志天天是绿的。
+
+         2026-10-22 单页实测的三种组合（等待都是 55 秒）：
+           ① 清理 + 第1次页内跳转(1 接口 183B) + 第2次新标签 → 6 接口 82535B  ✅
+           ② 清理 + 两次都用新标签(3 接口 343B → 1 接口 183B)   → 失败
+           ③ 不清理 + 第1次页内跳转 + 第2次新标签(183B)         → 失败
+         结论：清理是必要的（③ 证明），但不充分（② 证明）；
+         并且第 1 次必须走页内跳转，把它改成新标签会把唯一成功过的组合搞坏。
+         所以这里只清存储，不动下面 freshTab 的交替策略。
+
+         机制没有完全查清：可能是页内跳转那一次让 SPA 框架先完整加载，
+         把页面需要的初始化状态补齐了，第 2 次新标签才跑得动。没有做更细的对照，
+         不要把它写成定论。只清 local_storage，不碰 cookie —— 登录态在 cookie 里。
+
+         ⚠️ 复测这一页等待必须 ≥55 秒。同一天先用 40 秒探针做过「新标签 / reload /
+         清 localStorage / 清 sessionStorage」四阶段对照，四个阶段全是 0 次渠道树，
+         据此误判清理无效、删过一次代码，后来靠单页回归才纠正回来。 */
+      const NEEDS_FRESH_STATE = new Set(['/flow/monitor/shopsource/construction']);
+      const needsFreshState = NEEDS_FRESH_STATE.has(rawPath);
+      if (needsFreshState){
+        try {
+          await ctrl.send('Storage.clearDataForOrigin', { origin: BASE, storageTypes: 'local_storage' });
+        } catch { /* 清理失败不阻断，缺接口会由下面的 missing 提示 */ }
+      }
+
+      const freshTab = attempt % 2 === 0 && !rawPath.startsWith('/qos/');
+
       try {
         if (freshTab){
           const t = JSON.parse((await req('PUT', '/json/new?' + encodeURIComponent('about:blank'))).body);
