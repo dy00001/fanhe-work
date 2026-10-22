@@ -19,10 +19,17 @@
     RestartCount only covers failures the scheduler itself reports. Killing the
     process from outside (Task Manager, an OOM kill, a stray Stop-Process) leaves
     the task in Ready with no restart -- verified on 2026-10-23: after the kill
-    the state was Ready and no node process existed. A repeat trigger plus
-    MultipleInstances=IgnoreNew turns the scheduler into a supervisor: every
-    RepeatMinutes it tries to start the launcher; if a watcher is alive the
-    launcher's guard exits immediately, if it died the new one takes over.
+    the state was Ready and no node process existed. Some console control events
+    end it the same way (exit code 0xC000013A, seen while heavy host commands
+    were running). A repeat trigger plus MultipleInstances=IgnoreNew turns the
+    scheduler into a supervisor: every RepeatMinutes it tries to start the
+    launcher; if a watcher is alive the scheduler skips the start entirely, if it
+    died the new one takes over.
+
+    Default is 1 minute, not 5: when the task is already running the scheduler
+    skips the start, so a tight interval costs nothing and caps downtime at one
+    minute. Five minutes of silence is enough to make the panel show "offline"
+    for no good reason.
 
   Settings worth knowing
     -ExecutionTimeLimit 0    a daemon must not be killed after the default 3 days
@@ -39,7 +46,7 @@
 [CmdletBinding()]
 param(
   [int]$Interval = 60,
-  [int]$RepeatMinutes = 5,
+  [int]$RepeatMinutes = 1,
   [switch]$Remove,
   [switch]$Status
 )

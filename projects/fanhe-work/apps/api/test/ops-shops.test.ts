@@ -43,6 +43,16 @@ process.env.OPS_INGEST_TOKEN = OPS_TOKEN
  * 一次 `pnpm test` 就会给采集器留一条 `zz-test-ops-bind` 槽位，而且 JSON 重新
  * 序列化会把整个文件的排版改掉。首版正是这样污染了真实配置。
  */
+/**
+ * 心跳也用独立主键。
+ *
+ * 真实那一行由常驻进程每分钟刷新；测试要把它改成过期时间来验离线，如果共用
+ * `watch`，`after` 里删掉的就是运行时状态，界面会立刻显示「采集器从未启动」。
+ * 首版就是这样，一次 `pnpm test` 之后自检说采集器没启动过。
+ */
+const HEARTBEAT_ID = 'zz-test-watch'
+process.env.OPS_HEARTBEAT_ID = HEARTBEAT_ID
+
 const SLOTS_FILE = path.join(os.tmpdir(), `fanhe-ops-slots-${process.pid}.json`)
 fs.writeFileSync(
   SLOTS_FILE,
@@ -119,9 +129,8 @@ describe('店铺绑定入口', { skip: reachable ? false : '数据库不可达�
     await app.close()
     await prisma.ecomShop.deleteMany({ where: { code: { in: [SHOP_CODE, OTHER_CODE] } } })
     if (userIds.length > 0) await prisma.user.deleteMany({ where: { id: { in: userIds } } })
-    /* 心跳是单行表，测试写进去之后不清掉，开发库的界面会一直显示「采集器在线」——
-       而那台机器上其实没有常驻进程。 */
-    await prisma.opsCollectorHeartbeat.deleteMany({ where: { id: 'watch' } })
+    /* 只清自己那行。共用 `watch` 会把运行时状态一起删掉（见文件头）。 */
+    await prisma.opsCollectorHeartbeat.deleteMany({ where: { id: HEARTBEAT_ID } })
     await prisma.loginAttempt.deleteMany({ where: { ip: TEST_IP } })
     await prisma.auditLog.deleteMany({ where: { ip: TEST_IP } })
     await prisma.$disconnect()
@@ -308,7 +317,7 @@ describe('店铺绑定入口', { skip: reachable ? false : '数据库不可达�
   test('心跳过期之后显示离线，但最后一次心跳时刻仍然保留', async () => {
     /* 直接把心跳改成 10 分钟前。窗口是 3 分钟，这条必然判离线。 */
     await prisma.opsCollectorHeartbeat.update({
-      where: { id: 'watch' },
+      where: { id: HEARTBEAT_ID },
       data: { lastSeenAt: new Date(Date.now() - 10 * 60 * 1000) },
     })
 

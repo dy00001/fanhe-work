@@ -28,8 +28,15 @@ import {
 
 import { prisma } from '../db/prisma.js'
 
-/** 单行表的固定主键。 */
-const HEARTBEAT_ID = 'watch'
+/**
+ * 单行表的主键。
+ *
+ * 允许用 `OPS_HEARTBEAT_ID` 换掉，只为集成测试：那条用例要写心跳、还要把它改成
+ * 过期时间来验离线，而真实运行时那一行由常驻进程每分钟刷新。测试直接写 'watch'
+ * 会在 `after` 里把生产行删掉 —— 界面随即显示「采集器从未启动」，而那台机器上
+ * 进程好端端跑着。换成独立 id 后，测试只碰自己那一行。
+ */
+const HEARTBEAT_ID = process.env.OPS_HEARTBEAT_ID?.trim() || 'watch'
 
 /** 记录一次心跳。`source` 是 `http` 或 `local`，仅用于排查。 */
 export async function touchCollectorHeartbeat(source: 'http' | 'local'): Promise<void> {
