@@ -171,12 +171,26 @@ function run(script, args) {
  */
 function runTsx(args) {
   const line = [TSX, ...args].map((item) => `"${item}"`).join(' ')
+  /**
+   * 把「当前这个 node 所在的目录」放到子进程 PATH 的最前面。
+   *
+   * `node_modules/.bin/tsx.cmd` 内部调的是裸 `node`，靠 PATH 找。交互式终端里
+   * 便携运行时的目录已经在 PATH 上，所以本地跑一直正常；而由计划任务启动时
+   * PATH 是系统基线，那里没有它 —— 表现是 `'node' 不是内部或外部命令`，
+   * 待办读不出来、心跳也写不进去，界面上只会显示「采集器离线」。
+   * 这不是「换个写法更保险」，是实测出来的必失败路径。
+   */
+  const nodeDir = path.dirname(process.execPath)
+  const childEnv = {
+    ...process.env,
+    PATH: `${nodeDir}${path.delimiter}${process.env.PATH ?? ''}`,
+  }
   return new Promise((resolve) => {
     const child = spawn(line, [], {
       cwd: API_DIR,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: childEnv,
     })
     let stdout = ''
     let stderr = ''

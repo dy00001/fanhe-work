@@ -51,6 +51,9 @@ tools/collector/data/raw*/
 # 采集器自己导出的入库契约与临时目录（可重生成）
 tools/collector/data/ingest/
 tools/collector/.tmp/
+# 常驻同步的运行日志：机器本地状态，可重新生成
+tools/collector/data/sync-watch.log*
+
 # 截图与报表：可重新生成
 tools/collector/preview/*.png
 tools/collector/output/*.xlsx
