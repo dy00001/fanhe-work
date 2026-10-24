@@ -12,10 +12,13 @@
 '   its cookies; under S4U the login state would silently look empty.
 '
 ' How it works
-'   WScript.Shell.Run with window style 0 hides the window; the False flag means
-'   "do not wait", so the task action returns at once while the launcher keeps
-'   running in the background. Arguments after the script name are forwarded to
-'   the launcher (the poll interval).
+'   The Run call uses window style 0 to hide the window. Its last flag is True:
+'   WAIT for the launcher to exit. That keeps the task itself in the Running
+'   state for as long as the watcher lives, which is what makes
+'   MultipleInstances=IgnoreNew meaningful -- otherwise every repeat trigger
+'   would start another launcher and pay for a guard check. When the watcher
+'   dies the task ends, and the next repeat trigger starts it again.
+'   Arguments after the script name are forwarded (the poll interval).
 Option Explicit
 Dim fso, shell, here, command
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -29,4 +32,4 @@ For index = 0 To WScript.Arguments.Count - 1
   command = command & " " & WScript.Arguments(index)
 Next
 
-shell.Run command, 0, False
+shell.Run command, 0, True
