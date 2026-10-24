@@ -492,6 +492,11 @@ describe('店铺归属与可见性', () => {
           select: { id: true },
         })
       ).id
+    /* 上一次跑挂掉时可能留下同名账号（username 唯一），先清掉。
+       不清会让这条用例偶发失败，而失败信息看起来像「归属逻辑坏了」。 */
+    await prisma.user.deleteMany({
+      where: { username: { in: [`zz-vis-a-${process.pid}`, `zz-vis-b-${process.pid}`] } },
+    })
     userA = await makeUser(`zz-vis-a-${process.pid}`)
     userB = await makeUser(`zz-vis-b-${process.pid}`)
 

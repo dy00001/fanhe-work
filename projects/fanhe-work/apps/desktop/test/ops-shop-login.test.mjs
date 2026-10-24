@@ -125,7 +125,10 @@ test('脚本存在时按固定参数启动，代号作为独立实参传入', as
     assert.match(inner, /-Shop fanhe-main/)
     assert.match(inner, /-Keep/, '不传 -Keep 时脚本检查完就关窗口，用户看到的是「没反应」')
     assert.match(inner, /-NoPrompt/, '没有控制台，Read-Host 会卡在看不见的提示上')
-    assert.equal(call.options.detached, true, '外壳退出不该杀掉等待扫码的浏览器')
+    /* detached 必须是 false。实测 2026-10-24：true 时 PowerShell 在 Windows 上
+       立刻以退出码 0 结束，一个字都不执行 —— 没有日志、没有浏览器，界面看起来
+       就是「点了没反应」。原先这里断言的是 true，把错误的假设钉进了用例。 */
+    assert.equal(call.options.detached, false, 'detached 会让脚本空跑退出')
     assert.equal(call.options.stdio, 'ignore')
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -312,7 +315,9 @@ test('脚本一直不退出要判超时，不能报成功', async () => {
     /* 真成功的话脚本早就以 0 或 3 退出了；一直不退出说明卡住了。
        报成功会让用户对着一个没出现的窗口干等。 */
     assert.equal(result.ok, false)
-    if (!result.ok) assert.match(result.message, /超时/)
+    /* 断言「说清了卡在哪」，而不是钉某个词：提示语会随诊断要点调整，
+       钉死措辞会让文案改进变成测试失败。 */
+    if (!result.ok) assert.match(result.message, /仍未结束|超时/)
     assert.equal(calls.length, 1)
     assert.equal(calls[0].options.windowsHide, true, '不要再弹一个命令行黑框')
     /* -File 配隐藏窗口会让脚本静默结束（实测），必须走 -Command 加输出重定向。 */

@@ -274,7 +274,10 @@ export function OpsShopBindingPanel() {
       /* 主进程要等到脚本真的跑出结果才返回（正常 8 到 15 秒），期间浏览器在校验
          登录态。不先给一句话，用户看到的就是「点了没反应」—— 那正是 0.3.2 修掉的
          那个症状，只是这回发生在等待阶段。 */
-      setNotice({ kind: 'ok', text: `正在启动「${shop.name}」的采集浏览器，请稍候…` })
+      setNotice({
+        kind: 'ok',
+        text: `正在启动「${shop.name}」的采集浏览器（通常 10 到 20 秒，首次启动可能更久）…`,
+      })
       setBusyCode(shop.code)
       let result
       try {

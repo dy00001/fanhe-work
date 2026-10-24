@@ -116,8 +116,14 @@ export function resolveShopLoginScript(
  * 脚本自己会轮询登录态并在成功后退场，把它做成同步等待会让 IPC 挂几分钟，
  * 而界面上只需要「窗口已经弹出来了」这一个事实。
  *
- * `detached` 是有意的：外壳被关掉时不该把正在等待扫码的浏览器一起杀掉 ——
- * 用户可能正是为了登录才打开外壳。
+ * **绝不能 detach。** 实测（2026-10-24）：`detached: true` 时 PowerShell 在 Windows
+ * 上会立刻以退出码 0 结束，一个字都不执行 —— 没有日志、没有浏览器，界面看起来
+ * 就是「点了没反应」。同一份命令改成 `detached: false` 立刻正常（退出码 3、Edge
+ * 起来）。0.3.2 与 0.3.3 都带着这个错，当时把原因误记成「`-File` 配隐藏窗口」。
+ *
+ * 原先 detach 的理由是「外壳关掉不该杀掉等待扫码的浏览器」，这个担心不成立：
+ * 脚本本身十几秒就退场，浏览器是它另起的独立进程；Windows 上非 detach 的子进程
+ * 也不会随父进程退出而被杀（Electron 没有把子进程放进 job object）。
  */
 /**
  * 可注入的启动器。
@@ -225,13 +231,21 @@ export async function openShopLogin(
     `*>&1 | Out-File -FilePath ${psQuote(logPath)} -Encoding UTF8; ` +
     `exit $LASTEXITCODE`
 
-  const SETTLE_MS = options.settleMs ?? 30000
+  /**
+   * 等待窗口。
+   *
+   * 脚本自己的最坏情况是：等调试端口 40 秒 + 等 profile 目录 10 秒 + 一次登录态
+   * 检查，合计五十多秒。窗口必须比它长，否则永远是「桌面端先超时、脚本后报错」，
+   * 用户拿不到脚本真正的原因。正常情况（已登录过的店）16 秒左右返回。
+   */
+  const SETTLE_MS = options.settleMs ?? 70000
 
   try {
     const child = spawnImpl(
       'powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', inner],
-      { detached: true, stdio: 'ignore', windowsHide: true },
+      /* detached 必须是 false：见上方注释，true 会让脚本一个字都不执行。 */
+      { detached: false, stdio: 'ignore', windowsHide: true },
     )
 
     const outcome = await new Promise<{ ok: boolean; message: string }>((resolve) => {
@@ -252,7 +266,7 @@ export async function openShopLogin(
           finish({
             ok: false,
             message:
-              '登录脚本超时未结束（超过 30 秒）。多数情况是启动被拦住了：安全软件、Edge 更新中，或调试端口被占用。若窗口其实已经出现，忽略这条提示即可；否则用下面的命令在仓库根手工执行。',
+              '登录脚本超过一分多钟仍未结束。多数情况是调试端口没起来：安全软件拦截、Edge 正在更新，或端口被别的进程占用。若窗口其实已经出现，忽略这条提示即可；否则用下面的命令在仓库根手工执行，它会打印卡在哪一步。',
           }),
         SETTLE_MS,
       )

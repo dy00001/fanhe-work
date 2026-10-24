@@ -72,6 +72,8 @@
  * 因此这里**刻意没有第四条 `credential:get`**。逻辑在 `credential-vault.ts`，本节只做
  * 接线；详细取舍见 `docs/LAUNCH-LOGIN-DESIGN-2026-10-15.md` §4。
  */
+import { appendFileSync } from 'node:fs'
+
 import { app, BrowserWindow, ipcMain, Menu, safeStorage, Tray, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { existsSync } from 'node:fs'
@@ -669,11 +671,37 @@ function registerLaunchIpc(): void {
       workspaceRoot,
     })
     if (collector.warning !== null) console.warn(`[ops] ${collector.warning}`)
-    return openShopLogin(code, {
+
+    const result = await openShopLogin(code, {
       workspaceRoot,
       collectorRoot: collector.root,
       configPath: collector.path === '' ? null : collector.path,
     })
+
+    /* 落一行日志。
+     *
+     * 这条日志是被迫加的：0.3.2 与 0.3.3 的「打开登录」点了没反应，而从外面完全
+     * 看不出发生过什么 —— 主进程的 console 在打包态没人看得到，脚本又因为没被
+     * 真正启动而没留下任何文件。事后只能靠猜。一行「调用了、参数是什么、结果
+     * 是什么」就能把这类问题从半天缩到一分钟。
+     *
+     * 写日志本身绝不能让功能失败：任何异常都吞掉。 */
+    try {
+      const logPath = join(app.getPath('userData'), 'ops-login.log')
+      const line =
+        [
+          new Date().toISOString(),
+          `code=${String(code)}`,
+          `script=${result.ok ? 'spawned' : result.reason}`,
+          `collectorRoot=${collector.root ?? '(none)'}`,
+          `result=${result.ok ? `ok note=${result.note ?? ''}` : result.message.slice(0, 200)}`,
+        ].join('\t') + '\n'
+      appendFileSync(logPath, line, 'utf8')
+    } catch {
+      /* 日志失败不影响返回。 */
+    }
+
+    return result
   })
 
   ipcMain.handle('launch:run', async (_event, payload: unknown) => {
