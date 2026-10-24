@@ -269,17 +269,26 @@ export function OpsShopBindingPanel() {
    */
   const openLogin = async (shop: OpsShopSummary) => {
     const command = `powershell -NoProfile -ExecutionPolicy Bypass -File tools\\collector\\scripts\\shop-login.ps1 -Shop ${shop.code}`
-    setNotice(null)
     const bridge = window.fanheDesktop
     if (currentHost() === 'desktop' && bridge?.openShopLogin !== undefined) {
-      const result = await bridge.openShopLogin(shop.code)
+      /* 主进程要等到脚本真的跑出结果才返回（正常 8 到 15 秒），期间浏览器在校验
+         登录态。不先给一句话，用户看到的就是「点了没反应」—— 那正是 0.3.2 修掉的
+         那个症状，只是这回发生在等待阶段。 */
+      setNotice({ kind: 'ok', text: `正在启动「${shop.name}」的采集浏览器，请稍候…` })
+      setBusyCode(shop.code)
+      let result
+      try {
+        result = await bridge.openShopLogin(shop.code)
+      } finally {
+        setBusyCode('')
+      }
       if (result.ok) {
         setNotice({
           kind: 'ok',
           text:
             result.note !== undefined && result.note !== ''
-              ? `「${shop.name}」：${result.note}登录完成后，登录态会被采集器读到并回写到这一行。`
-              : `已打开「${shop.name}」的采集浏览器。在里面登录生意参谋，登录态会被采集器读到并回写到这一行。`,
+              ? `「${shop.name}」：${result.note}登录完成后点上方「刷新」，这一行的登录态会更新。`
+              : `已打开「${shop.name}」的采集浏览器。在里面登录生意参谋，登录完成后点上方「刷新」。`,
         })
         return
       }
@@ -290,6 +299,7 @@ export function OpsShopBindingPanel() {
       })
       return
     }
+    setNotice({ kind: 'ok', text: '正在复制命令…' })
     try {
       await navigator.clipboard.writeText(command)
       setNotice({

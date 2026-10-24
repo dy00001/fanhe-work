@@ -111,8 +111,10 @@ test('脚本存在时按固定参数启动，代号作为独立实参传入', as
       spawnImpl,
       settleMs: 5,
     })
-    assert.equal(result.ok, true)
+    /* 这条用例只负责钉住启动参数。成功与否由退出码决定（另有专门用例），
+       这里用的是不会发事件的假 spawn，所以它会走超时分支。 */
     assert.equal(calls.length, 1)
+    assert.equal(result.ok, false, '没有退出码就该判超时')
 
     const call = calls[0]
     assert.equal(call.command, 'powershell.exe')
@@ -158,18 +160,17 @@ test('配置的采集器根目录能替代工作区：跨盘安装就靠它', as
       spawnImpl,
       settleMs: 5,
     })
-    assert.equal(result.ok, true, JSON.stringify(result))
-    assert.equal(calls.length, 1)
+    assert.equal(calls.length, 1, JSON.stringify(result))
 
     /* root 指向仓库根时也要认 —— 使用者填的大概率是仓库路径。 */
-    const byRepoRoot = await openShopLogin('s2', {
+    await openShopLogin('s2', {
       workspaceRoot: null,
       collectorRoot: root,
       platform: 'win32',
       spawnImpl,
       settleMs: 5,
     })
-    assert.equal(byRepoRoot.ok, true, '指向仓库根也要能找到脚本')
+    assert.equal(calls.length, 2, '指向仓库根也要能找到脚本（第二次调用应该也走到 spawn）')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -298,7 +299,7 @@ test('退出码 0 说明本来就是登录态，仍算成功', async () => {
   }
 })
 
-test('进程活着超过等待窗口才算启动成功', async () => {
+test('脚本一直不退出要判超时，不能报成功', async () => {
   const root = makeWorkspace(true)
   const { calls, spawnImpl } = controllableSpawn()
   try {
@@ -308,7 +309,10 @@ test('进程活着超过等待窗口才算启动成功', async () => {
       spawnImpl,
       settleMs: 20,
     })
-    assert.equal(result.ok, true)
+    /* 真成功的话脚本早就以 0 或 3 退出了；一直不退出说明卡住了。
+       报成功会让用户对着一个没出现的窗口干等。 */
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.match(result.message, /超时/)
     assert.equal(calls.length, 1)
     assert.equal(calls[0].options.windowsHide, true, '不要再弹一个命令行黑框')
     /* -File 配隐藏窗口会让脚本静默结束（实测），必须走 -Command 加输出重定向。 */
