@@ -118,11 +118,14 @@ export function OpsShopBindingPanel() {
         collectPort: Number(port),
       })
       const slot = result.slot
+      /* 槽位写不进文件在容器化部署下是常态，而这件事已经不由人做了：
+         常驻进程每轮会按库里的端口把缺失的槽位补进 shops.config.json。
+         所以这里说「下一轮补齐」，片段只作为兜底（那台机器上没有常驻任务时）。 */
       setNotice({
         kind: 'ok',
         text:
           slot?.kind === 'manual'
-            ? `已绑定「${result.shop.name}」，但采集槽位没能自动写入：${slot.reason}。把下面的片段手工加进 shops.config.json 的 shops 数组。`
+            ? `已绑定「${result.shop.name}」。采集器下一轮会把槽位补进 shops.config.json 并排进同步（通常一分钟内）；若这台机器上没有常驻任务，再手工加下面的片段。`
             : `已绑定「${result.shop.name}」，采集器下一轮轮询会把它排进同步（通常一分钟内）。`,
         ...(slot?.kind === 'manual' ? { snippet: slot.snippet } : {}),
       })

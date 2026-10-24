@@ -293,11 +293,55 @@ async function pendingCodes() {
   return Array.isArray(result.payload?.codes) ? result.payload.codes : []
 }
 
+/**
+ * 把库里已绑定、但槽位表里缺失或端口不一致的店铺补齐。
+ *
+ * 绑定入口在 API 侧也试着写槽位表，容器化之后它看不到宿主机文件，只能返回
+ * `manual` 让人手工粘贴。这一步把那件人工活儿接过来：库里有 `code` / `name` /
+ * `collect_port`，文件该长什么样是确定的，不需要人来抄。
+ *
+ * 幂等：`upsertSlot` 对已存在的行只更新 name/port，其余字段原样保留。所以每轮
+ * 都跑一次也不会有副作用，**只在真的写了东西时打日志**，避免每分钟刷一行。
+ */
+async function ensureSlots() {
+  const result = await runTsx([path.join('src', 'tools', 'ops-slot-ensure.ts')])
+  if (result.code !== 0) {
+    console.error(`[sync] 槽位补齐失败：${result.stderr.trim().slice(0, 300)}`)
+    return
+  }
+  const line = result.stdout.trim().split(/\r?\n/).pop() ?? ''
+  let parsed
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    console.error(`[sync] 槽位补齐输出无法解析：${line.slice(0, 200)}`)
+    return
+  }
+
+  const applied = Array.isArray(parsed?.applied) ? parsed.applied : []
+  if (applied.length > 0) {
+    console.log(`[sync] 已补齐采集槽位：${applied.join('、')}（${parsed.file}）`)
+  }
+
+  /* 找不到槽位表是正常形态（那台机器上没有仓库），提示一次就够，不必每轮重复。
+     端口冲突这类才是真问题，要说出来。 */
+  const skipped = Array.isArray(parsed?.skipped) ? parsed.skipped : []
+  for (const item of skipped) {
+    if (String(item.reason).includes('找不到槽位表')) continue
+    console.error(`[sync] 槽位未补齐 ${item.code}：${item.reason}`)
+  }
+}
+
 async function runOnce() {
-  if (TOKEN === '') {
-    console.error('[sync] 缺少 OPS_INGEST_TOKEN，无法访问采集接口')
+  /* 只有明确走 HTTP 时才需要密钥。DB 直连与 auto 都不需要：auto 会在被拒时
+     自动降级，把「没配密钥」当成致命错误会让本来能跑的机器直接停摆。 */
+  if (TRANSPORT === 'http' && TOKEN === '') {
+    console.error('[sync] 缺少 OPS_INGEST_TOKEN，HTTP 传输无法访问采集接口')
     return 3
   }
+
+  /* 先补槽位再拉待办：这一轮新建的店如果还没进文件，resolveShop 会失败。 */
+  await ensureSlots()
 
   const codes = await pendingCodes()
   if (codes === null) return 3
