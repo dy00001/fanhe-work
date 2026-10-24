@@ -16,6 +16,7 @@ import {
   LOGIN_STATE_META,
   collectorView,
   loginDetail,
+  needsPortRegistration,
   shopSlotText,
   shopSyncView,
 } from '../src/lib/ops-display.ts'
@@ -116,4 +117,12 @@ test('采集器状态：在线、从未启动、离线三态必须分开', () =>
   assert.equal(stale.tone, 'warn')
   assert.match(stale.label, /离线/)
   assert.match(stale.detail, /小时前/)
+})
+
+test('端口未登记要能被识别出来', () => {
+  /* 这条不只是文案问题：补槽位那条链路只处理「库里有端口」的店，
+     端口为空时它连碰都不碰，槽位丢了就补不回来。 */
+  assert.equal(needsPortRegistration({ collectPort: null }), true)
+  assert.equal(needsPortRegistration({}), true, '字段缺失也算没登记')
+  assert.equal(needsPortRegistration({ collectPort: 9222 }), false)
 })

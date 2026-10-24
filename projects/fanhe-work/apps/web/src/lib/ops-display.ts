@@ -515,3 +515,14 @@ export function collectorView(
     }`,
   }
 }
+
+/**
+ * 这家店是否还缺采集端口。
+ *
+ * 早期种子写进来的店没有 `collect_port`，界面显示「端口未登记」。这不只是难看：
+ * 补槽位那条链路只处理「库里有端口」的店，端口为空时它连碰都不碰，槽位丢了就
+ * 补不回来。所以界面要能一眼看出哪几家还欠这一步。
+ */
+export function needsPortRegistration(shop: OpsShopSummary): boolean {
+  return shop.collectPort === null || shop.collectPort === undefined
+}

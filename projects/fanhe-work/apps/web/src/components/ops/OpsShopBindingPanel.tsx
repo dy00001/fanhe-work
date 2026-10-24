@@ -12,11 +12,13 @@ import {
   loadOpsShops,
   requestOpsShopSync,
   unbindOpsShop,
+  updateOpsShop,
 } from '../../lib/ops-shops'
 import {
   LOGIN_STATE_META,
   collectorView,
   loginDetail,
+  needsPortRegistration,
   shopSlotText,
   shopSyncView,
   type ShopStateTone,
@@ -70,6 +72,8 @@ export function OpsShopBindingPanel() {
   const [shops, setShops] = useState<OpsShopSummary[] | null>(null)
   /* 采集器状态与列表同一次响应回来，所以两者永远描述同一个时点。 */
   const [collector, setCollector] = useState<OpsCollectorStatus | null>(null)
+  /* 补登记端口：一次只编辑一行，避免多行草稿与滚动位置互相干扰。 */
+  const [portEdit, setPortEdit] = useState<{ code: string; value: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -166,6 +170,38 @@ export function OpsShopBindingPanel() {
     try {
       await unbindOpsShop(shop.code)
       setNotice({ kind: 'ok', text: `已解绑「${shop.name}」，历史数据仍然保留。` })
+      await reload()
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeShopMutationError(error) })
+    } finally {
+      setBusyCode('')
+    }
+  }
+
+  /**
+   * 补登记端口。
+   *
+   * 为什么不让用户解绑再绑定：`POST /api/ops/shops` 对已启用的代号判重复，
+   * 而解绑会把槽位的 `collect` 置 false，再绑定才置回 true。为了填一个数字
+   * 走一遍关闭再打开，属于自己给自己制造故障窗口。
+   */
+  const savePort = async () => {
+    if (portEdit === null) return
+    const port = Number(portEdit.value.trim())
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      setNotice({ kind: 'error', text: '端口要是 1024 到 65535 之间的整数。' })
+      return
+    }
+    setBusyCode(portEdit.code)
+    setNotice(null)
+    try {
+      const result = await updateOpsShop(portEdit.code, { collectPort: port })
+      setNotice({
+        kind: 'ok',
+        text: `已补登记「${result.shop.name}」的端口 ${port}。采集器下一轮会把它写进槽位表。`,
+      })
+      setPortEdit(null)
+      setShops(null)
       await reload()
     } catch (error) {
       setNotice({ kind: 'error', text: describeShopMutationError(error) })
@@ -326,41 +362,86 @@ export function OpsShopBindingPanel() {
                           </div>
                         </td>
                         <td className="py-2">
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={busyCode !== ''}
-                              onClick={() => {
-                                void openLogin(shop)
-                              }}
-                            >
-                              <LogIn className="size-3.5" />
-                              打开登录
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={busyCode !== ''}
-                              onClick={() => {
-                                void sync(shop)
-                              }}
-                            >
-                              <Zap className="size-3.5" />
-                              立即同步
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={busyCode !== ''}
-                              onClick={() => {
-                                void unbind(shop)
-                              }}
-                            >
-                              <Trash2 className="size-3.5" />
-                              解绑
-                            </Button>
-                          </div>
+                          {portEdit?.code === shop.code ? (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                className="h-7 w-24"
+                                inputMode="numeric"
+                                placeholder="端口"
+                                value={portEdit.value}
+                                onChange={(event) => {
+                                  setPortEdit({ code: shop.code, value: event.target.value })
+                                }}
+                              />
+                              <Button
+                                size="sm"
+                                disabled={busyCode !== ''}
+                                onClick={() => {
+                                  void savePort()
+                                }}
+                              >
+                                保存
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setPortEdit(null)
+                                }}
+                              >
+                                取消
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              {needsPortRegistration(shop) ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={busyCode !== ''}
+                                  onClick={() => {
+                                    setPortEdit({ code: shop.code, value: '' })
+                                  }}
+                                >
+                                  <Link2 className="size-3.5" />
+                                  补登记端口
+                                </Button>
+                              ) : null}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={busyCode !== ''}
+                                onClick={() => {
+                                  void openLogin(shop)
+                                }}
+                              >
+                                <LogIn className="size-3.5" />
+                                打开登录
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={busyCode !== ''}
+                                onClick={() => {
+                                  void sync(shop)
+                                }}
+                              >
+                                <Zap className="size-3.5" />
+                                立即同步
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={busyCode !== ''}
+                                onClick={() => {
+                                  void unbind(shop)
+                                }}
+                              >
+                                <Trash2 className="size-3.5" />
+                                解绑
+                              </Button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )

@@ -333,6 +333,88 @@ describe('店铺绑定入口', { skip: reachable ? false : '数据库不可达�
     assert.notEqual(body.collector.lastSeenAt, null, '离线也要能显示「最后一次是什么时候」')
   })
 
+  test('补登记端口：不必解绑，库与槽位表同时更新', async () => {
+    /* 早期种子里进来的店没有 collect_port，界面显示「端口未登记」。为了填一个
+       数字去解绑再绑定，会把槽位的 collect 先置 false 再打开，属于自造故障窗口。 */
+    await prisma.ecomShop.update({ where: { code: SHOP_CODE }, data: { collectPort: null } })
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/ops/shops/${SHOP_CODE}`,
+      headers: auth(adminToken),
+      payload: { collectPort: 9403 },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+
+    const body = JSON.parse(response.body) as {
+      shop: { collectPort: number | null; enabled: boolean }
+      slot: { kind: string }
+    }
+    assert.equal(body.shop.collectPort, 9403, response.body)
+    assert.equal(body.slot.kind, 'synced', response.body)
+
+    /* 摘要里没有 enabled 字段，用「仍在列表里」证明没有被顺手解绑。 */
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/api/ops/shops',
+      headers: auth(adminToken),
+    })
+    const listBody = JSON.parse(listed.body) as { shops: Array<{ code: string }> }
+    assert.ok(
+      listBody.shops.some((item) => item.code === SHOP_CODE),
+      '补登记之后这家店必须还在启用列表里',
+    )
+
+    const row = await prisma.ecomShop.findUnique({
+      where: { code: SHOP_CODE },
+      select: { collectPort: true },
+    })
+    assert.equal(row?.collectPort, 9403, '库里必须真的写进去')
+
+    const slots = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8')) as {
+      shops: Array<{ code: string; port: number; collect: boolean }>
+    }
+    const slot = slots.shops.find((item) => item.code === SHOP_CODE)
+    assert.equal(slot?.port, 9403)
+    assert.equal(slot?.collect, true, '补登记之后采集器仍应采这家')
+  })
+
+  test('补登记时端口被别人占用要拒绝，并说清被谁占', async () => {
+    /* 必须真的造一个占位店：库里如果没有别的店用这个端口，200 才是正确结果，
+       那样这条用例就成了「什么都没验」。 */
+    await prisma.ecomShop.create({
+      data: {
+        code: OTHER_CODE,
+        name: '占位店',
+        platform: 'taobao',
+        collectPort: 9402,
+        enabled: true,
+        boundAt: new Date(),
+      },
+    })
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/ops/shops/${SHOP_CODE}`,
+      headers: auth(adminToken),
+      payload: { collectPort: 9402 },
+    })
+    assert.equal(response.statusCode, 409, response.body)
+    const body = JSON.parse(response.body) as { error: string; message: string }
+    assert.equal(body.error, 'port_conflict')
+    assert.match(body.message, new RegExp(OTHER_CODE))
+  })
+
+  test('补登记不存在的店返回 404', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/ops/shops/zz-not-there',
+      headers: auth(adminToken),
+      payload: { collectPort: 9404 },
+    })
+    assert.equal(response.statusCode, 404, response.body)
+  })
+
   test('解绑是软删：列表消失、行还在、重新绑定接上同一个 id', async () => {
     const before = await prisma.ecomShop.findUnique({
       where: { code: SHOP_CODE },
