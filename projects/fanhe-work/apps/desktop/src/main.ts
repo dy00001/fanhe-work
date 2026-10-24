@@ -109,6 +109,7 @@ import {
   tileWindows,
 } from './launch-login-click.js'
 import { createLaunchIconReader, normalizeIconPaths } from './launch-icon.js'
+import { resolveCollectorRoot } from './collector-config.js'
 import { openShopLogin } from './ops-shop-login.js'
 import { readRegistryInstallHints } from './launch-registry.js'
 import { agentUnavailableReport, checkLaunchDiagnostics } from './diagnostics.js'
@@ -660,9 +661,20 @@ function registerLaunchIpc(): void {
    * 都碰不到宿主机进程。找不到脚本（安装态常见）时返回 `collector_missing` 并带上
    * 手工命令，由界面展示 —— 点了没反应比「请自己跑这条命令」更糟。
    */
-  ipcMain.handle('ops:shop-login', async (_event, code: unknown) =>
-    openShopLogin(code, { workspaceRoot: findWorkspaceRoot(__dirname) }),
-  )
+  ipcMain.handle('ops:shop-login', async (_event, code: unknown) => {
+    const workspaceRoot = findWorkspaceRoot(__dirname)
+    /* 采集器根目录每次现读：改了 collector.json 不用重启外壳就能生效。 */
+    const collector = resolveCollectorRoot({
+      ...(app.isPackaged ? { configDir: app.getPath('userData') } : {}),
+      workspaceRoot,
+    })
+    if (collector.warning !== null) console.warn(`[ops] ${collector.warning}`)
+    return openShopLogin(code, {
+      workspaceRoot,
+      collectorRoot: collector.root,
+      configPath: collector.path === '' ? null : collector.path,
+    })
+  })
 
   ipcMain.handle('launch:run', async (_event, payload: unknown) => {
     const loaded = await loadLaunchAgent()

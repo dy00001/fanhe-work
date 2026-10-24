@@ -24,9 +24,16 @@ import { openShopLogin, resolveShopLoginScript, shopLoginCommand } from '../src/
 function makeWorkspace(withScript) {
   const root = mkdtempSync(join(tmpdir(), 'fanhe-ws-'))
   if (withScript) {
-    const dir = join(root, 'projects', 'fanhe-work', 'tools', 'collector', 'scripts')
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'shop-login.ps1'), '# stub', 'utf8')
+    /* 两种形状都造：工作区根的相对路径（projects/fanhe-work/...）与
+       仓库根的形状（tools/collector/...）。使用者的 collector.json 可能填
+       任意一种，测试要覆盖到。 */
+    for (const dir of [
+      join(root, 'projects', 'fanhe-work', 'tools', 'collector', 'scripts'),
+      join(root, 'tools', 'collector', 'scripts'),
+    ]) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'shop-login.ps1'), '# stub', 'utf8')
+    }
   }
   return root
 }
@@ -130,4 +137,50 @@ test('脚本路径解析只认工作区根下的固定位置', () => {
     rmSync(root, { recursive: true, force: true })
   }
   assert.equal(resolveShopLoginScript(null), null)
+})
+
+test('配置的采集器根目录能替代工作区：跨盘安装就靠它', async () => {
+  /* 这条对应 2026-10-24 的真实故障：安装目录在 D 盘、工作区在 E 盘，
+     沿安装目录向上找 .ws-root 必然断，界面只能显示「当前安装没有采集器脚本」。 */
+  const root = makeWorkspace(true)
+  const { calls, spawnImpl } = recordingSpawn()
+  try {
+    const result = await openShopLogin('s2', {
+      workspaceRoot: null,
+      collectorRoot: join(root, 'projects', 'fanhe-work', 'tools', 'collector'),
+      platform: 'win32',
+      spawnImpl,
+    })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(calls.length, 1)
+
+    /* root 指向仓库根时也要认 —— 使用者填的大概率是仓库路径。 */
+    const byRepoRoot = await openShopLogin('s2', {
+      workspaceRoot: null,
+      collectorRoot: root,
+      platform: 'win32',
+      spawnImpl,
+    })
+    assert.equal(byRepoRoot.ok, true, '指向仓库根也要能找到脚本')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('脚本缺失时，提示里带采集器配置文件的落位', async () => {
+  const { calls, spawnImpl } = recordingSpawn()
+  const result = await openShopLogin('s2', {
+    workspaceRoot: null,
+    collectorRoot: 'E:/not-a-collector',
+    configPath: 'C:/Users/dy/AppData/Roaming/梵禾 Work/collector.json',
+    platform: 'win32',
+    spawnImpl,
+  })
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, 'collector_missing')
+  assert.match(result.message, /collector\.json/)
+  assert.match(result.message, /AppData/)
+  assert.equal(result.configPath, 'C:/Users/dy/AppData/Roaming/梵禾 Work/collector.json')
+  assert.equal(calls.length, 0)
 })

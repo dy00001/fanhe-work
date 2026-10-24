@@ -150,11 +150,16 @@ interface Window {
      * 失败时会带 `command`：安装包不含 `tools/collector`，`collector_missing` 在安装态
      * 是常态，界面要能把手工命令显示出来，而不是给一个点了没反应的按钮。
      */
-    openShopLogin: (
-      code: string,
-    ) => Promise<
+    openShopLogin: (code: string) => Promise<
       | { ok: true; command: string }
-      | { ok: false; reason: string; message: string; command: string }
+      | {
+          ok: false
+          reason: string
+          message: string
+          command: string
+          /** 采集器配置文件该放哪；界面据此告诉用户写哪个文件。 */
+          configPath: string | null
+        }
     >
   }
 }
