@@ -90,8 +90,14 @@ API 跑在容器里时看不到宿主机仓库，这一步会返回 `manual` 并
 | --- | --- | --- |
 | 绑定即同步 | 绑定成功后 1 分钟内 | 采集器轮询到 `syncRequestedAt` 就排进这一轮 |
 | 手动同步 | 点「立即同步」 | 只置时间戳，不等待结果；界面显示「等待采集器」 |
-| 每日定时 | 每天固定时刻 | 由计划任务跑 `run-daily.ps1` 或 `sync-shops.mjs` |
+| 每日定时 | 每天固定时刻 | 由计划任务跑 `run-daily.ps1` 或 `sync-shops.mjs`，两者都会回写状态 |
 | 补采 | 人为指定日期 | `--date` 参数 |
+
+两个执行者都要回写，否则界面会与现实脱节：`run-daily.ps1` 成功之后调 `scripts/report-synced.ps1`，清待办、记登录态、刷新心跳（失败时不写，免得把失败记成成功）。手工采过之后也可以用同一条命令补记：
+
+```
+powershell -ExecutionPolicy Bypass -File tools\collector\scripts\report-synced.ps1 -Shop <code>
+```
 
 **不承诺实时。** 生意参谋的日指标是 T+1，页面上本来就没有当天的最终值。任何方案都突破不了这条线，所以界面文案写「上次采集」，不写「实时」。
 
