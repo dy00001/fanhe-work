@@ -24,7 +24,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export type SlotSyncResult =
-  { kind: 'synced'; path: string } | { kind: 'manual'; reason: string; snippet: string }
+  | { kind: 'synced'; path: string; changed: boolean }
+  | { kind: 'manual'; reason: string; snippet: string }
 
 type SlotInput = {
   code: string
@@ -115,6 +116,14 @@ export function upsertSlot(input: SlotInput, startDir?: string): SlotSyncResult 
 
   const existing = shops.find((shop) => shop.code === input.code)
   if (existing !== undefined) {
+    /* 值没变就不写。**这条不是优化，是防抖**：常驻进程每轮都会调一次本函数，
+       无条件写会让文件每分钟被重写若干次（每店一次），mtime 一直在变，任何
+       监听这个文件的编辑器或同步工具都会跟着抖动。顺带避免了 `JSON.stringify`
+       把人工排版的单行对象展开成多行 —— 那会让 git 里出现一堆格式 diff。 */
+    const unchanged = existing.name === input.name && Number(existing.port) === input.port
+    if (unchanged && existing.collect !== undefined) {
+      return { kind: 'synced', path: file, changed: false }
+    }
     existing.name = input.name
     existing.port = input.port
     if (existing.collect === undefined) existing.collect = true
@@ -134,7 +143,7 @@ export function upsertSlot(input: SlotInput, startDir?: string): SlotSyncResult 
     const tmp = `${file}.tmp`
     fs.writeFileSync(tmp, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
     fs.renameSync(tmp, file)
-    return { kind: 'synced', path: file }
+    return { kind: 'synced', path: file, changed: true }
   } catch (error) {
     return {
       kind: 'manual',
@@ -166,14 +175,14 @@ export function disableSlot(code: string, startDir?: string): SlotSyncResult {
   }
   const shops = Array.isArray(parsed.shops) ? (parsed.shops as Array<Record<string, unknown>>) : []
   const target = shops.find((shop) => shop.code === code)
-  if (target === undefined) return { kind: 'synced', path: file }
+  if (target === undefined) return { kind: 'synced', path: file, changed: false }
   target.collect = false
   target.state = 'disabled'
   try {
     const tmp = `${file}.tmp`
     fs.writeFileSync(tmp, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
     fs.renameSync(tmp, file)
-    return { kind: 'synced', path: file }
+    return { kind: 'synced', path: file, changed: true }
   } catch (error) {
     return {
       kind: 'manual',

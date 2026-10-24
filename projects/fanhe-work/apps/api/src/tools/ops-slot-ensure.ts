@@ -40,6 +40,7 @@ const shops = await prisma.ecomShop.findMany({
 
 const file = findSlotsFile()
 const applied: string[] = []
+const unchanged: string[] = []
 const skipped: Array<{ code: string; reason: string }> = []
 
 if (file === null) {
@@ -60,9 +61,15 @@ if (file === null) {
 for (const shop of shops) {
   if (shop.collectPort === null) continue
   const result = upsertSlot({ code: shop.code, name: shop.name, port: shop.collectPort })
-  if (result.kind === 'synced') applied.push(shop.code)
-  else skipped.push({ code: shop.code, reason: result.reason })
+  if (result.kind !== 'synced') {
+    skipped.push({ code: shop.code, reason: result.reason })
+    continue
+  }
+  /* 区分「写了」与「本来就对」：调用方只在真写了的时候打日志，
+     否则每分钟一条「已补齐」会把日志刷满。 */
+  if (result.changed) applied.push(shop.code)
+  else unchanged.push(shop.code)
 }
 
-console.log(JSON.stringify({ applied, skipped, file }))
+console.log(JSON.stringify({ applied, unchanged, skipped, file }))
 await prisma.$disconnect()

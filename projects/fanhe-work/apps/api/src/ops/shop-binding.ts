@@ -218,7 +218,13 @@ export async function requestShopSync(code: string): Promise<ShopMutationResult>
     data: { syncRequestedAt: new Date(), lastSyncError: null },
     select: OPS_SHOP_SUMMARY_SELECT,
   })
-  return { ok: true, shop: toOpsShopSummary(row), slot: { kind: 'synced', path: '' } }
+  /* 「立即同步」不碰槽位表，所以这里的 slot 是一个占位：kind 用 synced 表示
+     「没有槽位问题需要处理」，path 留空。changed 恒为 false。 */
+  return {
+    ok: true,
+    shop: toOpsShopSummary(row),
+    slot: { kind: 'synced', path: '', changed: false },
+  }
 }
 
 /**
