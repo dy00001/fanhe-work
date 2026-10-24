@@ -20,12 +20,17 @@
 import { validateShopBindInput, validateShopStateReport, type OpsShopSummary } from '@fanhe/shared'
 
 import { prisma } from '../db/prisma.js'
-import { OPS_SHOP_SUMMARY_SELECT, toOpsShopSummary } from './query.js'
+import {
+  OPS_SHOP_SUMMARY_SELECT,
+  isShopVisible,
+  toOpsShopSummary,
+  type OpsShopViewer,
+} from './query.js'
 import { disableSlot, upsertSlot, type SlotSyncResult } from './shop-slots.js'
 
 export type ShopMutationFailure = {
   ok: false
-  reason: 'invalid' | 'duplicate' | 'port_conflict' | 'not_found' | 'not_bound'
+  reason: 'invalid' | 'duplicate' | 'port_conflict' | 'not_found' | 'not_bound' | 'forbidden'
   message: string
 }
 
@@ -54,7 +59,7 @@ async function portTaken(port: number, exceptCode: string): Promise<string | nul
  * 立刻跑一轮采集。**不在这里直接调采集器**，因为 API 可能跑在容器里，碰不到
  * 宿主机的 Edge 与调试端口。
  */
-export async function bindShop(input: unknown): Promise<ShopMutationResult> {
+export async function bindShop(input: unknown, actorUserId: string): Promise<ShopMutationResult> {
   const validated = validateShopBindInput(input)
   if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.message }
   const value = validated.value
@@ -94,6 +99,8 @@ export async function bindShop(input: unknown): Promise<ShopMutationResult> {
             boundAt: now,
             loginState: 'unknown',
             syncRequestedAt: now,
+            /* 谁绑的归谁。公共店留给种子与导入，绑定入口一律记人。 */
+            ownerId: actorUserId,
           },
           select: OPS_SHOP_SUMMARY_SELECT,
         })
@@ -126,7 +133,14 @@ export async function bindShop(input: unknown): Promise<ShopMutationResult> {
  * 代号不可改：它同时是槽位键、采集目录名、ingest 的 upsert 键。改代号等于
  * 把这家店的历史留在一个再也采不到的地方。
  */
-export async function updateShop(code: string, patch: unknown): Promise<ShopMutationResult> {
+export async function updateShop(
+  code: string,
+  patch: unknown,
+  viewer: OpsShopViewer,
+): Promise<ShopMutationResult> {
+  if (!(await isShopVisible(code, viewer))) {
+    return { ok: false, reason: 'forbidden', message: `店铺 ${code} 不在你的可见范围内` }
+  }
   const current = await prisma.ecomShop.findUnique({
     where: { code },
     select: {
@@ -136,6 +150,7 @@ export async function updateShop(code: string, patch: unknown): Promise<ShopMuta
       sellerNick: true,
       collectPort: true,
       enabled: true,
+      ownerId: true,
     },
   })
   if (current === null) {
@@ -143,6 +158,27 @@ export async function updateShop(code: string, patch: unknown): Promise<ShopMuta
   }
 
   const raw = typeof patch === 'object' && patch !== null ? (patch as Record<string, unknown>) : {}
+
+  /* 改归属：只接受 null（设为公共）或一个存在的账号 id。不校验存在性会让库里
+     留下一个指向空账号的归属，那家店此后对非管理员彻底不可见。 */
+  let nextOwnerId = current.ownerId
+  if (raw.ownerId !== undefined) {
+    if (raw.ownerId === null) {
+      nextOwnerId = null
+    } else if (typeof raw.ownerId === 'string' && raw.ownerId !== '') {
+      const owner = await prisma.user.findUnique({
+        where: { id: raw.ownerId },
+        select: { id: true },
+      })
+      if (owner === null) {
+        return { ok: false, reason: 'invalid', message: `归属账号 ${raw.ownerId} 不存在` }
+      }
+      nextOwnerId = owner.id
+    } else {
+      return { ok: false, reason: 'invalid', message: 'ownerId 只能是账号 id 或 null' }
+    }
+  }
+
   const merged = {
     code: current.code,
     name: raw.name ?? current.name,
@@ -171,6 +207,7 @@ export async function updateShop(code: string, patch: unknown): Promise<ShopMuta
       sellerNick: value.sellerNick,
       collectPort: value.collectPort,
       enabled,
+      ownerId: nextOwnerId,
     },
     select: OPS_SHOP_SUMMARY_SELECT,
   })
@@ -183,7 +220,10 @@ export async function updateShop(code: string, patch: unknown): Promise<ShopMuta
 }
 
 /** 解绑。软删，历史保留；槽位表的 collect 置 false 而不是删行。 */
-export async function unbindShop(code: string): Promise<ShopMutationResult> {
+export async function unbindShop(code: string, viewer: OpsShopViewer): Promise<ShopMutationResult> {
+  if (!(await isShopVisible(code, viewer))) {
+    return { ok: false, reason: 'forbidden', message: `店铺 ${code} 不在你的可见范围内` }
+  }
   const current = await prisma.ecomShop.findUnique({ where: { code }, select: { id: true } })
   if (current === null) {
     return { ok: false, reason: 'not_found', message: `店铺 ${code} 不存在` }
@@ -202,7 +242,13 @@ export async function unbindShop(code: string): Promise<ShopMutationResult> {
  * 只写一个时间戳，不等待采集结果：采集一轮要几十秒到几分钟，把它做成同步
  * 请求会让界面长时间转圈，而且超时后无法区分「没采」与「采了但慢」。
  */
-export async function requestShopSync(code: string): Promise<ShopMutationResult> {
+export async function requestShopSync(
+  code: string,
+  viewer: OpsShopViewer,
+): Promise<ShopMutationResult> {
+  if (!(await isShopVisible(code, viewer))) {
+    return { ok: false, reason: 'forbidden', message: `店铺 ${code} 不在你的可见范围内` }
+  }
   const current = await prisma.ecomShop.findUnique({
     where: { code },
     select: { enabled: true },

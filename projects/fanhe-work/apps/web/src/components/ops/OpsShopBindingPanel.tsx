@@ -1,9 +1,10 @@
 import { PERMISSIONS, type OpsCollectorStatus, type OpsShopSummary } from '@fanhe/shared'
 import { ChevronDown, ChevronRight, Link2, LogIn, RefreshCw, Trash2, Zap } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { useAuth } from '../../auth/useAuth'
 import { currentHost } from '../../lib/host'
+import { loadManagedUsers } from '../../lib/system-users'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import {
@@ -74,6 +75,11 @@ export function OpsShopBindingPanel() {
   const [collector, setCollector] = useState<OpsCollectorStatus | null>(null)
   /* 补登记端口：一次只编辑一行，避免多行草稿与滚动位置互相干扰。 */
   const [portEdit, setPortEdit] = useState<{ code: string; value: string } | null>(null)
+  /**
+   * 可选的归属账号。只有持 `system.user.read` 的账号能拉这份名单；
+   * 拉不到就退化成纯文本显示，不阻断任何其他操作。
+   */
+  const [owners, setOwners] = useState<readonly { id: string; displayName: string }[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -84,6 +90,24 @@ export function OpsShopBindingPanel() {
   const [port, setPort] = useState('')
   const [sellerNick, setSellerNick] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const canAssignOwner = can(PERMISSIONS.SYSTEM_USER_READ)
+
+  useEffect(() => {
+    if (!canAssignOwner) return
+    let alive = true
+    void loadManagedUsers()
+      .then((users) => {
+        if (alive) setOwners(users.map((user) => ({ id: user.id, displayName: user.displayName })))
+      })
+      .catch(() => {
+        /* 名单拉不到不影响主流程：归属只读显示。 */
+        if (alive) setOwners(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [canAssignOwner])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -202,6 +226,32 @@ export function OpsShopBindingPanel() {
       })
       setPortEdit(null)
       setShops(null)
+      await reload()
+    } catch (error) {
+      setNotice({ kind: 'error', text: describeShopMutationError(error) })
+    } finally {
+      setBusyCode('')
+    }
+  }
+
+  /**
+   * 改归属。null 表示设为公共。
+   *
+   * 归属只决定「谁能看到」，不影响采集与权限：改成一个不看店的账号，店还在采，
+   * 只是界面上少一个人能看到它。
+   */
+  const changeOwner = async (shop: OpsShopSummary, ownerId: string | null) => {
+    setBusyCode(shop.code)
+    setNotice(null)
+    try {
+      const result = await updateOpsShop(shop.code, { ownerId })
+      setNotice({
+        kind: 'ok',
+        text:
+          ownerId === null
+            ? `「${result.shop.name}」已设为公共，所有能看店铺的人都能看到。`
+            : `「${result.shop.name}」已归给 ${result.shop.ownerName ?? ownerId}。`,
+      })
       await reload()
     } catch (error) {
       setNotice({ kind: 'error', text: describeShopMutationError(error) })
@@ -344,6 +394,29 @@ export function OpsShopBindingPanel() {
                           <div className="font-medium text-foreground">{shop.name}</div>
                           <div className="text-[11px] text-muted-foreground">
                             {shopSlotText(shop)}
+                          </div>
+                          <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <span>归属</span>
+                            {canAssignOwner && owners !== null ? (
+                              <select
+                                className="h-6 rounded border border-border bg-transparent px-1 text-[11px]"
+                                value={shop.ownerId ?? ''}
+                                disabled={busyCode !== ''}
+                                onChange={(event) => {
+                                  const next = event.target.value
+                                  void changeOwner(shop, next === '' ? null : next)
+                                }}
+                              >
+                                <option value="">公共</option>
+                                {owners.map((owner) => (
+                                  <option key={owner.id} value={owner.id}>
+                                    {owner.displayName}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-foreground">{shop.ownerName ?? '公共'}</span>
+                            )}
                           </div>
                         </td>
                         <td className="py-2 pr-3">

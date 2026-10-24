@@ -794,6 +794,8 @@ export const OPS_SHOP_SUMMARY_SELECT = {
   collectPort: true,
   syncRequestedAt: true,
   lastSyncError: true,
+  ownerId: true,
+  owner: { select: { displayName: true } },
 } as const
 
 type ShopSummaryRow = Prisma.EcomShopGetPayload<{ select: typeof OPS_SHOP_SUMMARY_SELECT }>
@@ -817,14 +819,46 @@ export function toOpsShopSummary(row: ShopSummaryRow): OpsShopSummary {
     collectPort: row.collectPort,
     syncRequestedAt: isoOrNull(row.syncRequestedAt),
     lastSyncError: row.lastSyncError,
+    ownerId: row.ownerId,
+    ownerName: row.owner?.displayName ?? null,
   }
 }
 
-export async function listOpsShops(): Promise<OpsShopSummary[]> {
+/**
+ * 谁能看到哪些店。
+ *
+ * `canSeeAll` 由路由按权限点决定（持 `ops.shop.bind` 的人看全部）。其余人只看
+ * 「自己的 + 公共的」—— `ownerId: null` 必须留在可见集合里，否则种子写进来的
+ * 店会一夜之间对所有人消失，而且没有任何报错。
+ */
+export type OpsShopViewer = {
+  userId: string
+  canSeeAll: boolean
+}
+
+export async function listOpsShops(viewer: OpsShopViewer): Promise<OpsShopSummary[]> {
   const rows = await prisma.ecomShop.findMany({
-    where: { enabled: true },
+    where: viewer.canSeeAll
+      ? { enabled: true }
+      : { enabled: true, OR: [{ ownerId: null }, { ownerId: viewer.userId }] },
     orderBy: { createdAt: 'asc' },
     select: OPS_SHOP_SUMMARY_SELECT,
   })
   return rows.map(toOpsShopSummary)
+}
+
+/**
+ * 这家店对这个账号可见吗。
+ *
+ * 用在所有按代号操作的接口上：列表过滤只管「看得到哪些」，改与同步还要单独判，
+ * 否则知道代号就能操作别人的店。
+ */
+export async function isShopVisible(code: string, viewer: OpsShopViewer): Promise<boolean> {
+  if (viewer.canSeeAll) return true
+  const row = await prisma.ecomShop.findUnique({
+    where: { code },
+    select: { ownerId: true, enabled: true },
+  })
+  if (row === null || !row.enabled) return false
+  return row.ownerId === null || row.ownerId === viewer.userId
 }

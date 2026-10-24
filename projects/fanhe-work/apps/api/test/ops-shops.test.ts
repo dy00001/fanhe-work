@@ -69,6 +69,7 @@ const { prisma } = await import('../src/db/prisma.js')
 const { hashPassword } = await import('../src/auth/password.js')
 const { login } = await import('../src/auth/login.js')
 const { buildApp } = await import('../src/app.js')
+const { isShopVisible, listOpsShops } = await import('../src/ops/query.js')
 
 const TEST_PASSWORD = 'integration-test-password'
 const TEST_IP = '198.51.100.61'
@@ -457,5 +458,90 @@ describe('店铺绑定入口', { skip: reachable ? false : '数据库不可达�
     assert.equal(rebound.statusCode, 201, rebound.body)
     const reboundBody = JSON.parse(rebound.body) as { shop: { id: string } }
     assert.equal(reboundBody.shop.id, before.id, '重新绑定必须接上原来那行，否则历史数据悬空')
+  })
+})
+
+/**
+ * 归属可见性。
+ *
+ * 直接测函数而不是走 HTTP：HTTP 那层的入口权限点（`ops.shop.bind`）已经单独
+ * 验过，这里要验的是「同一个人能看见哪些行」这条规则本身。走 HTTP 还得先造一个
+ * 「有 read 没有 bind」的角色，测的东西会跑偏。
+ */
+describe('店铺归属与可见性', () => {
+  const PUBLIC_CODE = 'zz-vis-public'
+  const A_CODE = 'zz-vis-a'
+  const B_CODE = 'zz-vis-b'
+  let userA = ''
+  let userB = ''
+
+  before(async () => {
+    await prisma.ecomShop.deleteMany({ where: { code: { in: [PUBLIC_CODE, A_CODE, B_CODE] } } })
+
+    const role = await prisma.role.findFirst({ select: { id: true } })
+    assert.ok(role !== null, '需要至少一个角色')
+    const makeUser = async (username: string) =>
+      (
+        await prisma.user.create({
+          data: {
+            username,
+            displayName: username,
+            passwordHash: 'x',
+            roleId: role.id,
+          },
+          select: { id: true },
+        })
+      ).id
+    userA = await makeUser(`zz-vis-a-${process.pid}`)
+    userB = await makeUser(`zz-vis-b-${process.pid}`)
+
+    const base = { platform: 'taobao' as const, enabled: true, boundAt: new Date() }
+    await prisma.ecomShop.createMany({
+      data: [
+        { ...base, code: PUBLIC_CODE, name: '公共店', ownerId: null },
+        { ...base, code: A_CODE, name: 'A 的店', ownerId: userA },
+        { ...base, code: B_CODE, name: 'B 的店', ownerId: userB },
+      ],
+    })
+  })
+
+  after(async () => {
+    await prisma.ecomShop.deleteMany({ where: { code: { in: [PUBLIC_CODE, A_CODE, B_CODE] } } })
+    await prisma.user.deleteMany({ where: { id: { in: [userA, userB] } } })
+  })
+
+  test('普通账号只看到「自己的 + 公共的」', async () => {
+    const shops = await listOpsShops({ userId: userA, canSeeAll: false })
+    const codes = shops.map((shop) => shop.code)
+
+    assert.ok(codes.includes(PUBLIC_CODE), '公共店必须可见，否则种子店会一夜之间对所有人消失')
+    assert.ok(codes.includes(A_CODE), '自己的店必须可见')
+    assert.ok(!codes.includes(B_CODE), '别人的店不该出现')
+  })
+
+  test('持绑定权限的账号看到全部', async () => {
+    const shops = await listOpsShops({ userId: userA, canSeeAll: true })
+    const codes = shops.map((shop) => shop.code)
+    assert.ok(codes.includes(B_CODE), '管理员必须看得到别人的店，否则改不了归属')
+  })
+
+  test('按代号操作也要判可见性，不能只靠列表过滤', async () => {
+    assert.equal(await isShopVisible(A_CODE, { userId: userA, canSeeAll: false }), true)
+    assert.equal(await isShopVisible(B_CODE, { userId: userA, canSeeAll: false }), false)
+    assert.equal(
+      await isShopVisible(B_CODE, { userId: userA, canSeeAll: true }),
+      true,
+      '管理员看得到全部',
+    )
+  })
+
+  test('归属显示名跟着账号走', async () => {
+    const shops = await listOpsShops({ userId: userA, canSeeAll: true })
+    const own = shops.find((shop) => shop.code === A_CODE)
+    assert.equal(own?.ownerId, userA)
+    assert.ok((own?.ownerName ?? '').startsWith('zz-vis-a'), '界面要显示归属人名而不是 id')
+    const publicShop = shops.find((shop) => shop.code === PUBLIC_CODE)
+    assert.equal(publicShop?.ownerId, null)
+    assert.equal(publicShop?.ownerName, null)
   })
 })

@@ -127,6 +127,15 @@ export type OpsShopSummary = {
   id: string
   code: string
   name: string
+
+  /**
+   * 归属账号。null 表示公共店铺，所有持 `ops.shop.read` 的账号都能看到。
+   *
+   * 归属只决定「谁能看到」，不参与任何授权判断：能改什么仍然只看权限点。
+   */
+  ownerId: string | null
+  /** 归属账号的显示名，null 时与 `ownerId` 一致。 */
+  ownerName: string | null
   platform: OpsPlatform
   sellerNick: string | null
   timezone: string

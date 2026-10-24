@@ -865,7 +865,14 @@ export function bindOpsShopRequest(
 export function updateOpsShopRequest(
   accessToken: string,
   code: string,
-  patch: { name?: string; sellerNick?: string | null; collectPort?: number; enabled?: boolean },
+  patch: {
+    name?: string
+    sellerNick?: string | null
+    collectPort?: number
+    enabled?: boolean
+    /** null 表示设为公共。 */
+    ownerId?: string | null
+  },
 ): Promise<OpsShopMutationResponse> {
   return request<OpsShopMutationResponse>(`/api/ops/shops/${encodeURIComponent(code)}`, {
     method: 'PATCH',

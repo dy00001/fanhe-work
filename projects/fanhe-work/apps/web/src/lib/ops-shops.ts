@@ -32,7 +32,13 @@ export function bindOpsShop(input: OpsShopBindInput): Promise<OpsShopMutationRes
 
 export function updateOpsShop(
   code: string,
-  patch: { name?: string; sellerNick?: string | null; collectPort?: number; enabled?: boolean },
+  patch: {
+    name?: string
+    sellerNick?: string | null
+    collectPort?: number
+    enabled?: boolean
+    ownerId?: string | null
+  },
 ): Promise<OpsShopMutationResponse> {
   return withAccessToken(async (token) => await updateOpsShopRequest(token, code, patch))
 }

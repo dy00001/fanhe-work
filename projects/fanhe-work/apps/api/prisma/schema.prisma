@@ -122,6 +122,10 @@ model User {
   status       UserStatus @default(active)
   roleId       String     @map("role_id") @db.Uuid
 
+  /// 归属这个账号的店铺。归属只影响「看到哪些店」，不参与授权判断 ——
+  /// 权限仍然只看 role 与 user_permissions。
+  ownedShops EcomShop[]
+
   /// 连续失败次数与锁定截止时间，服务于登录限速。登录成功后清零。
   failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
   lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(3)
@@ -713,6 +717,19 @@ model EcomShop {
   /// 绑定的时刻。null 表示这行是种子或 ingest upsert 建出来的，从未经过绑定入口。
   boundAt DateTime? @map("bound_at") @db.Timestamptz(3)
 
+  /// 归属账号。null 表示**公共店铺**：所有持 `ops.shop.read` 的账号都能看到。
+  ///
+  /// 为什么不强制一个 owner：现有 5 家店是种子写进来的，强制归属要么需要一次
+  /// 人工指定（没人知道该给谁），要么在迁移里瞎猜一个 —— 猜错的后果是别人再也
+  /// 看不到自己的店，而且没有任何报错。空值当公共，是唯一「不会把现有使用者挡在
+  /// 外面」的默认。
+  ///
+  /// 可见性规则写在 `listOpsShops`：持 `ops.shop.bind` 的看全部，其余人看
+  /// 「自己的 + 公共的」。
+  ownerId String? @map("owner_id") @db.Uuid
+
+  owner User? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+
   /// 采集浏览器的登录态。判据只有一个来源：采集器的 `login-check.mjs`。
   /// 平台侧不猜，避免「界面说有登录、采集器说没有」两套结论。
   loginState OpsLoginState @default(unknown) @map("login_state")
@@ -745,6 +762,7 @@ model EcomShop {
   snapshots EcomDimensionSnapshot[]
   runs      EcomCollectRun[]
 
+  @@index([ownerId])
   @@map("ecom_shops")
 }
 

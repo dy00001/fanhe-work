@@ -22,6 +22,7 @@ import { env } from '../config/env.js'
 import { isLoopbackAddress } from '../launch/loopback.js'
 import { ingestFailureMessage, ingestOpsSnapshot } from '../ops/ingest.js'
 import { readCollectorStatus, touchCollectorHeartbeat } from '../ops/collector-heartbeat.js'
+import type { OpsShopViewer } from '../ops/query.js'
 import {
   bindShop,
   listPendingShopCodes,
@@ -392,8 +393,12 @@ export function registerOpsRoutes(app: FastifyInstance): void {
   app.get(
     '/api/ops/shops',
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_READ) },
-    async (_request, reply) => {
-      const [shops, collector] = await Promise.all([listOpsShops(), readCollectorStatus()])
+    async (request, reply) => {
+      if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
+      const [shops, collector] = await Promise.all([
+        listOpsShops(viewerOf(request.authContext)),
+        readCollectorStatus(),
+      ])
       return reply.code(200).send({ shops, collector })
     },
   )
@@ -436,12 +441,28 @@ export function registerOpsRoutes(app: FastifyInstance): void {
   // -------------------------------------------------------------------------
 
   /** 失败原因到状态码的映射。集中一处，避免每个 handler 各写一套。 */
+  /**
+   * 当前账号能看哪些店。
+   *
+   * 持 `ops.shop.bind` 的看全部（管理店铺的人必须看得到所有店，否则改不了别人的
+   * 归属）；其余人看「自己的 + 公共的」。这个判断放在路由层，是因为它要读权限点，
+   * 而权限点只在这里能拿到。
+   */
+  const viewerOf = (context: {
+    userId: string
+    permissions: readonly string[]
+  }): OpsShopViewer => ({
+    userId: context.userId,
+    canSeeAll: context.permissions.includes(PERMISSIONS.OPS_SHOP_BIND),
+  })
+
   const mutationStatus: Record<string, number> = {
     invalid: 400,
     duplicate: 409,
     port_conflict: 409,
     not_found: 404,
     not_bound: 409,
+    forbidden: 403,
   }
 
   app.post<{ Body: unknown }>(
@@ -449,7 +470,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const result = await bindShop(request.body)
+      const result = await bindShop(request.body, request.authContext.userId)
       if (!result.ok) {
         return reply
           .code(mutationStatus[result.reason] ?? 400)
@@ -464,7 +485,11 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const result = await updateShop(request.params.code, request.body)
+      const result = await updateShop(
+        request.params.code,
+        request.body,
+        viewerOf(request.authContext),
+      )
       if (!result.ok) {
         return reply
           .code(mutationStatus[result.reason] ?? 400)
@@ -479,7 +504,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const result = await unbindShop(request.params.code)
+      const result = await unbindShop(request.params.code, viewerOf(request.authContext))
       if (!result.ok) {
         return reply
           .code(mutationStatus[result.reason] ?? 400)
@@ -500,7 +525,7 @@ export function registerOpsRoutes(app: FastifyInstance): void {
     { preHandler: requirePermission(PERMISSIONS.OPS_SHOP_BIND) },
     async (request, reply) => {
       if (request.authContext === null) return reply.code(401).send(UNAUTHORIZED_BODY)
-      const result = await requestShopSync(request.params.code)
+      const result = await requestShopSync(request.params.code, viewerOf(request.authContext))
       if (!result.ok) {
         return reply
           .code(mutationStatus[result.reason] ?? 400)
