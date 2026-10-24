@@ -68,6 +68,13 @@ export type DesktopUpdateControls = {
   /** 顶栏那一块该显示什么。`hidden` 表示不渲染。 */
   view: DesktopUpdateView
   /**
+   * 主动查一次（只检查，不下载）。
+   *
+   * 单独暴露出来是给账号菜单里的「检查更新」用的：用户想手动确认时，
+   * 不该逼他重启应用 —— 而重启是 0.3.4 之前唯一能触发检查的办法。
+   */
+  check: () => Promise<void>
+  /**
    * 执行视图对应的动作：`available` 时开始下载，`ready` 时装并重启，
    * `failed` 时重查。其余视图下是空操作。
    */
@@ -276,5 +283,5 @@ export function useDesktopUpdate(): DesktopUpdateControls {
     if (view.kind === 'failed') void runCheck()
   }, [view, download, install, runCheck])
 
-  return { view, act, busy }
+  return { view, act, busy, check: runCheck }
 }

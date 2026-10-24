@@ -16,9 +16,12 @@ import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 
 import { type ThemePreference, isThemePreference } from '../lib/preferences'
-import { parseDesktopUpdateStatus } from '../lib/desktop-update'
+import { describeUpdateLine, parseDesktopUpdateStatus } from '../lib/desktop-update'
+import { currentHost } from '../lib/host'
+import { cn } from '../lib/utils'
 import { useTheme } from '../lib/theme'
 import { useAvatar } from '../lib/use-avatar'
+import { useDesktopUpdate } from '../lib/use-desktop-update'
 import { useVersionCheck } from '../lib/use-version-check'
 import { buildVersionDetail, buildVersionLine } from '../lib/version'
 import { type UpdateNotice } from '../lib/version-check'
@@ -169,6 +172,9 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
   const { preference, setPreference } = useTheme()
   const { notice, refresh } = useVersionCheck()
   const { avatar, save: saveAvatar, remove: removeAvatar } = useAvatar(user.id)
+  /* 第二份更新状态。主进程里的检查是单例，读状态走进程内 IPC，
+     多一个实例只是多一次内存读取，不会多打一次 GitHub。 */
+  const update = useDesktopUpdate()
   const [avatarDialogOpen, setAvatarDialogOpen] = useState(false)
 
   // 「更换头像」是从账号菜单里点的，而菜单收起时 Radix 会把焦点还给头像按钮 ——
@@ -360,6 +366,27 @@ export function TopBar({ title, user, roleName, onLogout }: TopBarProps) {
             )}
 
             <DropdownMenuSeparator />
+            {/*
+              手动检查入口。在这之前，唯一能触发「查一次更新」的办法是重启应用 ——
+              桌面工具一开一整天，用户不会去重启，于是「有新版本」永远不出现，
+              看起来就像更新功能坏了。这一行把那件事变成一个可点的动作。
+            */}
+            {currentHost() === 'desktop' && (
+              <DropdownMenuItem
+                className="flex-col items-start gap-0.5"
+                onSelect={() => {
+                  void update.check()
+                }}
+              >
+                <span className="flex items-center gap-2">
+                  <RefreshCw className={cn('size-4', update.busy && 'animate-spin')} />
+                  {update.busy ? '正在检查更新…' : '检查更新'}
+                </span>
+                <span className="pl-6 text-[11px] text-muted-foreground">
+                  {describeUpdateLine(update.view)}
+                </span>
+              </DropdownMenuItem>
+            )}
             <div
               className="px-2 pt-1.5 pb-0.5 font-mono text-xs text-muted-foreground-weak"
               title={buildVersionDetail()}

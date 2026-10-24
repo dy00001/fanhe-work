@@ -492,6 +492,30 @@ export function computeEtaMs(
  * 失败后退到 15 秒：失败最常见的原因是网络断了，此时 1 秒一次的轮询换不来任何新
  * 信息，只会把日志刷满。
  */
+/**
+ * 账号菜单里那一行状态。
+ *
+ * 存在的理由：`hidden` 这一态在顶栏上是「什么都不画」，于是「检查过了、已是最新」
+ * 与「功能坏了、什么都没发生」在界面上长得一模一样。用户报「没有版本更新的提示」
+ * 时，我们没法从界面判断是哪一种 —— 这一行把那两种情形分开。
+ */
+export function describeUpdateLine(view: DesktopUpdateView): string {
+  switch (view.kind) {
+    case 'checking':
+      return view.text
+    case 'available':
+      return view.version === null ? '发现新版本' : `发现 v${view.version}，点顶栏更新`
+    case 'downloading':
+      return '正在下载新版本…'
+    case 'ready':
+      return '已下载，点顶栏重启安装'
+    case 'failed':
+      return '上次检查失败，点这里重试'
+    case 'hidden':
+      return '已是最新版本'
+  }
+}
+
 export function updatePollIntervalMs(status: DesktopUpdateStatus | null): number {
   if (status === null) return UPDATE_POLL_IDLE_MS
 

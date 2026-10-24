@@ -26,6 +26,7 @@ import {
   UPDATE_POLL_IDLE_MS,
   UPDATE_STALL_MS,
   buildDesktopUpdateView,
+  describeUpdateLine,
   computeEtaMs,
   formatBytes,
   formatDuration,
@@ -501,4 +502,27 @@ test('🔴 字节数变了就是新状态（否则每秒的进度不会触发重
     },
   })
   assert.equal(isSameUpdateStatus(a, b), false)
+})
+
+test('菜单里的状态行：把「已是最新」与「什么都没发生」分开', () => {
+  /* 这是用户报「没有版本更新的提示」之后补的。`hidden` 在顶栏上是「什么都不画」，
+     于是「查过了、已是最新」和「功能坏了」长得一模一样 —— 状态行至少能把前者
+     说出来。 */
+  assert.equal(describeUpdateLine({ kind: 'hidden' }), '已是最新版本')
+  assert.match(
+    describeUpdateLine({
+      kind: 'available',
+      version: '0.3.4',
+      text: '发现新版本 v0.3.4',
+      actionLabel: '立即更新',
+      title: 't',
+      dot: true,
+    }),
+    /v0\.3\.4/,
+  )
+  assert.match(
+    describeUpdateLine({ kind: 'failed', text: '更新检查失败', detail: '', actionLabel: '重试' }),
+    /失败/,
+  )
+  assert.match(describeUpdateLine({ kind: 'checking', text: '正在检查更新…' }), /检查/)
 })
