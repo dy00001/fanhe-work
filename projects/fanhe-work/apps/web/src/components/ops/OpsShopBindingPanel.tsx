@@ -190,7 +190,10 @@ export function OpsShopBindingPanel() {
       if (result.ok) {
         setNotice({
           kind: 'ok',
-          text: `已打开「${shop.name}」的采集浏览器。在里面登录生意参谋，登录态会被采集器读到并回写到这一行。`,
+          text:
+            result.note !== undefined && result.note !== ''
+              ? `「${shop.name}」：${result.note}登录完成后，登录态会被采集器读到并回写到这一行。`
+              : `已打开「${shop.name}」的采集浏览器。在里面登录生意参谋，登录态会被采集器读到并回写到这一行。`,
         })
         return
       }

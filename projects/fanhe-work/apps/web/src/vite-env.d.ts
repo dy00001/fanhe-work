@@ -151,7 +151,7 @@ interface Window {
      * 是常态，界面要能把手工命令显示出来，而不是给一个点了没反应的按钮。
      */
     openShopLogin: (code: string) => Promise<
-      | { ok: true; command: string }
+      | { ok: true; command: string; note?: string }
       | {
           ok: false
           reason: string

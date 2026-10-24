@@ -19,6 +19,12 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/shop-login.ps1 -Shop s2
 #   powershell -ExecutionPolicy Bypass -File scripts/shop-login.ps1 -All
 #   powershell -ExecutionPolicy Bypass -File scripts/shop-login.ps1 -Shop s2 -Keep
+#   powershell -ExecutionPolicy Bypass -File scripts/shop-login.ps1 -Shop s2 -Keep -NoPrompt
+#
+# -Keep keeps the window open after the check. -NoPrompt skips the "press Enter
+# when signed in" step, for callers that have no console (the desktop shell
+# spawns this with stdio ignored, so Read-Host would block on an invisible
+# prompt). Desktop uses -Keep -NoPrompt: open the browser and leave it alone.
 #
 # -Check only reports the state of every shop (no interaction, safe for scripts).
 # Exit codes: 0 all checked shops are logged in, 3 at least one needs a login,
@@ -32,6 +38,7 @@ param(
   [switch]$All,
   [switch]$Check,
   [switch]$Keep,
+  [switch]$NoPrompt,
   [int]$LoginWait = 12
 )
 
@@ -189,7 +196,7 @@ foreach ($slot in $targets) {
   $r = Test-ShopLogin $slot
   Write-Host ("  state: " + $r.state)
 
-  if (-not $r.ok -and -not $Check) {
+  if (-not $r.ok -and -not $Check -and -not $NoPrompt) {
     Write-Host ""
     Write-Host ("  Sign in to the " + $slot.name + " account in the Edge window that just opened.")
     Write-Host "  Use the account/password for THIS shop. Do not switch accounts in another shop's window."

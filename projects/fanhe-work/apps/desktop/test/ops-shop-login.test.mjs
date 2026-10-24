@@ -56,6 +56,7 @@ test('非法代号一律拒绝，且不启动任何进程', async () => {
       workspaceRoot: 'C:/whatever',
       platform: 'win32',
       spawnImpl,
+      settleMs: 5,
     })
     assert.equal(result.ok, false, `应拒绝：${JSON.stringify(code)}`)
     if (result.ok) continue
@@ -108,15 +109,20 @@ test('脚本存在时按固定参数启动，代号作为独立实参传入', as
       workspaceRoot: root,
       platform: 'win32',
       spawnImpl,
+      settleMs: 5,
     })
     assert.equal(result.ok, true)
     assert.equal(calls.length, 1)
 
     const call = calls[0]
     assert.equal(call.command, 'powershell.exe')
-    /* 代号必须是**独立实参**而不是拼进一个字符串：拼串时 `-Shop "a b"` 这类输入
-       会被 cmd 拆成两个参数，而这里传的是数组，不存在拆分。 */
-    assert.deepEqual(call.args.slice(-2), ['-Shop', 'fanhe-main'])
+    /* 走 -Command：-File 配隐藏窗口会让脚本静默结束（实测 2026-10-24）。
+       代号由主进程校验后拼进 -Command 字符串，因为 -Command 只有一个参数位。 */
+    assert.ok(call.args.includes('-Command'), '必须用 -Command 而不是 -File')
+    const inner = String(call.args.at(-1))
+    assert.match(inner, /-Shop fanhe-main/)
+    assert.match(inner, /-Keep/, '不传 -Keep 时脚本检查完就关窗口，用户看到的是「没反应」')
+    assert.match(inner, /-NoPrompt/, '没有控制台，Read-Host 会卡在看不见的提示上')
     assert.equal(call.options.detached, true, '外壳退出不该杀掉等待扫码的浏览器')
     assert.equal(call.options.stdio, 'ignore')
   } finally {
@@ -150,6 +156,7 @@ test('配置的采集器根目录能替代工作区：跨盘安装就靠它', as
       collectorRoot: join(root, 'projects', 'fanhe-work', 'tools', 'collector'),
       platform: 'win32',
       spawnImpl,
+      settleMs: 5,
     })
     assert.equal(result.ok, true, JSON.stringify(result))
     assert.equal(calls.length, 1)
@@ -160,6 +167,7 @@ test('配置的采集器根目录能替代工作区：跨盘安装就靠它', as
       collectorRoot: root,
       platform: 'win32',
       spawnImpl,
+      settleMs: 5,
     })
     assert.equal(byRepoRoot.ok, true, '指向仓库根也要能找到脚本')
   } finally {
@@ -175,6 +183,7 @@ test('脚本缺失时，提示里带采集器配置文件的落位', async () =>
     configPath: 'C:/Users/dy/AppData/Roaming/梵禾 Work/collector.json',
     platform: 'win32',
     spawnImpl,
+    settleMs: 5,
   })
   assert.equal(result.ok, false)
   if (result.ok) return
@@ -183,4 +192,129 @@ test('脚本缺失时，提示里带采集器配置文件的落位', async () =>
   assert.match(result.message, /AppData/)
   assert.equal(result.configPath, 'C:/Users/dy/AppData/Roaming/梵禾 Work/collector.json')
   assert.equal(calls.length, 0)
+})
+
+/** 造一个可控的假 spawn：返回句柄并把监听器收好，由用例决定何时发事件。 */
+function controllableSpawn() {
+  const calls = []
+  const handlers = new Map()
+  const child = {
+    unref() {},
+    on(event, listener) {
+      handlers.set(event, listener)
+    },
+    stderr: { on() {} },
+  }
+  const spawnImpl = (command, args, options) => {
+    calls.push({ command, args, options })
+    return child
+  }
+  return { calls, handlers, spawnImpl }
+}
+
+test('命令不存在时不能报成功：异步 error 要变成可读的失败', async () => {
+  /* 这是 2026-10-24 用户报的「点了没反应」的根因：spawn 找不到可执行文件时
+     不抛同步异常，而是在下一个事件循环发 error。首版只 try/catch 同步异常，
+     于是把它当成「已打开」。 */
+  const root = makeWorkspace(true)
+  const { handlers, spawnImpl } = controllableSpawn()
+  try {
+    const pending = openShopLogin('s2', {
+      workspaceRoot: root,
+      platform: 'win32',
+      spawnImpl,
+      settleMs: 50,
+    })
+    handlers.get('error')?.(new Error('spawn powershell.exe ENOENT'))
+    const result = await pending
+    assert.equal(result.ok, false)
+    if (result.ok) return
+    assert.equal(result.reason, 'spawn_failed')
+    assert.match(result.message, /ENOENT/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('退出码 3 是「窗口已打开、等待登录」，不是失败', async () => {
+  /* 脚本的约定：0 已登录、3 需要登录、1 环境问题。3 是最常见的一种，
+     把它当失败会让用户以为按钮坏了。 */
+  const root = makeWorkspace(true)
+  const { handlers, spawnImpl } = controllableSpawn()
+  try {
+    const pending = openShopLogin('s2', {
+      workspaceRoot: root,
+      platform: 'win32',
+      spawnImpl,
+      settleMs: 50,
+    })
+    handlers.get('exit')?.(3)
+    const result = await pending
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+    assert.match(String(result.note), /登录/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('退出码 1 才算失败，并带出退出码', async () => {
+  const root = makeWorkspace(true)
+  const { handlers, spawnImpl } = controllableSpawn()
+  try {
+    const pending = openShopLogin('s2', {
+      workspaceRoot: root,
+      platform: 'win32',
+      spawnImpl,
+      settleMs: 50,
+    })
+    handlers.get('exit')?.(1)
+    const result = await pending
+    assert.equal(result.ok, false)
+    if (result.ok) return
+    assert.match(result.message, /退出码 1/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('退出码 0 说明本来就是登录态，仍算成功', async () => {
+  const root = makeWorkspace(true)
+  const { handlers, spawnImpl } = controllableSpawn()
+  try {
+    const pending = openShopLogin('s2', {
+      workspaceRoot: root,
+      platform: 'win32',
+      spawnImpl,
+      settleMs: 50,
+    })
+    handlers.get('exit')?.(0)
+    const result = await pending
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+    assert.match(String(result.note), /登录态/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('进程活着超过等待窗口才算启动成功', async () => {
+  const root = makeWorkspace(true)
+  const { calls, spawnImpl } = controllableSpawn()
+  try {
+    const result = await openShopLogin('s2', {
+      workspaceRoot: root,
+      platform: 'win32',
+      spawnImpl,
+      settleMs: 20,
+    })
+    assert.equal(result.ok, true)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].options.windowsHide, true, '不要再弹一个命令行黑框')
+    /* -File 配隐藏窗口会让脚本静默结束（实测），必须走 -Command 加输出重定向。 */
+    assert.ok(calls[0].args.includes('-Command'), '必须用 -Command 而不是 -File')
+    assert.match(String(calls[0].args.at(-1)), /Out-File/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

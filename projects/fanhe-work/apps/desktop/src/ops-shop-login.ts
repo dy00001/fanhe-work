@@ -20,7 +20,8 @@
  * 放宽都会让 `-Shop "s2; rm -rf"` 这类输入有缝可钻。
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
 
 /** 与 `packages/shared/src/ops.ts` 的 `OPS_SHOP_CODE_PATTERN` 逐字一致。 */
@@ -30,7 +31,12 @@ export type ShopLoginFailureReason =
   'invalid_code' | 'unsupported_platform' | 'collector_missing' | 'spawn_failed'
 
 export type ShopLoginResult =
-  | { ok: true; command: string }
+  | {
+      ok: true
+      command: string
+      /** 给人看的一句结果说明，例如「浏览器已打开，请登录」。 */
+      note?: string
+    }
   | {
       ok: false
       reason: ShopLoginFailureReason
@@ -43,6 +49,22 @@ export type ShopLoginResult =
 /** 手工执行的命令。无论成功与否都返回，界面在失败时直接展示。 */
 export function shopLoginCommand(code: string): string {
   return `powershell -NoProfile -ExecutionPolicy Bypass -File tools\\collector\\scripts\\shop-login.ps1 -Shop ${code}`
+}
+
+/** PowerShell 单引号字符串：内部单引号要写成两个。 */
+function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+/** 读脚本日志的最后一段，用于失败提示。读不到就给空串。 */
+function readLogTail(logPath: string): string {
+  try {
+    const text = readFileSync(logPath, 'utf8').trim()
+    if (text === '') return ''
+    return `：${text.slice(-300)}`
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -103,11 +125,23 @@ export function resolveShopLoginScript(
  * 抽出来是为了让测试能在**不真的开浏览器**的前提下验证参数拼装与各条失败分支。
  * 默认用 `child_process.spawn`；生产路径不传它。
  */
+/**
+ * spawn 的最小接口。
+ *
+ * 要能挂 `error` 与 `exit` 两个事件，因为**启动失败是异步的**：命令不存在时
+ * `spawn` 不抛异常，而是在下一个事件循环里发 `error`。首版只 try/catch 了同步
+ * 异常就返回成功，于是「脚本根本没起来」被当成「已打开」，界面上点了没反应 ——
+ * 这正是用户 2026-10-24 报的那个现象。
+ */
 export type SpawnLike = (
   command: string,
   args: readonly string[],
   options: { detached: boolean; stdio: 'ignore'; windowsHide: boolean },
-) => { unref: () => void }
+) => {
+  unref: () => void
+  on?: (event: 'error' | 'exit', listener: (payload: unknown) => void) => void
+  stderr?: { on: (event: 'data', listener: (chunk: unknown) => void) => void } | null
+}
 
 export async function openShopLogin(
   code: unknown,
@@ -117,6 +151,8 @@ export async function openShopLogin(
     collectorRoot?: string | null
     /** 采集器配置文件该放哪，用于失败提示。 */
     configPath?: string | null
+    /** 判定「启动成功」的等待窗口。测试传很小的值，生产用默认四秒。 */
+    settleMs?: number
     platform?: NodeJS.Platform
     spawnImpl?: SpawnLike
   },
@@ -164,13 +200,90 @@ export async function openShopLogin(
   }
 
   const spawnImpl: SpawnLike = options.spawnImpl ?? (spawn as unknown as SpawnLike)
+
+  /* 等一小段时间再判定成败。
+   *
+   * 不能等进程结束：脚本会在登录页等你扫码，可能挂十分钟。也不能立刻返回成功：
+   * 命令找不到、脚本语法错、权限被拦这几种情况都在几十毫秒内以 `error` 或非零
+   * 退出码结束，立刻返回成功就等于把它们全部吞掉。
+   *
+   * 四秒的取法：正常启动到 Edge 出窗口约 1 到 2 秒，四秒足够覆盖失败路径，又不会
+   * 让按钮迟迟不给反馈。超时未退出即视为成功。 */
+  /* 为什么用 -Command 而不是 -File。
+   *
+   * 实测（2026-10-24）：`-File` 配合 `stdio: 'ignore'` 与 `windowsHide: true` 时，
+   * 脚本会在第一个 `Write-Host` 处静默结束，退出码 0、没有任何输出、Edge 也没起来。
+   * 换成一个带控制台的调用就正常（退出码 3、浏览器弹出）。也就是说「隐藏窗口」
+   * 与「-File」这个组合本身不可靠，而不是脚本有 bug。
+   *
+   * `-Command` 里先把所有输出重定向到日志文件再执行，脚本就不依赖控制台；
+   * 退出码用 `exit $LASTEXITCODE` 透传出来。失败时把日志尾巴放进提示，
+   * 用户不必去猜。 */
+  const logPath = join(tmpdir(), `fanhe-shop-login-${normalized}.log`)
+  const inner =
+    `& ${psQuote(script)} -Shop ${normalized} -Keep -NoPrompt ` +
+    `*>&1 | Out-File -FilePath ${psQuote(logPath)} -Encoding UTF8; ` +
+    `exit $LASTEXITCODE`
+
+  const SETTLE_MS = options.settleMs ?? 30000
+
   try {
     const child = spawnImpl(
       'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Shop', normalized],
-      { detached: true, stdio: 'ignore', windowsHide: false },
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', inner],
+      { detached: true, stdio: 'ignore', windowsHide: true },
     )
+
+    const outcome = await new Promise<{ ok: boolean; message: string }>((resolve) => {
+      let settled = false
+      const finish = (result: { ok: boolean; message: string }) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
+      }
+
+      /* 脚本自己不会挂住（-Keep 只是不关窗口），正常情况下十几秒内退出：
+         退出码 0 表示本来就是登录态，3 表示需要登录、窗口已经打开。 */
+      const timer = setTimeout(
+        () => finish({ ok: true, message: '浏览器正在打开，窗口出现后在里面登录即可。' }),
+        SETTLE_MS,
+      )
+
+      child.on?.('error', (payload) => {
+        const detail = payload instanceof Error ? payload.message : String(payload)
+        finish({ ok: false, message: `启动登录脚本失败：${detail}` })
+      })
+
+      child.on?.('exit', (payload) => {
+        const code = typeof payload === 'number' ? payload : -1
+        if (code === 0) {
+          finish({ ok: true, message: '这家店当前是登录态，浏览器已打开，可以直接用。' })
+          return
+        }
+        if (code === 3) {
+          finish({ ok: true, message: '浏览器已打开，请在窗口里登录这家店的账号。' })
+          return
+        }
+        finish({
+          ok: false,
+          message: `登录脚本失败（退出码 ${String(code)}）${readLogTail(logPath)}`,
+        })
+      })
+    })
+
+    if (!outcome.ok) {
+      return {
+        ok: false,
+        reason: 'spawn_failed',
+        message: outcome.message,
+        command,
+        configPath: options.configPath ?? null,
+      }
+    }
+
     child.unref()
+    return { ok: true, command, note: outcome.message }
   } catch (error) {
     return {
       ok: false,

@@ -10,10 +10,17 @@
     remembering to start it. A logon trigger plus an unlimited execution time
     limit is the whole requirement.
 
-  Why the task points at start-sync-watch.cmd instead of node.exe
+  Why the task points at run-hidden.vbs instead of start-sync-watch.cmd
     The launcher owns the node lookup, the single-instance guard and the log
     rotation. Registering node directly would duplicate all three here and they
-    would drift.
+    would drift. But pointing the task straight at cmd.exe shows a console
+    window for as long as the watcher lives (measured 2026-10-24: a black
+    window that never closes, and closing it killed the watcher). The VBS
+    wrapper starts the same launcher with window style 0.
+
+    The alternative -- "run whether user is logged on or not" (S4U) -- also
+    hides the console, but it loads no user profile, so DPAPI and the per-shop
+    Edge profile are unavailable and the login state silently reads empty.
 
   Why a repeating trigger instead of "restart on failure"
     RestartCount only covers failures the scheduler itself reports. Killing the
@@ -54,6 +61,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $TaskName = 'fanhe-sync-watch'
 $Launcher = Join-Path $PSScriptRoot 'start-sync-watch.cmd'
+$HiddenRunner = Join-Path $PSScriptRoot 'run-hidden.vbs'
 
 function Get-Task {
   Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -88,10 +96,12 @@ if ($Status) {
 if (-not (Test-Path $Launcher)) {
   Write-Error "launcher not found: $Launcher"
 }
+if (-not (Test-Path $HiddenRunner)) {
+  Write-Error "hidden runner not found: $HiddenRunner"
+}
 
-# -Argument uses the cmd.exe convention: /c "path". The doubled quotes are how
-# cmd.exe is told that a quoted path is the whole command line.
-$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ""{0}"" {1}' -f $Launcher, $Interval)
+# wscript runs the VBS with no console; the interval is forwarded to the launcher.
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('"{0}" {1}' -f $HiddenRunner, $Interval)
 
 # The account name has to come from the identity, not from USERDOMAIN\USERNAME:
 # USERDOMAIN is the NetBIOS domain, which on a machine that never joined one is
@@ -135,6 +145,7 @@ Register-ScheduledTask `
   -Force | Out-Null
 
 Write-Host "registered task $TaskName"
+Write-Host "  runner   : $HiddenRunner (no console window)"
 Write-Host "  launcher : $Launcher"
 Write-Host "  interval : $Interval seconds"
 Write-Host "  trigger  : at logon of $currentUser, repeated every $RepeatMinutes min"
