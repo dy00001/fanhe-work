@@ -33,7 +33,20 @@
 | --- | --- |
 | 桌面外壳 | 调 `ops:shop-login` 通道，主进程起 `shop-login.ps1 -Shop <code>`，弹出带调试端口的 Edge |
 | 浏览器 | 没有本机进程能力，退化成「复制命令」，粘贴到仓库根执行 |
-| 安装态（无 `tools/collector`） | 通道返回 `collector_missing`，界面把命令显示出来，不让按钮点了没反应 |
+| 找不到脚本 | 通道返回 `collector_missing`，界面把命令与配置落位显示出来，不让按钮点了没反应 |
+
+**装在别的盘时怎么让它找到脚本**：主进程沿自己的安装目录向上找 `.ws-root` 标记
+文件，跨盘必然断（实测本机安装目录在 `D:\fanhe work\@fanhedesktop`，工作区在
+`E:\fanhe Work`）。这时写一个采集器配置：
+
+```jsonc
+// %APPDATA%\梵禾 Work\collector.json（安装态）
+// 或工作区的 .config/fanhe-work/collector.json（开发态）
+{ "root": "E:\fanhe Work\projects\fanhe-work\tools\collector" }
+```
+
+`root` 指向 `tools/collector` 本身或仓库根都认。也可以用环境变量
+`FANHE_COLLECTOR_ROOT` 一次性覆盖。配置每次现读，改完不用重启外壳。
 
 代号在主进程会被重新校验（它要拼进命令行，前端校验只算体验）。脚本以独立实参接收 `-Shop <code>`，不做字符串拼接。
 
