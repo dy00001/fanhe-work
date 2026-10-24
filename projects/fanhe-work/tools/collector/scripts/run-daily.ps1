@@ -223,6 +223,31 @@ if ($fullRun -and ($code -eq 0 -or $code -eq 2)) {
   if ($code -eq 0 -and $check -ne 0) { $code = 1 }
 }
 
+# Report the outcome back to the platform: clear the pending flag, record the
+# login state, refresh the heartbeat.
+#
+# Why this is needed at all: two executors share one shop record. The watcher
+# (sync-shops.mjs) writes back after every round, this script did not. So a
+# daily run that really did collect left the UI saying "waiting for collector",
+# "login not verified", and -- when the watcher was stopped -- "collector
+# offline" while the data was in fact current. That last one is the misleading
+# case: the numbers update daily and the panel says nothing is running.
+#
+# Only on success (0 = ok, 2 = thin pages but data on disk). Writing on failure
+# would record a failure as a success. Only in -Shop mode: without it the script
+# runs the legacy single-profile layout and has no idea which shop code this is;
+# guessing one would write the wrong row.
+#
+# The actual write lives in report-synced.ps1 so it can be tested without Edge.
+if ($Shop -and ($code -eq 0 -or $code -eq 2)) {
+  Write-Host ""
+  Write-Host "---- report to platform ----"
+  & (Join-Path $PSScriptRoot "report-synced.ps1") -Shop $Shop
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host ("platform report failed (exit " + $LASTEXITCODE + "); the collection itself is fine")
+  }
+}
+
 Write-Host ("collector exit code: " + $code)
 
 if ($code -eq 3) {
