@@ -38,7 +38,7 @@ param(
   [string]$Target = "",
   [int]$Wait = 60000,
   [int]$Boot = 14000,
-  [string]$Script = "collect-daily.mjs",
+  [string]$Script = "",
   [string]$ScriptArgs = "",
   [string]$Shop = "",
   [switch]$SkipPreflight
@@ -103,6 +103,23 @@ function Stop-OurEdge {
   Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine.Contains($PROFILE_DIR) } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+# ---------------------------------------------------------------------------
+# 插件链路是默认路径（2026-10-26 起）。
+#
+# -Script 为空就转调 run-plugin-daily.ps1，那里负责「切换账号 + 52 条命令 +
+# 导出 payload」。这里直接返回，不再启动 Edge、不再走 CDP 旁路录制。
+#
+# 为什么保留 -Script 参数：调试单页时仍然可以显式指定旧脚本名（虽然旧文件已
+# 移入 legacy/），以及万一新链路出问题需要一个明确的回退开关。
+# ---------------------------------------------------------------------------
+if ($Script -eq "") {
+  $forward = @("-File", (Join-Path $ROOT "scripts\run-plugin-daily.ps1"))
+  if ($Target) { $forward += @("-Date", $Target) }
+  if ($Shop) { $forward += @("-Account", $Shop) }
+  & powershell -ExecutionPolicy Bypass @forward
+  exit $LASTEXITCODE
 }
 
 Write-Host ("root    : " + $ROOT)

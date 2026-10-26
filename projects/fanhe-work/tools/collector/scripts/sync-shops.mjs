@@ -7,8 +7,8 @@
  * 「绑定后自动同步」必须有第三个进程：本脚本。它做四件事：
  *
  *   1. 轮询 `GET /api/ops/shops/pending`，拿到被请求过同步的店铺代号。
- *   2. 逐店跑既有的 `collect-daily.mjs`（CDP 旁路录制，不重写采集逻辑）。
- *   3. 跑既有的 `export-daily-ingest.mjs`，把原始响应转成入库契约并 POST。
+ *   2. 逐店跑 `collect-via-plugin.mjs`（浏览器插件取数，2026-10-26 起替代 CDP）。
+ *   3. 跑 `export-sycm-ingest.mjs`，把命令输出转成入库契约并 POST。
  *   4. 把登录态与失败原因回写 `POST /api/ops/shops/<code>/state`。
  *
  * ## 为什么用轮询而不是「平台直接调采集器」
@@ -387,7 +387,14 @@ async function runOnce() {
     }
 
     console.log(`[sync] ---- ${code} 采集 ${TARGET_DATE} ----`)
-    const collectCode = await run('collect-daily.mjs', ['--shop', code, '--date', TARGET_DATE])
+    /*
+     * 2026-10-26 起改走插件链路。原先是 `collect-daily.mjs`（Edge 每店 profile
+     * 加 CDP 旁路录制 17 页），已移入 legacy/。
+     *
+     * 退出码语义对得上，不需要改下面的判断：0 成功、2 部分失败、3 前置不满足
+     * （插件离线或登录态失效，对应原来的 preflight 失败）。
+     */
+    const collectCode = await run('collect-via-plugin.mjs', ['--account', code, '--date', TARGET_DATE])
 
     if (collectCode === 3) {
       const preflight = readPreflight(code)
@@ -415,14 +422,14 @@ async function runOnce() {
     }
 
     console.log(`[sync] ---- ${code} 导出并入库 ----`)
-    const exportCode = await run('export-daily-ingest.mjs', [
-      '--shop', code,
+    const exportCode = await run('export-sycm-ingest.mjs', [
+      '--account', code,
       '--date', TARGET_DATE,
     ])
     if (exportCode !== 0 && exportCode !== 2) {
       await report(code, {
         loginState: 'authenticated',
-        lastSyncError: '采集完成但导出失败，检查 data/daily 下的原始响应是否完整'.slice(0, 480),
+        lastSyncError: '采集完成但导出失败，检查 data/plugin 下的原始响应是否完整'.slice(0, 480),
         collectedAt: null,
         clearSyncRequest: true,
       })
