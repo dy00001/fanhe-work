@@ -198,6 +198,19 @@ const API_CMDS = [
 const TOTAL = SHOP_CMDS.length + ITEM_CMDS.length + API_CMDS.length
 const SWITCH_WAIT_MS = 65_000
 
+/*
+ * 断连自愈的判据与阈值。
+ *
+ * 只对「连接类」失败自愈。登录失效（5810）、日期窗口不合法（1003）、参数错误
+ * 这些重连也没用，重试只是把同一句话多打几遍。实测插件在跑到 45 到 50 条、
+ * 约二十分钟时会断连，表现为「没有连上浏览器插件」或「30 秒内没有返回结果」。
+ */
+const RECOVERABLE = /没有连上浏览器插件|30 秒内没有返回|等浏览器返回|127\.0\.0\.1/
+/** 连续几条连接类失败才触发恢复。单条失败可能只是某个接口慢，不必立刻重连。 */
+const FAIL_BEFORE_RECOVER = 2
+/** 一家店最多恢复几次。超过就认为插件真的不行了，落盘退出，别无限重试。 */
+const MAX_RECOVERIES = 4
+
 /* ── 执行工具 ─────────────────────────────────────────────────────────── */
 
 const ENV = {
@@ -348,8 +361,15 @@ for (const slot of TARGETS) {
 
   let index = 0
   let itemId = null
+  /* 自愈状态：aborted 非空后本店剩余命令全部跳过，但已落盘的文件保留。 */
+  let aborted = null
+  let consecutiveFail = 0
+  let recoveries = 0
 
   const exec = async (name, args, mode, seq = null) => {
+    if (aborted !== null) {
+      return { result: { code: 'skipped', seconds: 0, stdout: '', stderr: '' }, outFile: null, skipped: true }
+    }
     /* 序号可以由调用方指定：单品级命令可能整段跳过，靠自增会让后面三条探测错位。 */
     index = seq === null ? index + 1 : seq
     const realName = name === 'item-sku-list-live' ? 'item-sku-list' : name
@@ -379,12 +399,42 @@ for (const slot of TARGETS) {
       shop: slot.code, account, index, name, exit: result.code,
       seconds: result.seconds, bytes: size, error: result.code === 0 ? '' : lastLine(result.stderr),
     })
+
+    /* ---- 断连自愈 ---- */
+    if (result.code === 0) {
+      consecutiveFail = 0
+      return { result, outFile }
+    }
+    const failureText = `${lastLine(result.stderr)} ${lastLine(result.stdout)}`
+    if (!RECOVERABLE.test(failureText)) return { result, outFile }
+
+    consecutiveFail += 1
+    if (consecutiveFail < FAIL_BEFORE_RECOVER) return { result, outFile }
+
+    if (recoveries >= MAX_RECOVERIES) {
+      aborted = `连续 ${consecutiveFail} 条连接失败，已尝试 ${recoveries} 次恢复仍未通`
+      console.error(`  ✗ ${aborted}`)
+      console.error('    处理：打开浏览器，点一下取数桥图标唤醒插件，再重跑本店')
+      return { result, outFile }
+    }
+
+    recoveries += 1
+    consecutiveFail = 0
+    console.log(`  连续失败，第 ${recoveries}/${MAX_RECOVERIES} 次尝试恢复连接…`)
+    const doctor = await runTb(['sycm', 'doctor'], 150_000)
+    if (doctor.code === 0) {
+      console.log('  连接已恢复，继续')
+      return { result, outFile }
+    }
+    aborted = `恢复失败：${lastLine(doctor.stderr) || lastLine(doctor.stdout)}`
+    console.error(`  ✗ ${aborted}`)
+    console.error('    处理：打开浏览器，点一下取数桥图标唤醒插件，再重跑本店')
     return { result, outFile }
   }
 
   for (const [name, args, mode] of ONLY_API ? [] : SHOP_CMDS) {
     const { outFile } = await exec(name, args, mode)
-    if (name === 'item-list') {
+    if (name === 'item-list' && outFile !== null) {
       try {
         const rows = JSON.parse(fs.readFileSync(outFile, 'utf8'))?.data?.data
         if (Array.isArray(rows) && rows.length > 0) {
@@ -412,6 +462,16 @@ for (const slot of TARGETS) {
   const apiBase = SHOP_CMDS.length + ITEM_CMDS.length
   for (const [offset, [name, apiPath, pairs]] of API_CMDS.entries()) {
     await exec(name, [apiPath, pairs], 'api', apiBase + offset + 1)
+  }
+
+  if (aborted !== null) {
+    console.error(`  ${account} 中断：${aborted}`)
+    results.push({
+      shop: slot.code, account, index, name: 'abort', exit: 'abort',
+      seconds: 0, bytes: 0, error: aborted,
+    })
+  } else if (recoveries > 0) {
+    console.log(`  ${account} 完成，中途恢复过 ${recoveries} 次连接`)
   }
 }
 
