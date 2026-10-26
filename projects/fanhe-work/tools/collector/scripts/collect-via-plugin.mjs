@@ -57,6 +57,42 @@ const DRY = flag('dry-run')
 /* 只补三条维度探测。用于「主数据已在、只缺渠道/地域/搜索词」的补采，
    把单店耗时从二十分钟压到两三分钟，也避开插件长任务断连的窗口。 */
 const ONLY_API = flag('only-api')
+/*
+ * 回填用的两个开关。
+ *
+ * --no-switch：跳过切换账号与 65 秒等待。回填时同一家店要连跑好几天，
+ *   每天重切一次账号会白白多花一分多钟，而账号本来就没变。
+ * --no-item：跳过单品级下钻。历史回填要的是逐日趋势，单品数据只对当天诊断
+ *   有用，回填进来既占体积也没有查询场景。
+ */
+const NO_SWITCH = flag('no-switch')
+const MINIMAL = flag('minimal')
+/* --minimal 隐含跳过单品：最小集本来就只取逐日、商品榜与四条维度。 */
+const NO_ITEM = flag('no-item') || MINIMAL
+/*
+ * --minimal：只跑能进看板的六条。
+ *
+ *   1 home-overview   逐日四项与 summary 九项
+ *   9 item-list       商品榜
+ *  50 channel-tree    渠道
+ *  51 area-list       地域
+ *  52 keyword-list    搜索词
+ *  53 flow-overview   summary 补到十三项、daily 的商品访客
+ *
+ * 历史回填要的是趋势，订单明细、退款、客服对话这些只对当天诊断有用，回填进来
+ * 既占体积又没有查询场景。十八次运行乘六条，十分钟能跑完；跑满三十六条要一小时。
+ */
+const MINIMAL_KEEP = new Set(['home-overview', 'item-list'])
+/*
+ * 命令名到固定序号。
+ *
+ * 序号不能靠自增：--minimal 只跑六条时，item-list 会变成第 2 条、文件叫
+ * `02-item-list.json`，而适配器按完整清单的第 9 位找 `09-item-list.json`，
+ * 于是商品榜整块读不到，导出显示 item 0 行。序号必须与完整清单的位置绑定。
+ */
+const SHOP_SEQ = new Map(SHOP_CMDS.map((entry, i) => [entry[0], i + 1]))
+/** 单品级同理，接在店铺级之后，从 37 起。 */
+const ITEM_SEQ = new Map(ITEM_CMDS.map((entry, i) => [entry[0], SHOP_CMDS.length + i + 1]))
 
 const D1 = ['--date', DATE]
 // 7 天窗口：服务端按含首尾算，10-24 往前推 6 天正好 7 天
@@ -195,7 +231,12 @@ const API_CMDS = [
   ],
 ]
 
-const TOTAL = SHOP_CMDS.length + ITEM_CMDS.length + API_CMDS.length
+/* 日志里的分母。序号本身固定（探测永远是 50 到 53，文件命名要稳定），
+   这里只影响「[3/6]」这类显示。 */
+const TOTAL = ONLY_API
+  ? API_CMDS.length
+  : (MINIMAL ? MINIMAL_KEEP.size : SHOP_CMDS.length + (NO_ITEM ? 0 : ITEM_CMDS.length)) +
+    API_CMDS.length
 const SWITCH_WAIT_MS = 65_000
 
 /*
@@ -302,8 +343,16 @@ console.log(`命令 ${TOTAL} 条/店，共 ${TOTAL * TARGETS.length} 次调用\n
 if (DRY) {
   for (const slot of TARGETS) {
     console.log(`${slot.name}(${slot.code})`)
-    for (const [name] of SHOP_CMDS) console.log(`  · ${name}`)
-    for (const [name] of ITEM_CMDS) console.log(`  · ${name}（用本店热销第一名）`)
+    if (ONLY_API) {
+      console.log('  （只跑四条维度探测）')
+    } else {
+      const shopCmds = MINIMAL ? SHOP_CMDS.filter((entry) => MINIMAL_KEEP.has(entry[0])) : SHOP_CMDS
+      for (const [name] of shopCmds) console.log(`  · ${name}`)
+      if (!NO_ITEM) {
+        for (const [name] of ITEM_CMDS) console.log(`  · ${name}（用本店热销第一名）`)
+      }
+    }
+    for (const [name] of API_CMDS) console.log(`  · ${name}（裸探测）`)
   }
   process.exit(0)
 }
@@ -329,35 +378,39 @@ for (const slot of TARGETS) {
   console.log('='.repeat(56))
   console.log(`${account}（${slot.code}） -> ${path.relative(REPO, dayDir)}`)
 
-  const switched = await runTb(['account', 'use', account], 180_000)
-  if (switched.code !== 0) {
-    console.error(`  切换账号失败：${lastLine(switched.stderr)}`)
-    results.push({ shop: slot.code, name: 'switch', exit: switched.code, error: '切换账号失败' })
-    continue
-  }
-  console.log(`  已切换到 ${account}，等 ${SWITCH_WAIT_MS / 1000} 秒让发射台页面重建`)
-  await sleep(SWITCH_WAIT_MS)
-
-  /*
-   * 真实取数探测。
-   *
-   * 为什么不能只信 `account check`：它探的是卖家后台首页，与生意参谋的 session
-   * 可能不同步。账号列表显示「上次检查还在」，实际取数却报 code=5810 未登录，
-   * 这种不一致已经踩过两次，每次都是跑完 49 条才发现第一条就挂。
-   * 这里用最轻的一条 home-overview 当探针，失败就跳过整家店。
-   */
-  const probeFile = path.join(dayDir, '_probe.json')
-  const probe = await runTb(['sycm', 'home-overview', '--date', DATE, '--raw', '--out', probeFile])
-  if (probe.code !== 0) {
-    const reason = lastLine(probe.stderr) || lastLine(probe.stdout)
-    console.error(`  ✗ 账号 ${account} 取数失败，跳过整家店：${reason}`)
-    if (reason.includes('5810') || reason.includes('login')) {
-      console.error(`    处理：在浏览器里重新登录 ${account}，再运行 account save ${account}`)
+  if (NO_SWITCH) {
+    console.log('  跳过账号切换与登录态探测（--no-switch），假定当前就是该账号')
+  } else {
+    const switched = await runTb(['account', 'use', account], 180_000)
+    if (switched.code !== 0) {
+      console.error(`  切换账号失败：${lastLine(switched.stderr)}`)
+      results.push({ shop: slot.code, name: 'switch', exit: switched.code, error: '切换账号失败' })
+      continue
     }
-    results.push({ shop: slot.code, account, index: 0, name: 'probe', exit: probe.code, seconds: probe.seconds, bytes: 0, error: reason })
-    continue
+    console.log(`  已切换到 ${account}，等 ${SWITCH_WAIT_MS / 1000} 秒让发射台页面重建`)
+    await sleep(SWITCH_WAIT_MS)
+
+    /*
+     * 真实取数探测。
+     *
+     * 为什么不能只信 `account check`：它探的是卖家后台首页，与生意参谋的 session
+     * 可能不同步。账号列表显示「上次检查还在」，实际取数却报 code=5810 未登录，
+     * 这种不一致已经踩过两次，每次都是跑完 49 条才发现第一条就挂。
+     * 这里用最轻的一条 home-overview 当探针，失败就跳过整家店。
+     */
+    const probeFile = path.join(dayDir, '_probe.json')
+    const probe = await runTb(['sycm', 'home-overview', '--date', DATE, '--raw', '--out', probeFile])
+    if (probe.code !== 0) {
+      const reason = lastLine(probe.stderr) || lastLine(probe.stdout)
+      console.error(`  ✗ 账号 ${account} 取数失败，跳过整家店：${reason}`)
+      if (reason.includes('5810') || reason.includes('login')) {
+        console.error(`    处理：在浏览器里重新登录 ${account}，再运行 account save ${account}`)
+      }
+      results.push({ shop: slot.code, account, index: 0, name: 'probe', exit: probe.code, seconds: probe.seconds, bytes: 0, error: reason })
+      continue
+    }
+    console.log(`  探测通过（${probe.seconds}s），开始 ${TOTAL} 条命令`)
   }
-  console.log(`  探测通过（${probe.seconds}s），开始 ${TOTAL} 条命令`)
 
   let index = 0
   let itemId = null
@@ -432,8 +485,15 @@ for (const slot of TARGETS) {
     return { result, outFile }
   }
 
-  for (const [name, args, mode] of ONLY_API ? [] : SHOP_CMDS) {
-    const { outFile } = await exec(name, args, mode)
+  const shopCmds = ONLY_API
+    ? []
+    : MINIMAL
+      ? SHOP_CMDS.filter((entry) => MINIMAL_KEEP.has(entry[0]))
+      : SHOP_CMDS
+
+  for (const [name, args, mode] of shopCmds) {
+    /* 用完整清单里的位置作序号，--minimal 时文件仍然叫 09-item-list.json。 */
+    const { outFile } = await exec(name, args, mode, SHOP_SEQ.get(name) ?? null)
     if (name === 'item-list' && outFile !== null) {
       try {
         const rows = JSON.parse(fs.readFileSync(outFile, 'utf8'))?.data?.data
@@ -450,11 +510,13 @@ for (const slot of TARGETS) {
 
   if (ONLY_API) {
     console.log('  只补维度探测，跳过店铺级与单品级命令')
+  } else if (NO_ITEM) {
+    console.log('  跳过单品级下钻（--no-item），只取店铺级与维度')
   } else if (itemId === '') {
     console.log('  没有 itemId，跳过单品级命令')
   } else {
     for (const [name, args, mode] of ITEM_CMDS) {
-      await exec(name, ['--item-id', itemId, ...args], mode)
+      await exec(name, ['--item-id', itemId, ...args], mode, ITEM_SEQ.get(name) ?? null)
     }
   }
 
