@@ -89,10 +89,11 @@ const MINIMAL_KEEP = new Set(['home-overview', 'item-list'])
  * 序号不能靠自增：--minimal 只跑六条时，item-list 会变成第 2 条、文件叫
  * `02-item-list.json`，而适配器按完整清单的第 9 位找 `09-item-list.json`，
  * 于是商品榜整块读不到，导出显示 item 0 行。序号必须与完整清单的位置绑定。
+ *
+ * 这两个映射必须定义在 SHOP_CMDS / ITEM_CMDS 之后：顶层 const 会在模块求值时
+ * 立即执行 map()，写在清单之前会踩 TDZ（Cannot access before initialization）。
+ * 注意 `node --check` 查不出这类问题，它只做语法解析。
  */
-const SHOP_SEQ = new Map(SHOP_CMDS.map((entry, i) => [entry[0], i + 1]))
-/** 单品级同理，接在店铺级之后，从 37 起。 */
-const ITEM_SEQ = new Map(ITEM_CMDS.map((entry, i) => [entry[0], SHOP_CMDS.length + i + 1]))
 
 const D1 = ['--date', DATE]
 // 7 天窗口：服务端按含首尾算，10-24 往前推 6 天正好 7 天
@@ -231,6 +232,11 @@ const API_CMDS = [
   ],
 ]
 
+/* 命令名到完整清单位置。见上方注释，必须放在清单定义之后。 */
+const SHOP_SEQ = new Map(SHOP_CMDS.map((entry, i) => [entry[0], i + 1]))
+/** 单品级同理，接在店铺级之后，从 37 起。 */
+const ITEM_SEQ = new Map(ITEM_CMDS.map((entry, i) => [entry[0], SHOP_CMDS.length + i + 1]))
+
 /* 日志里的分母。序号本身固定（探测永远是 50 到 53，文件命名要稳定），
    这里只影响「[3/6]」这类显示。 */
 const TOTAL = ONLY_API
@@ -320,7 +326,7 @@ const TARGETS = SLOTS.filter(
   (slot) =>
     slot.collect === true &&
     !String(slot.code).startsWith('zz-') &&
-    (ONLY === null || slot.name === ONLY || slot.code === ONLY),
+    (ONLY === null || slot.name === ONLY || slot.code === ONLY || slot.pluginAccount === ONLY),
 )
 
 if (TARGETS.length === 0) {
@@ -371,7 +377,9 @@ console.log('前置检查通过\n')
 const results = []
 
 for (const slot of TARGETS) {
-  const account = slot.name
+  /* 插件里存的账号名是登录后的昵称（如「梵禾定制家具:小阳」），与店铺显示名（梵禾）
+     不是一回事。用显示名去 `account use` 会精确匹配失败，所以优先读 pluginAccount。 */
+  const account = slot.pluginAccount ?? slot.name
   const dayDir = path.join(ROOT, 'data', 'plugin', slot.code, DATE)
   fs.mkdirSync(dayDir, { recursive: true })
 
@@ -379,7 +387,7 @@ for (const slot of TARGETS) {
   console.log(`${account}（${slot.code}） -> ${path.relative(REPO, dayDir)}`)
 
   if (NO_SWITCH) {
-    console.log('  跳过账号切换与登录态探测（--no-switch），假定当前就是该账号')
+    console.log('  跳过账号切换（--no-switch），假定当前就是该账号')
   } else {
     const switched = await runTb(['account', 'use', account], 180_000)
     if (switched.code !== 0) {
@@ -389,28 +397,30 @@ for (const slot of TARGETS) {
     }
     console.log(`  已切换到 ${account}，等 ${SWITCH_WAIT_MS / 1000} 秒让发射台页面重建`)
     await sleep(SWITCH_WAIT_MS)
-
-    /*
-     * 真实取数探测。
-     *
-     * 为什么不能只信 `account check`：它探的是卖家后台首页，与生意参谋的 session
-     * 可能不同步。账号列表显示「上次检查还在」，实际取数却报 code=5810 未登录，
-     * 这种不一致已经踩过两次，每次都是跑完 49 条才发现第一条就挂。
-     * 这里用最轻的一条 home-overview 当探针，失败就跳过整家店。
-     */
-    const probeFile = path.join(dayDir, '_probe.json')
-    const probe = await runTb(['sycm', 'home-overview', '--date', DATE, '--raw', '--out', probeFile])
-    if (probe.code !== 0) {
-      const reason = lastLine(probe.stderr) || lastLine(probe.stdout)
-      console.error(`  ✗ 账号 ${account} 取数失败，跳过整家店：${reason}`)
-      if (reason.includes('5810') || reason.includes('login')) {
-        console.error(`    处理：在浏览器里重新登录 ${account}，再运行 account save ${account}`)
-      }
-      results.push({ shop: slot.code, account, index: 0, name: 'probe', exit: probe.code, seconds: probe.seconds, bytes: 0, error: reason })
-      continue
-    }
-    console.log(`  探测通过（${probe.seconds}s），开始 ${TOTAL} 条命令`)
   }
+
+  /*
+   * 真实取数探测。两种模式都要跑。
+   *
+   * 为什么不能只信 `account check`：它探的是卖家后台首页，与生意参谋的 session
+   * 可能不同步。账号列表显示「上次检查还在」，实际取数却报 code=5810 未登录，
+   * 这种不一致已经踩过两次，每次都是跑完几十条才发现第一条就挂。
+   *
+   * --no-switch 同样要探测：回填时同一家店连跑多天，某一天插件中途断连，下一天
+   * 会直接撞上离线状态白跑六条。探测只要三秒，比白跑六条便宜得多。
+   */
+  const probeFile = path.join(dayDir, '_probe.json')
+  const probe = await runTb(['sycm', 'home-overview', '--date', DATE, '--raw', '--out', probeFile])
+  if (probe.code !== 0) {
+    const reason = lastLine(probe.stderr) || lastLine(probe.stdout)
+    console.error(`  ✗ 账号 ${account} 在 ${DATE} 取数失败，跳过这一天：${reason}`)
+    if (reason.includes('5810') || reason.includes('login')) {
+      console.error(`    处理：在浏览器里重新登录 ${account}，再运行 account save ${account}`)
+    }
+    results.push({ shop: slot.code, account, index: 0, name: 'probe', exit: probe.code, seconds: probe.seconds, bytes: 0, error: reason })
+    continue
+  }
+  console.log(`  探测通过（${probe.seconds}s），开始 ${TOTAL} 条命令`)
 
   let index = 0
   let itemId = null
