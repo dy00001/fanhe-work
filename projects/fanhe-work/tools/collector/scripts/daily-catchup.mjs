@@ -28,6 +28,15 @@ const API_DIR = path.join(REPO, 'apps', 'api')
 const COLLECT = path.join(HERE, 'collect-via-plugin.mjs')
 const EXPORT = path.join(HERE, 'export-sycm-ingest.mjs')
 
+/*
+ * 把 node 所在目录补进 PATH。
+ *
+ * 计划任务的最小环境里没有 node，而入库要调 `tsx.cmd`，它内部又会去调 `node`。
+ * 不补这一句，采集和导出都正常，只有入库那一步报
+ * `'node' is not recognized`，从日志上看像是入库逻辑坏了。
+ */
+process.env.PATH = `${path.dirname(process.execPath)};${process.env.PATH ?? ''}`
+
 function option(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`)
   return i === -1 ? fallback : (process.argv[i + 1] ?? fallback)

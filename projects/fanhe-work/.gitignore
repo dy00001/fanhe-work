@@ -57,6 +57,8 @@ tools/collector/data/payload/
 tools/collector/.tmp/
 # 常驻同步的运行日志：机器本地状态，可重新生成
 tools/collector/data/sync-watch.log*
+# 每日叠加的运行日志，同上
+tools/collector/data/daily-catchup.log*
 # 调试用的临时日志（仓库根与各 app 下都可能有）
 .tmp-*.log
 
