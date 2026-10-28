@@ -350,6 +350,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
                   group={data.dimensions.content}
                   valueKey="visitors"
                   valueLabel="访客"
+                  unavailable="内容数据在光合平台，与生意参谋跨域，取数插件读不到。库里留存的是 30 天基线，不代表当日。"
                 />
               </div>
             </div>

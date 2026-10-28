@@ -15,17 +15,31 @@ export function OpsRankList(props: {
   valueKey: string
   valueLabel: string
   shareKey?: string
+  /**
+   * 该维度确定取不到时的说明。传了就忽略 group 里的行，窗口标签也改成「未接入」。
+   *
+   * 为什么需要这个而不是让它显示空态：内容来源在库里还留着 09-19 至 10-18 的
+   * 30 天基线，读起来像有数据，但跟旁边三块当日的渠道、地域、搜索词不是一回事。
+   * 显示旧数字比显示「未接入」更容易误读。
+   */
+  unavailable?: string
 }) {
   const rows = props.group.rows
   const max = maxMetric(rows, props.valueKey)
   const windowLabel =
-    props.group.window === null
-      ? '无数据'
-      : `${shortDate(props.group.window.from)} ~ ${shortDate(props.group.window.to)} 整段`
+    props.unavailable !== undefined
+      ? '未接入'
+      : props.group.window === null
+        ? '无数据'
+        : `${shortDate(props.group.window.from)} ~ ${shortDate(props.group.window.to)} 整段`
 
   return (
     <OpsSection title={props.title} note={windowLabel}>
-      {rows.length === 0 ? (
+      {props.unavailable !== undefined ? (
+        <p className="py-6 text-center text-xs leading-relaxed text-muted-foreground-weak">
+          {props.unavailable}
+        </p>
+      ) : rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground-weak">还没有这项数据</p>
       ) : (
         <ul className="flex flex-col gap-2.5">
