@@ -5,6 +5,7 @@
   "description": "梵禾 Work 桌面外壳：内置静态服务与本机代理，把网页端包成可安装的桌面应用。",
   "author": "梵禾 <dev@fanhe.local>",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
