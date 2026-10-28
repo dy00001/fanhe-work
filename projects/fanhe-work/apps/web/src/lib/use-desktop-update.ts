@@ -142,10 +142,10 @@ export function useDesktopUpdate(): DesktopUpdateControls {
    * 会把「effect 里调一个可能直接 setState 的函数」报成级联渲染，而 `await` 之后
    * 的 `setStatus` 对那条规则来说与「直接调用」看不出区别。
    */
-  const refresh = useCallback((): void => {
+  const refresh = useCallback((): Promise<void> => {
     const bridge = desktopBridge()
-    if (bridge === undefined) return
-    void bridge
+    if (bridge === undefined) return Promise.resolve()
+    return bridge
       .getUpdateStatus()
       .then((payload) => {
         const next = parseDesktopUpdateStatus(payload)
@@ -216,7 +216,7 @@ export function useDesktopUpdate(): DesktopUpdateControls {
       // 整个更新功能坏了。
       console.warn(`[update] 未执行安装（${result.reason}）：${result.detail}`)
       setBusy(false)
-      refresh()
+      void refresh()
     } catch (error) {
       console.warn(
         `[update] 安装通道调用失败：${error instanceof Error ? error.message : String(error)}`,
@@ -228,17 +228,74 @@ export function useDesktopUpdate(): DesktopUpdateControls {
   // 挂载时读一次当前状态（主进程启动时已经查过一轮，这里只是把它取回来）。
   useEffect(() => {
     if (HOST !== 'desktop') return
-    refresh()
+    void refresh()
   }, [refresh])
 
-  // 自适应轮询：间隔由当前阶段决定，`0` 表示停止。
+  /**
+   * 轮询的定时器、存活标志与调度函数。
+   *
+   * 三个都放 ref：**调度必须与渲染解耦**。原因见下面主调度 effect 的注释 ——
+   * 靠 `status` 引用触发重排的写法，会在「某一拍状态没变」时永久停摆。
+   */
+  const pollTimer = useRef(0)
+  const pollAlive = useRef(false)
+  const pollSchedule = useRef<() => void>(() => {})
+
+  /**
+   * 自适应轮询：间隔由当前阶段决定，`0` 表示停止。
+   *
+   * 🔴 **这个 effect 不能把 `status` 写进依赖数组。** 曾经的写法是
+   * `useEffect(..., [status, refresh])` 里排一次 `setTimeout`，靠状态变化触发下一次
+   * 重排。它和 `isSameUpdateStatus` 的「内容相同就保留旧引用」叠在一起会变成死锁：
+   * 内容没变 → 不重渲染 → effect 不重跑 → **定时器再也不会被排上**。
+   *
+   * 而这个死锁恰好落在最要命的位置：下载到 100% 之后，主进程还要做落盘与签名校验，
+   * 那几秒里状态本来就不变；于是界面永远停在「正在下载 100%」，而主进程早已进入
+   * 「已就绪」或「失败」——**用户看到的是一个既不会前进、也不会报错的进度条**，
+   * 这正是 0.3.4 上「下载完成后没有后一步动作」的直接成因。
+   *
+   * 所以改成：每拍自己续期（`refresh()` 完成后无条件排下一拍），间隔从 `latest`
+   * 这个 ref 读，与是否重渲染无关。`status` 只在下面那个 effect 里用来**提前**重排，
+   * 不再承担「决定要不要继续」的职责。
+   */
   useEffect(() => {
     if (HOST !== 'desktop') return
-    const interval = updatePollIntervalMs(status)
-    if (interval === 0) return
-    const timer = window.setTimeout(refresh, interval)
-    return () => window.clearTimeout(timer)
-  }, [status, refresh])
+    pollAlive.current = true
+
+    const schedule = (): void => {
+      window.clearTimeout(pollTimer.current)
+      if (!pollAlive.current) return
+      const interval = updatePollIntervalMs(latest.current)
+      if (interval === 0) return
+      pollTimer.current = window.setTimeout(() => {
+        void refresh().then(() => {
+          // 无条件续期：这一拍状态有没有变，都不影响下一拍该不该存在。
+          schedule()
+        })
+      }, interval)
+    }
+
+    pollSchedule.current = schedule
+    schedule()
+
+    return () => {
+      pollAlive.current = false
+      window.clearTimeout(pollTimer.current)
+      pollSchedule.current = () => {}
+    }
+  }, [refresh])
+
+  /**
+   * 状态一变就按新节奏重排一次。
+   *
+   * 主调度是自续期的，但它的间隔最长 30 秒（空闲态）。少了这一拍，用户点了
+   * 「立即更新」之后最坏要等 30 秒界面才有反应 —— 那与「点了没反应」在观感上
+   * 没有区别。这里只负责「提前」，不负责「维持」。
+   */
+  useEffect(() => {
+    if (HOST !== 'desktop') return
+    pollSchedule.current()
+  }, [status])
 
   // 长时间开着时自己重查一次（主进程只在启动时查）。
   useEffect(() => {
