@@ -11,6 +11,10 @@
  *   node_modules/.bin/tsx src/tools/customer-sync.ts --verbose      # 列出每个变化
  *   node_modules/.bin/tsx src/tools/customer-sync.ts --dir <路径>    # 换一个聊天库目录
  *
+ * 经批处理（定时任务）启动时改用环境变量，因为 ws-run.ps1 会把以短横线开头的参数
+ * 当成自己的参数吃掉：`FANHE_SYNC_DRY=1` / `FANHE_SYNC_VERBOSE=1` / `FANHE_CHAT_DIR`。
+ * 细节见 `customer/sync-args.ts` 的文件头。
+ *
  * **必须在宿主机上跑，不能在容器里跑。** compose 里 api 服务没有任何卷挂载，
  * 容器看不到 D 盘；容器内跑会扫出 0 个文件并且「成功退出」，这类失败不留痕迹。
  *
@@ -18,52 +22,10 @@
  * 变化」）退 0。**「0 个文件」不当作成功** —— 那通常意味着路径写错或盘没挂上。
  */
 import fs from 'node:fs'
-import path from 'node:path'
 
 import { prisma } from '../db/prisma.js'
+import { parseSyncArgs } from '../customer/sync-args.js'
 import { syncCustomersFromArchive, type SyncReport } from '../customer/sync.js'
-
-/** 默认指向阿阳机器上的 Obsidian 库；换机用 `--dir` 或环境变量覆盖。 */
-const DEFAULT_CHAT_DIR = 'D:\\Obsidian\\个人知识库\\客户聊天记录库'
-
-/** 别名表只在 `data/` 下，已被 .gitignore 排除（含真实群名与客户名）。 */
-const DEFAULT_RELATIVE_ALIASES = path.join('..', '..', 'data', 'customer-aliases.json')
-
-type Args = { chatDir: string; aliasesFile: string; dryRun: boolean; verbose: boolean }
-
-function parseArgs(argv: readonly string[]): Args {
-  let chatDir = process.env.FANHE_CHAT_DIR?.trim() || DEFAULT_CHAT_DIR
-  let aliasesFile = path.resolve(process.cwd(), DEFAULT_RELATIVE_ALIASES)
-  let dryRun = false
-  let verbose = false
-  for (let i = 2; i < argv.length; i += 1) {
-    const arg = argv[i]
-    if (arg === '--dry-run') {
-      dryRun = true
-      continue
-    }
-    if (arg === '--verbose') {
-      verbose = true
-      continue
-    }
-    if (arg === '--dir') {
-      const next = argv[i + 1]
-      if (next === undefined || next.trim() === '') throw new Error('--dir 后面要跟一个路径')
-      chatDir = path.resolve(next)
-      i += 1
-      continue
-    }
-    if (arg === '--aliases') {
-      const next = argv[i + 1]
-      if (next === undefined || next.trim() === '') throw new Error('--aliases 后面要跟一个路径')
-      aliasesFile = path.resolve(next)
-      i += 1
-      continue
-    }
-    throw new Error(`认不出的参数：${arg}`)
-  }
-  return { chatDir, aliasesFile, dryRun, verbose }
-}
 
 const HELD_LABEL: Record<keyof SyncReport['stageHeld'], string> = {
   reviewed: '已复核，阶段不动',
@@ -153,7 +115,7 @@ function printReport(report: SyncReport, verbose: boolean): void {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv)
+  const args = parseSyncArgs(process.argv)
 
   if (!fs.existsSync(args.chatDir)) {
     throw new Error(`聊天记录库目录不存在：${args.chatDir}`)
