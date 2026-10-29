@@ -90,6 +90,133 @@ function run(cmd, args, cwd = REPO, useShell = false) {
   })
 }
 
+/* ── 0. 前置：取数桥必须在线 ─────────────────────────────────────────── */
+
+/*
+ * 为什么要有这一段
+ *
+ * 取数桥是浏览器里的插件，它轮询 sycm-cli 在 127.0.0.1:47831-47840 开的端口。
+ * 浏览器没开就没有任何东西去连那些端口，doctor 直接判「插件离线」，采集每条都
+ * 退 3。计划任务没有控制台，这件事只会表现为「任务跑了，日志一行 exit=3」。
+ *
+ * 实测最常见的原因就是 Edge 根本没开（这台机器上每天第一次跑都是这样）。
+ * 于是这里补一步：doctor 不通就先尝试把 Edge 拉起来，再等它把插件连上。
+ *
+ * 关掉这一步设 FANHE_AUTO_EDGE=0：有人不希望自动化弹浏览器窗口。
+ */
+const SYCM_ROOT = process.env.SYCM_CLI_ROOT ?? path.join(REPO, '..', '..', 'runtime', 'sycm-cli')
+const SYCM_PY = path.join(SYCM_ROOT, '.venv', 'Scripts', 'python.exe')
+
+/**
+ * 跑一条命令并收下输出。
+ *
+ * 与上面的 run 分开写：run 用 stdio inherit 把输出直接交给终端，而计划任务没有
+ * 终端，doctor 失败的那行原因会消失在日志之外，只剩一个退出码。
+ */
+function capture(cmd, args, env) {
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    const child = spawn(cmd, args, {
+      cwd: REPO,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }))
+    child.on('error', (error) => resolve({ code: 1, stdout: '', stderr: error.message }))
+  })
+}
+
+/** 最后一行非空输出。doctor 的原因在最后一行。 */
+function lastLine(text) {
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  return lines.length === 0 ? '' : lines[lines.length - 1]
+}
+
+function sycmDoctor() {
+  return capture(SYCM_PY, ['-m', 'tb', 'sycm', 'doctor'], {
+    PYTHONUTF8: '1',
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONPATH: SYCM_ROOT,
+    TB_STATE_ROOT: path.join(SYCM_ROOT, '.runtime'),
+  })
+}
+
+/** Edge 的可执行文件。候选表而不是单个路径：Program Files 与 (x86) 两种装法都有。 */
+function findEdge() {
+  const candidates = [
+    path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env['LOCALAPPDATA'] ?? '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ]
+  return candidates.find((file) => file !== '' && fs.existsSync(file)) ?? null
+}
+
+/**
+ * 确保取数桥在线。返回 true 表示可以开始采集。
+ *
+ * 等待窗口取 90 秒：Edge 冷启动到插件 service worker 醒来要十几秒，而 doctor
+ * 自身一次也要十秒上下，窗口给短了会在「其实马上就通了」的时候判死。
+ */
+async function ensureBridge() {
+  if (!fs.existsSync(SYCM_PY)) {
+    console.log(`取数桥检查跳过：找不到 ${SYCM_PY}`)
+    return false
+  }
+
+  const first = await sycmDoctor()
+  if (first.code === 0) {
+    console.log('取数桥在线')
+    return true
+  }
+  console.log(`取数桥未就绪：${lastLine(first.stderr) || lastLine(first.stdout) || 'doctor 退出码 ' + first.code}`)
+
+  if (process.env.FANHE_AUTO_EDGE === '0') {
+    console.log('FANHE_AUTO_EDGE=0，不自动启动浏览器')
+    return false
+  }
+
+  const edge = findEdge()
+  if (edge === null) {
+    console.log('找不到 msedge.exe，无法自动启动浏览器')
+    return false
+  }
+
+  /*
+   * detached 是必需的：本脚本跑完就退出，而浏览器要继续留着给下一次采集用。
+   * 不 detach 的话 Edge 会跟着父进程一起被收掉，表现为「刚启动就被杀」。
+   */
+  console.log(`启动浏览器唤醒取数桥：${edge}`)
+  try {
+    const child = spawn(edge, ['https://sycm.taobao.com'], { detached: true, stdio: 'ignore' })
+    child.unref()
+  } catch (error) {
+    console.log(`启动浏览器失败：${error.message}`)
+    return false
+  }
+
+  const deadline = Date.now() + 90_000
+  let attempt = 0
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10_000))
+    attempt += 1
+    const probe = await sycmDoctor()
+    if (probe.code === 0) {
+      console.log(`取数桥已连通（第 ${attempt} 次探测）`)
+      return true
+    }
+    console.log(`  第 ${attempt} 次探测未通：${lastLine(probe.stderr) || lastLine(probe.stdout)}`)
+  }
+  console.log('等待超时，取数桥仍未连通')
+  return false
+}
+
 /* ── 1. 读店铺清单 ───────────────────────────────────────────────────── */
 
 const config = JSON.parse(fs.readFileSync(path.join(REPO, 'tools', 'collector', 'shops.config.json'), 'utf8'))
@@ -119,6 +246,21 @@ const total = gaps.reduce((sum, gap) => sum + gap.missing.length, 0)
 if (DRY) {
   console.log(gaps.length === 0 ? '\n--dry-run 不采集。' : `\n共缺 ${total} 个天次。--dry-run 不采集。`)
   process.exit(0)
+}
+
+/* ── 2.5 取数桥就绪检查 ──────────────────────────────────────────────── */
+
+/*
+ * 没有缺口就不必碰浏览器：下面的入库核对只读本地文件与数据库。
+ * 有缺口但桥不通时把 gaps 清空，让流程继续走完导出与入库 —— 已经落盘的日子
+ * 仍然要被核对，不能因为今天采不到就把历史一起跳过。
+ */
+if (gaps.length > 0) {
+  const bridgeReady = await ensureBridge()
+  if (!bridgeReady) {
+    console.error('\n取数桥不可用，本次跳过采集，只做入库核对。')
+    gaps.length = 0
+  }
 }
 
 /* ── 3. 逐店补齐 ─────────────────────────────────────────────────────── */
