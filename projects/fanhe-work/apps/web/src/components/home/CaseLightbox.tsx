@@ -63,7 +63,9 @@ export function CaseLightbox({
     <div
       // 整层可点：图片与空白处都触发 `onClose`，因为图片没有自己的点击处理。
       onClick={onClose}
-      className="absolute inset-0 z-20 flex flex-col bg-[color-mix(in_srgb,var(--foreground)_82%,transparent)] p-4 backdrop-blur-sm"
+      // `overflow-hidden` 是兜底：图片尺寸已经改成跟着可用空间走，这里再裁一刀，
+      // 保证任何没预料到的子元素都不会顶出弹窗被视口切掉（那正是之前的故障形态）。
+      className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[color-mix(in_srgb,var(--foreground)_82%,transparent)] p-4 backdrop-blur-sm"
     >
       <div className="flex items-center justify-between px-2 pb-2 text-xs text-background/80">
         <span>{many ? `${index + 1} / ${items.length}` : '共 1 张'}</span>
@@ -81,7 +83,7 @@ export function CaseLightbox({
         </button>
       </div>
 
-      <div className="grid min-h-0 flex-1 place-items-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center">
         {/* `key` 按图片 id 换：加载态记在子组件里，不 key 的话切到下一张时上一张的
             「已加载」会留在状态里，新图没到也显示成加载完成。 */}
         <LightboxImage key={current.id} src={current.src} alt={current.alt} />
@@ -137,7 +139,14 @@ function LightboxImage({ src, alt }: { src: string; alt: string }) {
   return (
     // 相对容器：占位层叠在图片上，而不是与图片各占一行。图片一进来就撑开尺寸，
     // 因此转圈的位置就是图片最终出现的位置，不会在加载完成瞬间跳一下。
-    <div className="relative grid h-[min(60vh,640px)] w-full place-items-center">
+    //
+    // 🔴 **高度不写死。** 上一版是 `h-[min(60vh,640px)]`，看起来「够大就行」，实际把
+    // 「图片该多大」和「弹窗有多高」定成了两件互不相干的事：弹窗高度是由下面那张网格
+    // 撑出来的（一个品类只有 5 张图时约 570px），而放大层是 `absolute inset-0` 贴在这个
+    // 矮弹窗上的，60vh 的内容直接顶出弹窗下边界，被视口裁掉一截 —— 用户看到的就是
+    // 「图片显示不完全」。现在改成吃满 flex 剩余空间（`h-full` + `min-h-0`），
+    // 图片永远在弹窗内部缩放，弹窗多高它就多大。
+    <div className="relative flex h-full min-h-0 w-full items-center justify-center">
       <img
         key={attempt}
         src={src}

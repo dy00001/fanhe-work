@@ -3,10 +3,12 @@ import { AlertCircle, ChevronDown, Image as ImageIcon, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import type { CaseCategory } from '../../lib/case-catalog'
+import { CASE_CATEGORIES, type CaseCategory } from '../../lib/case-catalog'
 import {
+  buildCaseIndex,
   buildCaseLibraryView,
   filterCaseItems,
+  groupFoldersByCategory,
   type CaseAlbumItem,
   type CaseFolderFilter,
   type CaseFolderGroup,
@@ -18,6 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -70,6 +73,13 @@ export function CaseLibraryDialog({
   const [lightboxId, setLightboxId] = useState<string | null>(null)
 
   /**
+   * 全量清单的索引。**跨品类移动之后必须用它**：目标品类的图集里会出现它自己的清单
+   * 里没有的图（从别的品类挪进来的），那张图的地址与标题只能从全局索引取。
+   * 清单是模块级常量，这份索引建一次就够。
+   */
+  const index = useMemo(() => buildCaseIndex(CASE_CATEGORIES), [])
+
+  /**
    * 静态清单 + 服务端归属 → 可直接渲染的视图。
    *
    * `useMemo` 的依赖是 `library.snapshot` 本身而不是它的字段：服务端每次回传一个新对象，
@@ -77,8 +87,19 @@ export function CaseLibraryDialog({
    * 比对 folders / placements 更省事，也不会漏。
    */
   const view = useMemo(
-    () => (library.snapshot === null ? null : buildCaseLibraryView(category, library.snapshot)),
-    [category, library.snapshot],
+    () =>
+      library.snapshot === null ? null : buildCaseLibraryView(category, library.snapshot, index),
+    [category, library.snapshot, index],
+  )
+
+  /**
+   * 移动菜单的选项：**全部品类**的文件夹，按品类分组。整理时最常见的动作是把放错品类的
+   * 图挪到隔壁品类去，只列当前品类等于让这件事做不到。
+   */
+  const folderOptions = useMemo(
+    () =>
+      library.snapshot === null ? [] : groupFoldersByCategory(library.snapshot, CASE_CATEGORIES),
+    [library.snapshot],
   )
 
   const visible = useMemo(
@@ -149,7 +170,11 @@ export function CaseLibraryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          'flex max-h-[92vh] flex-col gap-0 p-0',
+          'flex flex-col gap-0 p-0',
+          // 平时高度跟着内容走：一个品类只有五六张图时，弹窗就该是紧凑的，不该留一大片
+          // 空白。但**打开放大层时必须撑满** —— 放大层是 `absolute inset-0` 贴在弹窗上的，
+          // 弹窗矮，放大层就只有那么高，图片被压成一小块（之前的故障反过来：图片溢出被裁）。
+          lightboxId === null ? 'max-h-[92vh]' : 'h-[92vh] max-h-[92vh]',
           // 宽度按「四列缩略图」反推，只受视口限制。
           'sm:max-w-[min(1120px,94vw)]',
         )}
@@ -300,7 +325,7 @@ export function CaseLibraryDialog({
                     <ChevronDown className="size-3.5" />
                   </button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+                <DropdownMenuContent align="end" className="max-h-96 w-64 overflow-y-auto">
                   <DropdownMenuLabel>放到</DropdownMenuLabel>
                   <DropdownMenuItem
                     disabled={allSelectedUnassigned}
@@ -310,24 +335,39 @@ export function CaseLibraryDialog({
                   >
                     移出文件夹（未归档）
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  {view.folders.length === 0 ? (
+                  {folderOptions.length === 0 ? (
                     <div className="px-2 py-1.5 text-xs text-muted-foreground">
                       还没有文件夹，先在筛选条上新建一个
                     </div>
                   ) : (
-                    view.folders.map((group) => (
-                      <DropdownMenuItem
-                        key={group.folder.id}
-                        onSelect={() => {
-                          void moveTo(group.folder.id)
-                        }}
-                      >
-                        <span className="min-w-0 flex-1 truncate">{group.folder.name}</span>
-                        <span className="ml-2 text-xs text-muted-foreground tabular-nums">
-                          {group.items.length}
-                        </span>
-                      </DropdownMenuItem>
+                    // 按品类分组列出**全部**文件夹，不是只有当前品类：放错品类的图挪到
+                    // 隔壁品类去，本来就是这个功能最常用的场景。组标题写品类名，当前
+                    // 品类额外挂一个「当前」标签 —— 否则用户会以为自己已经不在这个品类里了。
+                    folderOptions.map((group) => (
+                      <DropdownMenuGroup key={group.categoryId}>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="flex items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate">{group.categoryName}</span>
+                          {group.categoryId === category.id && (
+                            <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+                              当前
+                            </span>
+                          )}
+                        </DropdownMenuLabel>
+                        {group.folders.map((option) => (
+                          <DropdownMenuItem
+                            key={option.folder.id}
+                            onSelect={() => {
+                              void moveTo(option.folder.id)
+                            }}
+                          >
+                            <span className="min-w-0 flex-1 truncate">{option.folder.name}</span>
+                            <span className="ml-2 text-xs text-muted-foreground tabular-nums">
+                              {option.count}
+                            </span>
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
                     ))
                   )}
                 </DropdownMenuContent>

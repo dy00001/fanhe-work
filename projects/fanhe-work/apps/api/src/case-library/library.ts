@@ -280,9 +280,13 @@ export async function deleteFolder(
  * **整体赋值语义**：提交的每个 itemId 都被设成 `folderId` 指向的文件夹，因此重复提交
  * 同一个请求不会产生副作用，客户端失败后重试不必先问「上一次成没成」。
  *
- * itemId 的归属校验只靠「前缀即品类」这条命名约定：服务端不掌握图片清单（那是前端的
- * 静态资源），能挡住的是「把衣柜的图放进橱柜的文件夹」这类跨品类写入；挡不住的只是
- * 「不存在的编号」，而它对界面无害——客户端按静态清单渲染，查不到的自然不画。
+ * **可以跨品类。** 目标文件夹属于哪个品类不影响这次写入 —— 图片跟着文件夹走，源品类
+ * 那边会因为归属行指向别人的文件夹而不再显示它（规则在 `case-library-display.ts` 里，
+ * 服务端只存事实，不判断「该不该显示」）。
+ *
+ * itemId 的合法性只靠「前缀即品类」这条命名约定：服务端不掌握图片清单（那是前端的
+ * 静态资源），能挡的只是「不存在的编号」，而它对界面无害——客户端按静态清单渲染，
+ * 查不到的自然不画。
  *
  * 先 `createMany(skipDuplicates)` 再 `updateMany`，而不是逐条 upsert：一次最多 200 条，
  * 逐条就是 200 次往返，而这个写法稳定是两条语句。顺序不能反——先更新后创建时，新建的
@@ -306,16 +310,24 @@ export async function moveItems(
   }
 
   const folderId = input.folderId
+  /**
+   * 归属行里的 `categoryId` 记的是**这张图现在归在哪个品类**，所以跨品类移动要跟着目标
+   * 文件夹走。快照不读这一列（客户端靠 `folderId` 反查文件夹的品类），但库里留着一列
+   * 「图片属于衣柜」而它正躺在橱柜的文件夹里，下一个人查数据时会被它带偏。
+   */
+  let placementCategoryId = category.data
   if (folderId !== null) {
     const folder = await prisma.caseFolder.findFirst({
       where: { id: folderId, userId, deletedAt: null },
       select: { categoryId: true },
     })
-    // 目标文件夹不在（或在别的品类里）：这不是「请求写错了」，而是与当前状态冲突。
-    // 另一台设备可能刚把它删掉，界面该做的是重取快照再让用户重选，而不是报一个
-    // 看起来像代码错误的 404。
+    // 目标文件夹不在：这不是「请求写错了」，而是与当前状态冲突。另一台设备可能刚把它
+    // 删掉，界面该做的是重取快照再让用户重选，而不是报一个看起来像代码错误的 404。
+    //
+    // **目标文件夹在别的品类里是允许的**（见 `MoveCaseItemsRequest` 的注释）。这里只挡
+    // 「不存在」，不挡「不是这个品类的」。
     if (folder === null) return fail('folder_unavailable')
-    if (folder.categoryId !== category.data) return fail('folder_unavailable')
+    placementCategoryId = folder.categoryId
   }
 
   const snapshot = await withRevision(userId, async (tx) => {
@@ -324,12 +336,19 @@ export async function moveItems(
       return
     }
     await tx.caseItemPlacement.createMany({
-      data: itemIds.map((itemId) => ({ userId, itemId, categoryId: category.data, folderId })),
+      data: itemIds.map((itemId) => ({
+        userId,
+        itemId,
+        categoryId: placementCategoryId,
+        folderId,
+      })),
       skipDuplicates: true,
     })
+    // 跨品类移动时，已存在的那一行 `categoryId` 还是旧品类 —— 一并改掉，否则同一张图
+    // 在不同文件夹之间来回搬几次之后，这一列就与事实无关了。
     await tx.caseItemPlacement.updateMany({
       where: { userId, itemId: { in: itemIds } },
-      data: { folderId },
+      data: { folderId, categoryId: placementCategoryId },
     })
   })
   return { ok: true, data: snapshot }

@@ -268,20 +268,42 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
     assert.deepEqual((removed.json().library as Library).placements, [])
   })
 
-  test('跨品类的图片、以及不存在的文件夹都被拒', async () => {
-    const { headers } = await signIn()
-    const created = await createFolder(headers, '主卧灰玻')
-    const folderId = created.folders[0]?.id
-    assert.ok(folderId !== undefined)
+  test('别的品类的 itemId 被拒，但把图片挪进别的品类的文件夹是允许的', async () => {
+    const { userId, headers } = await signIn()
+    const wardrobeLibrary = await createFolder(headers, '长衣区', 'wardrobe')
+    const wardrobeFolderId = wardrobeLibrary.folders.find((folder) => folder.name === '长衣区')?.id
+    assert.ok(wardrobeFolderId !== undefined)
 
+    // ① itemId 的前缀与 categoryId 不符 —— 这仍然要拒。服务端不掌握前端有哪些图，
+    //    能校验的只有「`wardrobe-1` 这种命名属于衣柜」这一条。
+    const wrongItem = await app.inject({
+      method: 'PUT',
+      url: '/api/cases/placements',
+      headers,
+      payload: { categoryId: 'cabinet', itemIds: ['wardrobe-1'], folderId: wardrobeFolderId },
+    })
+    assert.equal(wrongItem.statusCode, 400)
+    assert.equal(wrongItem.json().error, 'invalid_items')
+
+    // ② 图片属于橱柜、目标文件夹属于衣柜 —— 这是**跨品类移动**，2026-10-29 起允许。
     const crossed = await app.inject({
       method: 'PUT',
       url: '/api/cases/placements',
       headers,
-      payload: { categoryId: 'cabinet', itemIds: ['wardrobe-1'], folderId },
+      payload: { categoryId: 'cabinet', itemIds: ['cabinet-1'], folderId: wardrobeFolderId },
     })
-    assert.equal(crossed.statusCode, 400)
-    assert.equal(crossed.json().error, 'invalid_items')
+    assert.equal(crossed.statusCode, 200, `跨品类移动应被接受：${crossed.body}`)
+    assert.deepEqual((crossed.json().library as Library).placements, [
+      { itemId: 'cabinet-1', folderId: wardrobeFolderId },
+    ])
+
+    // 归属行的 categoryId 跟目标文件夹走。快照不读它（客户端靠 folderId 反查文件夹），
+    // 但库里留一列「这张图属于橱柜」而它正躺在衣柜的文件夹里，会把下一个人带偏。
+    const row = await prisma.caseItemPlacement.findFirst({
+      where: { userId, itemId: 'cabinet-1' },
+      select: { categoryId: true },
+    })
+    assert.equal(row?.categoryId, 'wardrobe')
 
     // 目标文件夹在别的设备上被删掉的情形：不是 404，而是 409 —— 请求本身合法，
     // 只是与当前状态冲突，界面应当重取快照再让用户重选。
