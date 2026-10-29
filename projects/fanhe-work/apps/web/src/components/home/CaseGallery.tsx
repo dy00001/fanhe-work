@@ -1,8 +1,9 @@
-import { ArrowLeft, ArrowRight, Image as ImageIcon } from 'lucide-react'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CASE_CATEGORIES } from '../../lib/case-catalog'
 import { Dialog, DialogTrigger } from '../ui/dialog'
+import { CaseCover } from './CaseCover'
 import { CaseGalleryDialogContent } from './CaseGalleryDialog'
 
 /**
@@ -21,9 +22,9 @@ import { CaseGalleryDialogContent } from './CaseGalleryDialog'
  *   - 键盘：容器可聚焦，← → 翻一页。
  *
  * **「全部品类」是一个按钮。** 原型里它写的是 `href="#"`，落地时保持成静态文字，于是
- * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：把九个
- * 品类一次性铺开——没有案例库之前，弹窗与主页横滑条共用同一份卡片样式，不重复堆假数
- * 据；首页这条横滑条仍然只负责「先看四个」。
+ * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：把十三个
+ * 品类一次性铺开——案例库尚未建立，弹窗与主页横滑条共用同一份封面组件与同一份数据，
+ * 不重复堆假数据；首页这条横滑条仍然只负责「先看四个」。
  */
 export function CaseGallery() {
   const stripRef = useRef<HTMLDivElement>(null)
@@ -189,12 +190,7 @@ export function CaseGallery() {
                 key={category.id}
                 className="flex min-w-0 shrink-0 basis-[calc((100%_-_48px)/4)] flex-col"
               >
-                <div className="flex aspect-[400/234] w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border border-border bg-[color-mix(in_srgb,var(--m-neutral)_4%,var(--card))]">
-                  <span className="grid size-10 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--m-neutral)_var(--wash),var(--card))] text-m-neutral">
-                    <ImageIcon className="size-5" />
-                  </span>
-                  <span className="text-sm text-muted-foreground-weak">封面待补</span>
-                </div>
+                <CaseCover category={category} />
                 <div className="mt-2 h-6 text-center text-base leading-6 font-medium">
                   {category.name}
                 </div>
