@@ -20,7 +20,8 @@
     "db:ops-import": "tsx src/tools/ops-import.ts",
     "db:ops-shops": "tsx src/tools/ops-seed-shops.ts",
     "db:reset-password": "tsx src/tools/reset-password.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:customer-import": "tsx src/tools/customer-import.ts"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*",

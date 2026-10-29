@@ -23,7 +23,10 @@ import {
 } from '@fanhe/shared'
 
 import { prisma } from '../db/prisma.js'
-import type { Prisma } from '../generated/prisma/client.js'
+/* 值导入，不是 `import type`：下面用 `Prisma.DbNull` 表示「这一列显式写 NULL」，
+   那是运行时常量。用 type-only 导入时 tsc 报 TS1361，而这条路径只在
+   `legacyBlocks` 缺省时才会走到，单测与冒烟都碰不到。 */
+import { Prisma } from '../generated/prisma/client.js'
 
 /**
  * 客户档案与订单的读写。
@@ -348,18 +351,64 @@ export async function getCustomer(
 export type CreateCustomerInput = CreateCustomerRequest
 
 /**
- * 校验并规范化地区。空值不是「国内」，是没填 —— 后者会让显示名少一段，
- * 而少一段的地区在列表里就是错误信息，不如直接拒绝。
+ * 一条客户记录「从哪来」。
+ *
+ * 人工录入与批量导入算出来的显示名、短名、地区层级必须完全一致（都是契约函数算的），
+ * 但**来源类字段不能一致**：导入进来的是从聊天记录里抽的，51 条本来就该是「待复核」；
+ * 人工录的是人签过字的，直接算确认。若让导入走 `createCustomer`，全库会变成
+ * `reviewStatus: confirmed` + `confidence: high`，复核队列直接空掉 —— 而界面上
+ * 看不出任何异常。
  */
+export type CustomerOrigin = {
+  nameSource: string
+  confidence: string
+  reviewStatus: string
+  stageSource: string
+}
+
+/** 人工录入的来源标记。录进来这件事本身就是人签过字的动作。 */
+const MANUAL_ORIGIN: CustomerOrigin = {
+  nameSource: 'manual',
+  confidence: 'high',
+  reviewStatus: 'confirmed',
+  stageSource: 'manual',
+}
+
+/**
+ * 只有导入才会填的档案字段。
+ *
+ * 单独一组而不是塞进 `CreateCustomerRequest`：这些值前端填不了，也不该让前端能填
+ * —— 「消息行数」与「被跳过的图片张数」是采集结果，不是人可以声明的属性。
+ */
+export type CustomerArchiveExtras = {
+  msgRows?: number | undefined
+  firstMessageAt?: Date | null | undefined
+  lastMessageAt?: Date | null | undefined
+  skipImg?: number | undefined
+  skipVoice?: number | undefined
+  groupFile?: string | null | undefined
+  legacyBlocks?: Prisma.InputJsonValue | undefined
+  repeatOfId?: string | null | undefined
+}
+
 function normalizeRegionOrNull(region: string): string | null {
   const trimmed = region.trim()
   if (trimmed === '') return null
   return normalizeRegion(trimmed)
 }
 
-export async function createCustomer(
+/**
+ * 把入参收敛成可以落库的三个字段，并给出拒绝理由。
+ *
+ * 单独抽出来是因为**干跑要能复用**：导入脚本的 `--dry-run` 需要回答「这 53 条会不会
+ * 被拒」，而一个真的去写库的校验算不上校验。写成两套判断则必然分叉 —— 干跑说没问题、
+ * 真跑报 `invalid_region`，那是最难解释的一类不一致。
+ */
+export function normalizeCustomerInput(
   input: CreateCustomerInput,
-): Promise<CustomerResult<CustomerDetailDto>> {
+):
+  | { ok: true; value: { realName: string; region: string; phone: string } }
+  | { ok: false; reason: CustomerFailureReason } {
   const realName = input.realName.trim()
   if (realName === '' || realName.length > CUSTOMER_LIMITS.REAL_NAME_MAX) {
     return { ok: false, reason: 'invalid_name' }
@@ -373,6 +422,24 @@ export async function createCustomer(
   if (input.stage !== undefined && !(CUSTOMER_STAGES as readonly string[]).includes(input.stage)) {
     return { ok: false, reason: 'invalid_stage' }
   }
+  return { ok: true, value: { realName, region, phone } }
+}
+
+/**
+ * 写入一条客户。人工录入与批量导入共用这一处校验与派生。
+ *
+ * 显示名与短名不接受调用方传入，一律由这里算：规则改了以后重算一遍即可，库里那两列
+ * 始终是可再生字段。两个入口各写一遍校验的结果是「导入进来 80 字的真名」这类越界
+ * 数据，而它只在列表里显示成挤成一行的文本，不会报错。
+ */
+export async function insertCustomer(
+  input: CreateCustomerInput,
+  origin: CustomerOrigin,
+  extras: CustomerArchiveExtras = {},
+): Promise<CustomerResult<CustomerDetailDto>> {
+  const normalized = normalizeCustomerInput(input)
+  if (!normalized.ok) return { ok: false, reason: normalized.reason }
+  const { realName, region, phone } = normalized.value
 
   const chatroom = input.chatroom?.trim() ?? ''
   const finalChatroom = chatroom === '' ? `manual:${crypto.randomUUID()}` : chatroom
@@ -387,8 +454,6 @@ export async function createCustomer(
   const created = await prisma.customer.create({
     data: {
       chatroom: finalChatroom,
-      // 显示名与短名都由契约函数算出，不接受前端传入。前端只送「真名 + 地区 + 项目」，
-      // 规则改了以后重算一遍即可，库里那两列始终是可再生字段。
       displayName: customerDisplayName(region, realName, project === '' ? undefined : project),
       shortName: customerShortName(realName, region),
       region,
@@ -396,19 +461,33 @@ export async function createCustomer(
       realName,
       phone: phone === '' ? null : phone,
       primaryNickname: input.primaryNickname?.trim() || null,
-      nameSource: 'manual',
-      // 人工录入的客户默认就已确认：录进来这件事本身就是人签过字的动作。
-      // 置信度给 high，与「从聊天记录抽出来待复核」的那批区分开。
-      confidence: 'high',
-      reviewStatus: 'confirmed',
+      nameSource: origin.nameSource,
+      confidence: origin.confidence,
+      reviewStatus: origin.reviewStatus,
       stage: input.stage ?? 'consulting',
-      stageSource: 'manual',
-      groupFile: null,
+      stageSource: origin.stageSource,
+      groupFile: extras.groupFile ?? null,
+      msgRows: extras.msgRows ?? 0,
+      firstMessageAt: extras.firstMessageAt ?? null,
+      lastMessageAt: extras.lastMessageAt ?? null,
+      skipImg: extras.skipImg ?? 0,
+      skipVoice: extras.skipVoice ?? 0,
+      /* 没有 `ai_schema` 原始块时写 `DbNull` 而不是 `null`：Prisma 的 JSON 列里
+         「JSON null」与「SQL NULL」是两件事，用 `null` 会在库里存成 `"null"` 这个
+         合法的 JSON 值，于是「这个客户没有原始块」变成「有一个值为 null 的块」。 */
+      legacyBlocks: extras.legacyBlocks ?? Prisma.DbNull,
+      repeatOfId: extras.repeatOfId ?? null,
     },
     select: { id: true },
   })
 
   return getCustomer(created.id, true)
+}
+
+export async function createCustomer(
+  input: CreateCustomerInput,
+): Promise<CustomerResult<CustomerDetailDto>> {
+  return insertCustomer(input, MANUAL_ORIGIN)
 }
 
 export type UpdateCustomerInput = UpdateCustomerRequest
@@ -482,16 +561,65 @@ async function recomputeContractTotal(customerId: string): Promise<void> {
 export type CreateOrderInput = CreateCustomerOrderRequest
 
 /**
+ * 一个环节的历史明细。导入专用，人工录入时十四个环一律从「未到达」起步。
+ *
+ * 日期写成 `YYYY-MM-DD` 字符串而不是 `Date`：这份结构直接对应预览 JSON 里的形状，
+ * 在调用边界转换一次比让日期对象穿过两层函数更容易看出哪一步在解析。
+ */
+export type OrderStepSeed = {
+  idx: number
+  reached: boolean
+  done: boolean
+  startedAt?: string | null | undefined
+  finishedAt?: string | null | undefined
+  dateImprecise?: boolean | undefined
+  note?: string | null | undefined
+}
+
+/**
+ * 导入时随订单一起落库的历史细节。
+ *
+ * 每一项都对应一个「自动生成的值是错的」的场景：编号要保留看板编号（`TW-01`）、
+ * 序号要按原顺序、阶段是订单自己的而不是客户的当前阶段、金额来源要写清是看板
+ * 证据还是净化后的 ai_schema。不给这些覆盖位，导入就只能先把订单建出来再逐条改，
+ * 中间那一段是错的数据，且出错时找不到是哪一步写坏的。
+ */
+export type OrderImportDetail = {
+  code?: string | undefined
+  seq?: number | undefined
+  stage?: string | undefined
+  stageSource?: string | undefined
+  amountSource?: string | undefined
+  amountConfidence?: string | null | undefined
+  amountEvidenceDate?: string | null | undefined
+  amountEvidenceNote?: string | null | undefined
+  steps?: readonly OrderStepSeed[] | undefined
+}
+
+/** 金额只认「非负整数分」。与客户入参同一个理由抽出来给干跑用。 */
+export function normalizeOrderAmounts(
+  input: CreateOrderInput,
+): { ok: false; reason: CustomerFailureReason } | null {
+  for (const value of [input.contractFen, input.receivedFen, input.unpaidFen]) {
+    if (value === undefined || value === null) continue
+    if (!Number.isInteger(value) || value < 0) return { ok: false, reason: 'invalid_amount' }
+  }
+  return null
+}
+
+/**
  * 新建订单，同时铺好十四个环节。
  *
  * **序号与编号在这里生成，不接受调用方指定。** 序号是「同一客户内的第几单」，
  * 由数据库的唯一约束 `(customerId, seq)` 兜底；编号全局唯一，取当前最大编号加一。
  * 让前端传这两个值，等于把「两个人同时新建订单」变成一个必然撞号的操作。
+ * 唯一的例外是 `detail`（导入专用），它带的正是历史事实，不是并发写入的猜测。
  */
 export async function createOrder(
   customerId: string,
   input: CreateOrderInput,
   canReadFinance: boolean,
+  detail?: OrderImportDetail,
 ): Promise<CustomerResult<CustomerDetailDto>> {
   const customer = await prisma.customer.findUnique({
     where: { id: customerId },
@@ -499,16 +627,14 @@ export async function createOrder(
   })
   if (customer === null) return { ok: false, reason: 'not_found' }
 
-  for (const value of [input.contractFen, input.receivedFen, input.unpaidFen]) {
-    if (value === undefined || value === null) continue
-    if (!Number.isInteger(value) || value < 0) return { ok: false, reason: 'invalid_amount' }
-  }
+  const amountInvalid = normalizeOrderAmounts(input)
+  if (amountInvalid !== null) return amountInvalid
 
   const lastSeq = await prisma.customerOrder.aggregate({
     where: { customerId },
     _max: { seq: true },
   })
-  const seq = (lastSeq._max.seq ?? 0) + 1
+  const seq = detail?.seq ?? (lastSeq._max.seq ?? 0) + 1
 
   // 编号取全局最大。用 `ORD-` 前缀与看板编号（BT-01）分开，两者不会互相顶号。
   const lastCode = await prisma.customerOrder.findFirst({
@@ -520,7 +646,41 @@ export async function createOrder(
     lastCode === null
       ? 0
       : Number.parseInt(lastCode.code.slice(CUSTOMER_LIMITS.ORDER_CODE_PREFIX.length), 10) || 0
-  const code = `${CUSTOMER_LIMITS.ORDER_CODE_PREFIX}${String(lastNumber + 1).padStart(3, '0')}`
+  const code =
+    detail?.code ?? `${CUSTOMER_LIMITS.ORDER_CODE_PREFIX}${String(lastNumber + 1).padStart(3, '0')}`
+
+  /* 环节先按模板铺满十四行，再用导入明细覆盖给出的那几个。**顺序不能反**：
+     模板是分母，缺哪个环意味着「这个环没走到」，而不是「这个环不存在」——
+     后者会让进度条的分母变小，看上去反而更接近完成。 */
+  const seeded = new Map((detail?.steps ?? []).map((step) => [step.idx, step]))
+  const steps = buildInitialSteps().map((template) => {
+    const seed = seeded.get(template.idx)
+    if (seed === undefined) {
+      return {
+        idx: template.idx,
+        name: template.name,
+        reached: template.reached,
+        done: template.done,
+        dateImprecise: template.dateImprecise,
+        note: template.note,
+      }
+    }
+    const startedAt = parseDateValue(seed.startedAt)
+    const finishedAt = parseDateValue(seed.finishedAt)
+    return {
+      idx: template.idx,
+      name: template.name,
+      /* `done` 连带 `reached`，与 `updateStep` 同一条依赖：历史数据里出现过
+         「完成日期有、到达标记没有」的行，照抄会在界面上显示成「未到达但已完成」，
+         那种行看起来像渲染 bug。 */
+      reached: seed.reached || seed.done,
+      done: seed.done,
+      startedAt: startedAt === 'invalid' ? null : startedAt,
+      finishedAt: finishedAt === 'invalid' ? null : finishedAt,
+      dateImprecise: seed.dateImprecise ?? false,
+      note: seed.note?.trim() || null,
+    }
+  })
 
   await prisma.customerOrder.create({
     data: {
@@ -530,25 +690,20 @@ export async function createOrder(
       isRepeat: seq > 1,
       // 新单继承客户当前阶段。理由：客户级阶段是「这个客户走到哪」，新开一单
       // 通常意味着继续推进，而不是退回咨询中。退回由阶段推进接口显式去做。
-      stage: customer.stage,
-      stageSource: 'manual',
+      stage: detail?.stage ?? customer.stage,
+      stageSource: detail?.stageSource ?? 'manual',
       contractFen: input.contractFen ?? null,
       receivedFen: input.receivedFen ?? null,
       unpaidFen: input.unpaidFen ?? null,
       amountSource:
-        input.contractFen === undefined || input.contractFen === null ? 'none' : 'manual',
+        detail?.amountSource ??
+        (input.contractFen === undefined || input.contractFen === null ? 'none' : 'manual'),
       amountConfidence:
-        input.contractFen === undefined || input.contractFen === null ? null : 'high',
-      steps: {
-        create: buildInitialSteps().map((step) => ({
-          idx: step.idx,
-          name: step.name,
-          reached: step.reached,
-          done: step.done,
-          dateImprecise: step.dateImprecise,
-          note: step.note,
-        })),
-      },
+        detail?.amountConfidence ??
+        (input.contractFen === undefined || input.contractFen === null ? null : 'high'),
+      amountEvidenceDate: parseDateValue(detail?.amountEvidenceDate) ?? null,
+      amountEvidenceNote: detail?.amountEvidenceNote?.trim() || null,
+      steps: { create: steps },
     },
     select: { id: true },
   })
