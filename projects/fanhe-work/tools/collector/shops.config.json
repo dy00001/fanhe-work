@@ -44,19 +44,21 @@
     },
     {
       "code": "s4",
-      "name": "分店 4",
+      "name": "蜀韵",
+      "pluginAccount": "蜀韵名品:小阳",
       "port": 9225,
-      "collect": false,
-      "state": "placeholder",
-      "note": "占位店：界面保留第四列，账号到位后把 collect 改成 true 并补 port"
+      "collect": true,
+      "state": "active",
+      "note": "2026-10-29 由占位店转正；插件账号 蜀韵名品:小阳"
     },
     {
       "code": "s5",
-      "name": "分店 5",
+      "name": "木匠",
+      "pluginAccount": "t_1493697603199_0200:大海",
       "port": 9226,
-      "collect": false,
-      "state": "placeholder",
-      "note": "占位店：界面保留第五列，暂不采集"
+      "collect": true,
+      "state": "active",
+      "note": "2026-10-29 由占位店转正；该账号是插件里的临时登录标识（未保存昵称），形如 uid:昵称，切换时需完整精确匹配"
     },
     {
       "code": "zz-test-ops-bind",
