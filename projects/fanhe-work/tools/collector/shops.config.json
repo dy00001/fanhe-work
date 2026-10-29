@@ -9,28 +9,37 @@
     {
       "code": "fanhe-main",
       "name": "梵禾",
+      "pluginAccount": "梵禾定制家具:小阳",
       "port": 9222,
       "collect": true,
       "state": "active",
-      "qianniu": { "crashUid": "梵禾定制家具:小阳" },
+      "qianniu": {
+        "crashUid": "梵禾定制家具:小阳"
+      },
       "note": "主店，已有 30 天基线与日增"
     },
     {
       "code": "s2",
       "name": "雅素",
+      "pluginAccount": "雅素定制家具:设计总监邓阳",
       "port": 9223,
       "collect": true,
       "state": "pending",
-      "qianniu": { "crashUid": "雅素定制家具:设计总监邓阳" },
+      "qianniu": {
+        "crashUid": "雅素定制家具:设计总监邓阳"
+      },
       "note": "千牛已登录；等首次在采集浏览器里登录一次（cookie 过期才需要再登）"
     },
     {
       "code": "s3",
       "name": "简作",
+      "pluginAccount": "简作美学定制:小阳",
       "port": 9224,
       "collect": true,
       "state": "pending",
-      "qianniu": { "crashUid": "简作美学定制:小阳" },
+      "qianniu": {
+        "crashUid": "简作美学定制:小阳"
+      },
       "note": "千牛已登录；等首次在采集浏览器里登录一次"
     },
     {
@@ -48,6 +57,14 @@
       "collect": false,
       "state": "placeholder",
       "note": "占位店：界面保留第五列，暂不采集"
+    },
+    {
+      "code": "zz-test-ops-bind",
+      "name": "绑定测试店",
+      "port": 9401,
+      "collect": true,
+      "state": "active",
+      "note": "由工作台绑定入口创建"
     }
   ]
 }

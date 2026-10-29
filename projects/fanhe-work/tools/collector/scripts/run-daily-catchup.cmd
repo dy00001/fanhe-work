@@ -14,10 +14,24 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0..\..\.."
 
-set "NODE=C:\Users\dy\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
-if not exist "%NODE%" (
-  echo Node not found at %NODE%
-  echo Edit this file and point NODE at your node.exe
+rem Node lookup: probe a list of candidates instead of hardcoding one path.
+rem A single hardcoded path breaks on every machine change; this file used to
+rem pin C:\Users\dy\... which no longer exists, so the whole chain exited 1
+rem before doing anything and the log stayed empty.
+set "NODE="
+for %%C in (
+  "%USERPROFILE%\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
+  "C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-6\node.exe"
+) do (
+  if not defined NODE if exist "%%~C" set "NODE=%%~C"
+)
+if not defined NODE (
+  for /f "delims=" %%N in ('where node 2^>nul') do (
+    if not defined NODE set "NODE=%%N"
+  )
+)
+if not defined NODE (
+  echo Node not found. Add its path to the candidate list in this file.
   exit /b 1
 )
 
