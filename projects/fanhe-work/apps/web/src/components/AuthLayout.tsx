@@ -7,7 +7,22 @@ import type { ReactNode } from 'react'
  * 卡片边框）完全一致。各写一份的话，调整一次留白要改两处，而漏改的那一处
  * 只在切到那个页面时才看得出来。
  */
-export function AuthLayout({ subtitle, children }: { subtitle: string; children: ReactNode }) {
+export function AuthLayout({
+  subtitle,
+  footer,
+  children,
+}: {
+  subtitle: string
+  /**
+   * 卡片下方的补充区。
+   *
+   * 存在的原因是「下载桌面端」这类入口属于登录页、但不属于卡片里的表单：放进表单会
+   * 让「记住账号密码」与它挤成一片，而它其实与「这次登录」无关。初始化页不传就什么
+   * 都不渲染，两页的共用部分仍然是一份。
+   */
+  footer?: ReactNode
+  children: ReactNode
+}) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
       <div className="w-full max-w-sm">
@@ -22,6 +37,8 @@ export function AuthLayout({ subtitle, children }: { subtitle: string; children:
         </div>
 
         <div className="mt-8 rounded-xl border border-border bg-card p-6">{children}</div>
+
+        {footer !== undefined && <div className="mt-4 text-center">{footer}</div>}
       </div>
     </div>
   )

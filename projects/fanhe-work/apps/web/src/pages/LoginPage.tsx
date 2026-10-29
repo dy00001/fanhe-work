@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 import { useAuth } from '../auth/useAuth'
 import { AuthLayout } from '../components/AuthLayout'
+import { DesktopDownloadLink } from '../components/DesktopDownloadLink'
 import { TextField } from '../components/TextField'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
@@ -105,7 +106,12 @@ export function LoginPage() {
   }
 
   return (
-    <AuthLayout subtitle="登录以继续">
+    <AuthLayout
+      subtitle="登录以继续"
+      // 放在卡片外而不是表单里：它与「这次登录」无关，是「想装个客户端的话在这」。
+      // 桌面端里这个组件自己会返回 null，所以外壳内不会出现指向自己的链接。
+      footer={<DesktopDownloadLink />}
+    >
       <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
         <TextField
           id="login-username"

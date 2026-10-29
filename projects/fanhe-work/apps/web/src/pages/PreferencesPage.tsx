@@ -1,5 +1,6 @@
 import { HardDrive, Loader2 } from 'lucide-react'
 
+import { DesktopDownloadCard } from '../components/DesktopDownloadLink'
 import { CASE_ASSET_VERSION, caseAssetFiles } from '../lib/case-catalog'
 import { useCaseAssets } from '../lib/use-case-assets'
 import { cn } from '../lib/utils'
@@ -146,6 +147,8 @@ export function PreferencesPage() {
           </p>
         </div>
       </section>
+
+      <DesktopDownloadCard />
     </div>
   )
 }
