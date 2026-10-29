@@ -11,7 +11,7 @@
 #
 # What the task does
 # ------------------
-# Every day at 09:00 it runs run-daily-catchup.cmd, which looks back seven days for
+# Every day at 10:00 it runs run-daily-catchup.cmd, which looks back seven days for
 # missing collection days, fills them, then imports everything into the database.
 # Seven days is what makes a missed day self healing: today's run also picks up
 # yesterday.
@@ -29,7 +29,7 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = 'fanhe-daily-catchup',
-    [string]$At = '09:00',
+    [string]$At = '10:00',
     [switch]$DryRun,
     [switch]$Remove
 )
@@ -71,7 +71,7 @@ $action = New-ScheduledTaskAction -Execute 'cmd.exe' `
 $trigger = New-ScheduledTaskTrigger -Daily -At $At
 
 # StartWhenAvailable is what makes a missed run recoverable: if the machine was off
-# at 09:00, the task starts as soon as it is available instead of skipping the day.
+# at 10:00, the task starts as soon as it is available instead of skipping the day.
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
@@ -108,5 +108,5 @@ Write-Host ('workdir     : ' + $task.Actions[0].WorkingDirectory)
 Write-Host ('trigger     : ' + $task.Triggers[0].StartBoundary)
 Write-Host ('next run    : ' + $info.NextRunTime)
 Write-Host ''
-Write-Host 'Done. The first automatic run is the next 09:00.' -ForegroundColor Green
+Write-Host ('Done. The first automatic run is the next ' + $At + '.') -ForegroundColor Green
 Write-Host 'Log: tools\collector\data\daily-catchup.log'
