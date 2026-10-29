@@ -422,9 +422,12 @@ async function runOnce() {
     }
 
     console.log(`[sync] ---- ${code} 导出并入库 ----`)
+    /* 显式写 manual：这条路径由人点「立即同步」或绑定触发，与每天定时的
+       schedule 必须能区分开，否则库里两种来源的批次记录一模一样。 */
     const exportCode = await run('export-sycm-ingest.mjs', [
       '--account', code,
       '--date', TARGET_DATE,
+      '--trigger', 'manual',
     ])
     if (exportCode !== 0 && exportCode !== 2) {
       await report(code, {

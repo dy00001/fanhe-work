@@ -302,7 +302,10 @@ let imported = 0
 let failed = 0
 
 for (const date of datesWithFiles) {
-  const exportCode = await run(process.execPath, [EXPORT, '--date', date])
+  /* 这个脚本就是「定时任务」那个入口（计划任务与 WorkBuddy 自动化都调它），
+     所以批次记 schedule。不显式传的话，`export-sycm-ingest.mjs` 的默认值
+     manual 会让定时轮次与人工补采在库里长得一模一样。 */
+  const exportCode = await run(process.execPath, [EXPORT, '--date', date, '--trigger', 'schedule'])
   if (exportCode !== 0 && exportCode !== 2) {
     console.error(`  ${date} 导出失败（退出码 ${exportCode}）`)
     failed += 1

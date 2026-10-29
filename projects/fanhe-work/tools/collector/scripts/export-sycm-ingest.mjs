@@ -48,6 +48,22 @@ function flag(name) {
   return argv.includes(`--${name}`)
 }
 
+/*
+ * 触发方式，由调用方说明，不能写死。
+ *
+ * 写死 `manual` 的后果不是「少一个字段」，而是**库里再也分不清定时与人工**：
+ * 每天 10:00 的自动化、用户点「立即同步」、开发手跑一条命令，三种来源的批次
+ * 记录一模一样，排障时回答不了「昨天 10 点那一轮到底跑没跑」，只能翻日志，
+ * 而日志会被下一轮覆盖。
+ *
+ * 取值限定在 schema 注释里的三种（`trigger` 是 VarChar(20)，故意不用枚举，
+ * 但也不该随手造词）。拼错退回 manual，而不是让一个错词进库。
+ */
+const TRIGGER = (() => {
+  const raw = String(option('trigger', 'manual'))
+  return ['schedule', 'manual', 'backfill'].includes(raw) ? raw : 'manual'
+})()
+
 const DATE = option('date')
 if (DATE === null || !/^\d{4}-\d{2}-\d{2}$/.test(DATE)) {
   console.error('必须给 --date YYYY-MM-DD（插件输出目录不带日期，不能靠猜）')
@@ -424,7 +440,7 @@ function buildPayload(account) {
       },
       window: { from: DATE, to: DATE },
       source: 'api',
-      trigger: 'manual',
+      trigger: TRIGGER,
       rawPath: path.relative(REPO, dir).replace(/\\/g, '/').slice(0, 300),
       daily,
       dimensions,
