@@ -43,6 +43,10 @@ echo ==== %DATE% %TIME% ====>>"%LOG%"
 
 "%NODE%" "tools\collector\scripts\daily-catchup.mjs" %* >>"%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
-echo exit=%RC%>>"%LOG%"
+rem Redirection goes first on purpose. Written as "echo exit=%RC%>>log" the
+rem expanded digit fuses with the redirect operator: 0>> and 2>> are parsed as
+rem handle redirections (stdin / stderr), so the exit line silently disappears
+rem exactly on success (0) and on failure (2) -- the two cases worth logging.
+>>"%LOG%" echo exit=%RC%
 
 exit /b %RC%
