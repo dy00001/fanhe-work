@@ -155,6 +155,11 @@ model User {
   /// 这个账号留下的事件变更日志。
   eventLogs       EventLog[] @relation("EventLogActor")
 
+  /// 案例库：文件夹、图片归属、修订号。三者都是「按账号各存一份」。
+  caseFolders      CaseFolder[]
+  casePlacements   CaseItemPlacement[]
+  caseLibraryState CaseLibraryState?
+
   @@index([roleId])
   @@index([status])
   @@map("users")
@@ -621,6 +626,115 @@ model EventLog {
   /// 详情面板按 eventId 取全量、按时间正序展示，这条索引正好覆盖。
   @@index([eventId, createdAt])
   @@map("event_logs")
+}
+
+// ---------------------------------------------------------------------------
+// 案例库（首页「案例展示」的自定义分类）
+// ---------------------------------------------------------------------------
+//
+// 三张表，只有一件事实：**哪张图被这个人放进了他的哪个文件夹**。
+//
+// 图片本身不在库里。43 张实景图是随前端分发的静态资源（`apps/web/public/cases/`），
+// 库里存它们的地址等于同一件事有两个真相，而「加一张图」还要先跑一次迁移。因此
+// `case_item_placements` 是一张**稀疏覆盖表**：没有行的图片就是「未归档」，界面按
+// 静态清单补齐即可。新增图片不需要任何数据操作。
+//
+// 与 notes / events 的关键差别是**这里要跨设备同步**，所以多出一张只有一行一列的
+// `case_library_states`。它存的是「这个账号的案例库被改过多少次」，用来回答
+// 「本机手上这份还是不是最新的」。没有它就只能靠比对内容判断，而内容一致不代表
+// 没有改动（比如改名后又改回来），那会让界面在两种状态之间来回跳。
+
+/// 用户自建的案例文件夹。按品类分组，一个品类下最多若干个。
+///
+/// **软删除。** 删除文件夹时，它里面的图片回到「未归档」——图片是静态资源，不会被
+/// 删掉。软删除留在这里的理由不是「要能恢复」（界面不提供恢复），而是**给同步留一条
+/// 可解释的痕迹**：另一台设备上可能正拿着这个 id 在发移动请求，硬删会让它收到一个
+/// 无法区分「被删了」与「从没存在」的 404。
+///
+/// **同账号同品类下不允许重名**，但**不建唯一索引**：唯一索引与软删除天然冲突
+/// （删掉 `客厅` 之后再建一个 `客厅` 会撞上那条被软删除的行）。判重在服务层做，
+/// 且只在未删除的行之间比。
+model CaseFolder {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// 所属品类。取值域是共享包的 `CASE_CATEGORY_IDS`，服务层校验，数据库侧只限长度。
+  /// 不外键到一张品类表：品类是前端静态清单的一部分，为它建表意味着每次加品类都要
+  /// 一次迁移加一次种子。
+  categoryId String @map("category_id") @db.VarChar(64)
+
+  /// 文件夹名。列宽与共享包的 `CASE_LIBRARY_LIMITS.FOLDER_NAME_MAX` 一致。
+  /// 归一（去首尾空白、压缩中间空白）在服务层做，数据库侧没有约束。
+  name String @db.VarChar(40)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 落在这个文件夹里的图片。文件夹被物理清理时它们回到「未归档」（置空），
+  /// 而不是跟着消失 —— 否则一次级联删除会静默改变一批图片的归属。
+  placements CaseItemPlacement[]
+
+  /// 列表查询恒带 userId、categoryId 与 deletedAt，按创建时间排序，这条索引正好覆盖。
+  @@index([userId, categoryId, deletedAt, createdAt])
+  @@map("case_folders")
+}
+
+/// 一张图片的归属。主键是 `(userId, itemId)`。
+///
+/// **itemId 是前端静态清单里的稳定 id**（`cabinet-3`），不是 URL。用它而不是地址：
+/// 换一次图片格式（webp → avif）不该让所有归属失效。
+///
+/// **不设 sortOrder。** 界面里的图片顺序由静态清单决定（同一品类内按编号），
+/// 用户没有「拖动重排」这个动作，存一个永远不会被读的列只会让人以为它可以重排。
+model CaseItemPlacement {
+  userId String @map("user_id") @db.Uuid
+
+  /// 图片 id，形如 `cabinet-3`。列宽与 `CASE_LIBRARY_LIMITS.ITEM_ID_MAX` 一致。
+  itemId String @map("item_id") @db.VarChar(64)
+
+  /// 冗余存品类，便于「按品类取」与将来的单品类查询。它必须与 itemId 的前缀一致，
+  /// 由服务层校验。
+  categoryId String @map("category_id") @db.VarChar(64)
+
+  /// 所在文件夹。**为 null 的行没有存在意义**（未归档 = 没有行），服务层写入前会
+  /// 把「移动到未归档」翻译成删除该行，因此这里的 null 只可能来自文件夹被物理清理。
+  /// `onDelete: SetNull` 正是为那条路径留的。
+  folderId String? @map("folder_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder CaseFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@id([userId, itemId])
+  @@index([userId, categoryId])
+  @@index([folderId])
+  @@map("case_item_placements")
+}
+
+/// 案例库的修订号。一个账号一行。
+///
+/// 存在的唯一目的是给「跨设备同步」一个便宜的判断依据：读接口回传 revision，客户端
+/// 记住它；下次拉取时若 revision 没变，就不必重绘界面。所有写操作在同一个事务里
+/// 自增它，因此「revision 变了」与「有数据变了」严格等价。
+///
+/// 它与主体数据分表而不是塞成某个文件夹上的列：修订号属于整个库，不属于任何一行，
+/// 而挂在某一行上就得先决定「哪一行代表整个库」——那个问题没有正确答案。
+model CaseLibraryState {
+  userId String @id @map("user_id") @db.Uuid
+
+  /// 单调递增。为 0 或缺行表示从没改过。
+  revision Int @default(0)
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("case_library_states")
 }
 
 // ---------------------------------------------------------------------------

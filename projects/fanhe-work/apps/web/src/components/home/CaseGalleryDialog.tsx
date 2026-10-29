@@ -11,17 +11,24 @@ import { CaseCover } from './CaseCover'
  * 动画结束后自己调的。把根与触发器留在 {@link CaseGallery} 里、这里只导出内容，是让
  * 这两件事各归其位的最短路径。
  *
- * **弹窗里只摆品类卡，不再像之前那样再撒 27 个案例位。** 案例库仍未建立（见
- * `docs/NEXT-TASKS-2026-10-12.md` 的 U-01），把 27 张占位卡排出来用户看到的也只是
- * 「案例编号」重复三遍。弹窗的本意是给出「主页先看到 4 张、其它还有 9 张」的全景，品类
- * 卡摆出来已经达成这件事，再叠加假数据反而把本意冲淡。
+ * **弹窗里只摆品类卡，不再像之前那样再撒 27 个案例位。** 弹窗的本意是给出「主页先看到
+ * 4 张、其它还有 9 张」的全景，品类卡摆出来已经达成这件事；案例本身点开卡片就能看
+ * （{@link CaseLibraryDialog}），在这里平铺只会把全景冲淡。
+ *
+ * **卡片是按钮。** 点一张卡就打开该品类的图集，由 `onOpenCategory` 把品类 id 交回
+ * {@link CaseGallery} —— 图集窗口的根在那一边，与「全部品类」这个根并列。回调传 id 而
+ * 不传对象：id 是稳定值，对象每次渲染都会换引用。
  *
  * **弹窗与主页走同一份数据、同一个封面组件。** 两处都从 `CASE_CATEGORIES` 读品类，都用
  * {@link CaseCover} 画封面位，比例、圆角、边框、占位样式只有一处定义，不会再出现「主页
  * 一个样式、弹窗另一个样式」的双轨。`category.name` 直接复用，不需要在数据层再加一层
  * 标题。
  */
-export function CaseGalleryDialogContent() {
+export function CaseGalleryDialogContent({
+  onOpenCategory,
+}: {
+  onOpenCategory: (categoryId: string) => void
+}) {
   return (
     <DialogContent
       className={[
@@ -45,7 +52,17 @@ export function CaseGalleryDialogContent() {
       <div className="min-h-0 overflow-y-auto px-6 pt-5 pb-6">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
           {CASE_CATEGORIES.map((category) => (
-            <article key={category.id} className="flex min-w-0 flex-col">
+            <button
+              key={category.id}
+              type="button"
+              onClick={() => onOpenCategory(category.id)}
+              aria-label={`查看${category.name}案例`}
+              className={[
+                'group flex min-w-0 flex-col rounded-2xl text-left outline-none',
+                'focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring',
+                '[&_img]:transition-transform [&_img]:duration-300 hover:[&_img]:scale-[1.03]',
+              ].join(' ')}
+            >
               {/* 封面位与主页共用 {@link CaseCover}，比例、圆角、边框、占位图标的
                   size 与圆角、占位文字的字号与色阶只在这一处定义。 */}
               <CaseCover category={category} />
@@ -55,7 +72,7 @@ export function CaseGalleryDialogContent() {
               <div className="mt-2 h-6 text-center text-base leading-6 font-medium">
                 {category.name}
               </div>
-            </article>
+            </button>
           ))}
         </div>
       </div>

@@ -1,5 +1,7 @@
 import type {
   ApiErrorResponse,
+  CaseLibraryResponse,
+  CreateCaseFolderRequest,
   CreateEventRequest,
   CreateLaunchProfileRequest,
   CreateManagedUserRequest,
@@ -22,6 +24,7 @@ import type {
   ManagedUserDetailResponse,
   ManagedUserListResponse,
   MeResponse,
+  MoveCaseItemsRequest,
   NoteListResponse,
   NoteResponse,
   OpsDashboardResponse,
@@ -34,6 +37,7 @@ import type {
   PermissionCatalogResponse,
   PermissionCode,
   RefreshResponse,
+  RenameCaseFolderRequest,
   ReorderLaunchProfilesRequest,
   RoleListResponse,
   RunLaunchProfileResponse,
@@ -923,6 +927,71 @@ export function syncOpsShopRequest(
 ): Promise<{ shop: OpsShopSummary }> {
   return request<{ shop: OpsShopSummary }>(`/api/ops/shops/${encodeURIComponent(code)}/sync`, {
     method: 'POST',
+    accessToken,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 案例库（首页「案例展示」的自定义文件夹与图片归属）
+// ---------------------------------------------------------------------------
+
+/**
+ * 案例库的五条接口。
+ *
+ * 与前面几个板块同一条分工：这一层只拼地址、发请求、把失败规范化成 `ApiError`；
+ * 令牌由 `lib/case-library.ts` 经 `withAccessToken` 附加。**id 一律过
+ * `encodeURIComponent`**，理由与启动配置那一段完全相同。
+ *
+ * **四张写接口都返回整个快照。** 客户端拿到就整份替换，不推算增量 —— 多设备并发时
+ * 推算会算错，而算错的表现是「界面显示的归属与库里不一致、刷新一次就好」。
+ *
+ * 移动用 `PUT`：它替换的是「这批图片分别归谁」这个整体，因此幂等，失败后可以直接
+ * 重发而不必先问「上一次成没成」。
+ */
+export function caseLibraryRequest(accessToken: string): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>('/api/cases/library', { method: 'GET', accessToken })
+}
+
+export function createCaseFolderRequest(
+  accessToken: string,
+  input: CreateCaseFolderRequest,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>('/api/cases/folders', {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+export function renameCaseFolderRequest(
+  accessToken: string,
+  id: string,
+  input: RenameCaseFolderRequest,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>(`/api/cases/folders/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+export function deleteCaseFolderRequest(
+  accessToken: string,
+  id: string,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>(`/api/cases/folders/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+export function moveCaseItemsRequest(
+  accessToken: string,
+  input: MoveCaseItemsRequest,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>('/api/cases/placements', {
+    method: 'PUT',
+    body: input,
     accessToken,
   })
 }

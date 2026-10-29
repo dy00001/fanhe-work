@@ -12,6 +12,7 @@
 export * from './account.js'
 export * from './audit.js'
 export * from './auth.js'
+export * from './case-library.js'
 export * from './event.js'
 export * from './launch.js'
 export * from './navigation.js'

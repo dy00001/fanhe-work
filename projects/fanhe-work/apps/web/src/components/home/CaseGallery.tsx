@@ -1,10 +1,11 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { CASE_CATEGORIES } from '../../lib/case-catalog'
+import { CASE_CATEGORIES, type CaseCategory } from '../../lib/case-catalog'
 import { Dialog, DialogTrigger } from '../ui/dialog'
 import { CaseCover } from './CaseCover'
 import { CaseGalleryDialogContent } from './CaseGalleryDialog'
+import { CaseLibraryDialog } from './CaseLibraryDialog'
 
 /**
  * 案例展示（原型编号 9）。
@@ -23,8 +24,11 @@ import { CaseGalleryDialogContent } from './CaseGalleryDialog'
  *
  * **「全部品类」是一个按钮。** 原型里它写的是 `href="#"`，落地时保持成静态文字，于是
  * 首页最像入口的元素反而点不动。现在它打开 {@link CaseGalleryDialogContent}：把十三个
- * 品类一次性铺开——案例库尚未建立，弹窗与主页横滑条共用同一份封面组件与同一份数据，
- * 不重复堆假数据；首页这条横滑条仍然只负责「先看四个」。
+ * 品类一次性铺开，与主页横滑条共用同一份封面组件与同一份数据；首页这条横滑条仍然只负责
+ * 「先看四个」。
+ *
+ * **卡片本身也是按钮，点开 {@link CaseLibraryDialog} 看该品类的图集。** 上一条只解决了
+ * 「有封面」，界面因此从「一看就知道没内容」变成「看起来能用但点不动」——后者更糟。
  */
 export function CaseGallery() {
   const stripRef = useRef<HTMLDivElement>(null)
@@ -32,6 +36,23 @@ export function CaseGallery() {
   const [atEnd, setAtEnd] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [allCategoriesOpen, setAllCategoriesOpen] = useState(false)
+  /**
+   * 图集窗口的状态：既是「哪张图集」，也是「开没开」。
+   *
+   * 两者放在同一个对象里，是为了关闭时能留住品类 —— 关掉之后 Radix 还要播 200ms 的
+   * 退场动画，这期间内容层仍然挂着；若此刻把品类清空，退场那一帧会闪成品类 1 的图。
+   * 单独存 `id` 再配一个 `open` 布尔，就会出现「id 已清空但还在播动画」的中间态。
+   *
+   * 存的是 `CaseCategory` 对象本身而不是 id：`CASE_CATEGORIES` 是模块级常量，引用稳定，
+   * 不像每次渲染新建的对象那样会让弹窗跟着重挂。
+   */
+  const [album, setAlbum] = useState<{ category: CaseCategory; open: boolean } | null>(null)
+
+  const openAlbum = useCallback((categoryId: string) => {
+    const category = CASE_CATEGORIES.find((item) => item.id === categoryId)
+    if (category === undefined) return
+    setAlbum({ category, open: true })
+  }, [])
 
   /**
    * 两端状态。
@@ -90,6 +111,14 @@ export function CaseGallery() {
    * 每帧重渲染一次，而它只是用来算滚动量的一个临时值。
    */
   const dragRef = useRef<{ startX: number; startScroll: number } | null>(null)
+  /**
+   * 这一次按下有没有真的拖动过。
+   *
+   * 卡片现在是按钮，而整条又是可拖拽的。若不区分，用户按住拖动松手时浏览器照样会补一个
+   * `click`，表现成「我只是想滑一下，结果弹出了图集」。阈值取 4px：小于这个数的手抖
+   * 仍算点击。在 `pointerdown` 时复位，所以拖到卡片外松手也不会让下一次点击失效。
+   */
+  const draggedRef = useRef(false)
 
   return (
     // `Dialog.Root` 不产出 DOM，包住整个区块不会改变任何布局；把根放在这一层是为了
@@ -115,7 +144,7 @@ export function CaseGallery() {
           </DialogTrigger>
         </div>
 
-        <CaseGalleryDialogContent />
+        <CaseGalleryDialogContent onOpenCategory={openAlbum} />
 
         <div className="relative">
           {!atStart && (
@@ -162,12 +191,14 @@ export function CaseGallery() {
               const el = stripRef.current
               if (el === null) return
               dragRef.current = { startX: event.clientX, startScroll: el.scrollLeft }
+              draggedRef.current = false
               setDragging(true)
             }}
             onPointerMove={(event) => {
               const drag = dragRef.current
               const el = stripRef.current
               if (drag === null || el === null) return
+              if (Math.abs(event.clientX - drag.startX) > 4) draggedRef.current = true
               el.scrollLeft = drag.startScroll - (event.clientX - drag.startX)
             }}
             onPointerUp={() => {
@@ -186,18 +217,48 @@ export function CaseGallery() {
             ].join(' ')}
           >
             {CASE_CATEGORIES.map((category) => (
-              <div
+              <button
                 key={category.id}
-                className="flex min-w-0 shrink-0 basis-[calc((100%_-_48px)/4)] flex-col"
+                type="button"
+                onClick={() => {
+                  if (draggedRef.current) {
+                    draggedRef.current = false
+                    return
+                  }
+                  openAlbum(category.id)
+                }}
+                aria-label={`查看${category.name}案例`}
+                className={[
+                  'group flex min-w-0 shrink-0 basis-[calc((100%_-_48px)/4)] flex-col rounded-2xl text-left outline-none',
+                  'focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring',
+                  // 悬停时图片微放大。这是「这张卡点得动」的唯一视觉暗示：静态图没有
+                  // 下划线可加，只靠光标变化在小屏上完全看不出来。
+                  '[&_img]:transition-transform [&_img]:duration-300 hover:[&_img]:scale-[1.03]',
+                ].join(' ')}
               >
                 <CaseCover category={category} />
                 <div className="mt-2 h-6 text-center text-base leading-6 font-medium">
                   {category.name}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
+
+        {/* 图集窗口与「全部品类」是两个独立的根，两者可以叠着开：从全部品类里点一张卡，
+            图集压在上面，关掉图集回到全部品类。Radix 的滚动锁是计数式的，两层叠开不会
+            互相把对方的锁放掉。 */}
+        {album !== null && (
+          <CaseLibraryDialog
+            category={album.category}
+            open={album.open}
+            onOpenChange={(next) => {
+              if (next) return
+              // 只关不放：品类留着，等退场动画播完。下一轮打开会整体覆盖这个对象。
+              setAlbum((previous) => (previous === null ? null : { ...previous, open: false }))
+            }}
+          />
+        )}
       </section>
     </Dialog>
   )

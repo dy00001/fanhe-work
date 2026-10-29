@@ -4,6 +4,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { registerAuthSupport } from './auth/guard.js'
 import { initPermissionCatalog } from './auth/user-admin.js'
 import { registerAuthRoutes } from './routes/auth.js'
+import { registerCaseRoutes } from './routes/cases.js'
+import { registerCustomerRoutes } from './routes/customers.js'
 import { registerEventRoutes } from './routes/events.js'
 import { registerLaunchRoutes } from './routes/launch.js'
 import { registerNoteRoutes } from './routes/notes.js'
@@ -52,10 +54,16 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerLaunchRoutes(app)
   registerNoteRoutes(app)
   registerEventRoutes(app)
+  // 案例库（首页「案例展示」的自定义文件夹）。只要求登录，不挂权限点 —— 数据按
+  // userId 隔离，理由见 routes/cases.ts 顶部。
+  registerCaseRoutes(app)
   registerSystemUserRoutes(app)
   // 运营数据看板。读接口走 `ops.shop.read`，写接口（采集上报）走回环 + 共享密钥，
   // 两条路径的鉴权方式不同，理由见 routes/ops.ts 顶部。
   registerOpsRoutes(app)
+  // 客户信息平台。读档案、改档案、看金额、推进订单四个权限点分开，
+  // 金额是字段级裁剪，理由见 routes/customers.ts 顶部。
+  registerCustomerRoutes(app)
   // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
   registerVersionRoutes(app)
 

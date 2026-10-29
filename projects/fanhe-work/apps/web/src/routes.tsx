@@ -1,5 +1,5 @@
 import { NAV_CODES, NAV_ITEMS, navPath, resolveActiveNav, type NavCode } from '@fanhe/shared'
-import { Navigate, Route, Routes } from 'react-router'
+import { Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
@@ -8,6 +8,7 @@ import { OpsDashboardPage } from './pages/OpsDashboardPage'
 import { isOpsNavCode } from './lib/ops-view'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
+import { PreferencesPage } from './pages/PreferencesPage'
 import { UsersPage } from './pages/UsersPage'
 import { WorkbenchPage } from './pages/WorkbenchPage'
 
@@ -30,6 +31,9 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  */
 const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
   [NAV_CODES.WORKBENCH]: ['launch', 'notes', 'events'],
+  // 本机设置（案例图片缓存目录）。挂在系统设置模块下，但它与账号权限无关 ——
+  // 它的每一条都是「这台机器」的属性，因此不进导航清单，只占一个二级地址。
+  [NAV_CODES.SYSTEM_SETTINGS]: ['preferences'],
 }
 
 /**
@@ -133,6 +137,7 @@ export function AppRoutes() {
  */
 function ModuleRoute({ code }: { code: NavCode }) {
   const visibleItems = useVisibleNavItems()
+  const { pathname } = useLocation()
   const target = resolveActiveNav(visibleItems, code)
 
   if (target === null) return <NoAccessPage />
@@ -154,7 +159,12 @@ function ModuleRoute({ code }: { code: NavCode }) {
   // 账号与权限管理（T7-01）。放在 planned 判断之后、分派表末尾的兜底之前 ——
   // 这两处都不能省：planned 拦掉未落地的模块，兜底则接住清单里新增却还没写页面的
   // 那一档。
-  if (target.code === NAV_CODES.SYSTEM_SETTINGS) return <UsersPage item={target} />
+  // 系统设置模块下有两个页面：默认是账号与权限，`/preferences` 是本机设置。
+  // 判据用地址而不是给模块再加一个 NavCode —— 导航清单回答的是「有哪些模块」，
+  // 而「本机设置」不是一个模块，它是系统设置的一个页签。
+  if (target.code === NAV_CODES.SYSTEM_SETTINGS) {
+    return pathname.endsWith('/preferences') ? <PreferencesPage /> : <UsersPage item={target} />
+  }
 
   // 共享包新增了 `planned` 为 false 却还没有对应页面的模块时的兜底。渲染占位页而不是
   // 抛错：界面保持可用，且「功能开发中」的标注比一片空白更容易被注意到。
