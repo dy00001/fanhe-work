@@ -14,6 +14,7 @@ import {
   type OrderImportDetail,
   type OrderStepSeed,
 } from './customers.js'
+import { parseLogTime } from './log-time.js'
 
 /**
  * 批量导入：把 `tools/crm/dryrun.mjs` 干跑出来的预览 JSON 写进三张表。
@@ -111,19 +112,13 @@ export type ImportReport = {
 }
 
 /**
- * `2023-08-14 15:29` → `Date`。
+ * 时间解析已移到 `log-time.ts`，因为每日同步也要用同一份。
  *
- * 聊天记录里的时间戳是**本机时区**的自然时间，不带偏移量。用 `new Date(string)`
- * 解析带空格的写法在 V8 里能过，但那是实现细节；显式换成 ISO 形式并补上秒，
- * 语义才确定。解析失败返回 null 而不是抛错：一条坏时间戳不该让整个客户进不来。
+ * 这里保留 re-export：既有测试与调用方都从这个模块拿它，改导入路径是纯粹的
+ * 打扰。**不要在本文件里再写一份实现** —— 那样同步路径与导入路径会按不同时区
+ * 落库，而界面上只表现为「最近消息时间差 8 小时」。
  */
-export function parseLogTime(value: string | null | undefined): Date | null {
-  if (value === null || value === undefined || value.trim() === '') return null
-  const normalized = value.trim().replace(' ', 'T')
-  const withSeconds = /T\d{2}:\d{2}$/.test(normalized) ? `${normalized}:00` : normalized
-  const parsed = new Date(withSeconds)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
+export { parseLogTime } from './log-time.js'
 
 /** 元 → 分。预览里的金额是整数元，`null` 保持 `null`（未录入，不是 0）。 */
 export function yuanToFen(yuan: number | null): number | undefined {

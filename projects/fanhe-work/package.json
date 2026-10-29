@@ -25,6 +25,7 @@
     "db:create-owner": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:create-owner",
     "db:ops-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-import",
     "db:customer-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:customer-import",
+    "db:customer-sync": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:customer-sync",
     "db:ops-shops": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-shops",
     "db:studio": "pnpm --filter @fanhe/api db:studio",
     "lint": "eslint .",

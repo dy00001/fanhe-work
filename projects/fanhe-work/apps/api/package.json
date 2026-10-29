@@ -21,7 +21,8 @@
     "db:ops-shops": "tsx src/tools/ops-seed-shops.ts",
     "db:reset-password": "tsx src/tools/reset-password.ts",
     "db:studio": "prisma studio",
-    "db:customer-import": "tsx src/tools/customer-import.ts"
+    "db:customer-import": "tsx src/tools/customer-import.ts",
+    "db:customer-sync": "tsx src/tools/customer-sync.ts"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*",

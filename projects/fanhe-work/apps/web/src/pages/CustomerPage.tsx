@@ -38,6 +38,8 @@ import {
 } from '../components/ui/table'
 import { ApiError } from '../lib/api'
 import {
+  activityClass,
+  activityOf,
   fillStageBuckets,
   formatDate,
   formatDateTime,
@@ -104,7 +106,15 @@ export function CustomerPage({ item }: { item: NavItem }) {
     key: string
     data: CustomerListResponse | null
     error: string | null
-  }>({ key: '', data: null, error: null })
+    /**
+     * 数据到达的那一刻。活跃度（「3 天前有消息」）要用它当基准。
+     *
+     * **不能在渲染里调 `Date.now()`**：渲染必须是纯的，React Compiler 会直接
+     * 判成缺陷；更实际的理由是，同一次渲染里逐行取「现在」会让跨零点的两行
+     * 出现「上面写昨天、下面写今天」。取一次，跟着数据走。
+     */
+    at: number
+  }>({ key: '', data: null, error: null, at: 0 })
   const [refreshToken, setRefreshToken] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -119,13 +129,13 @@ export function CustomerPage({ item }: { item: NavItem }) {
     let cancelled = false
     loadCustomers({ q: keyword, scope, stage, pendingReview })
       .then((data) => {
-        if (!cancelled) setResult({ key: requestKey, data, error: null })
+        if (!cancelled) setResult({ key: requestKey, data, error: null, at: Date.now() })
       })
       .catch((error: unknown) => {
         if (cancelled) return
         // 只用接口给的中文提示，不透传异常原文：堆栈对使用者没有意义，还可能带出
         // 内部路径（这条与 StateView 里 ErrorState 的注释是同一条规矩）。
-        setResult({ key: requestKey, data: null, error: describeFailure(error) })
+        setResult({ key: requestKey, data: null, error: describeFailure(error), at: Date.now() })
       })
     return () => {
       cancelled = true
@@ -258,6 +268,7 @@ export function CustomerPage({ item }: { item: NavItem }) {
           <CustomerTable
             items={data.items}
             financeReadable={data.financeReadable}
+            nowMs={result.at}
             onSelect={setSelectedId}
           />
         ) : null}
@@ -353,10 +364,13 @@ function SummaryCard({ label, value, hint }: { label: string; value: string; hin
 function CustomerTable({
   items,
   financeReadable,
+  nowMs,
   onSelect,
 }: {
   items: readonly CustomerListItemDto[]
   financeReadable: boolean
+  /** 数据到达的时刻，由上游给一次。渲染里不许调 `Date.now()`。 */
+  nowMs: number
   onSelect: (id: string) => void
 }) {
   return (
@@ -374,6 +388,7 @@ function CustomerTable({
       <TableBody>
         {items.map((item) => {
           const review = reviewLabel(item.reviewStatus, item.confidence)
+          const activity = activityOf(item.lastMessageAt, nowMs)
           return (
             <TableRow
               key={item.id}
@@ -420,7 +435,10 @@ function CustomerTable({
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{item.orderCount}</TableCell>
               <TableCell className="text-xs text-muted-foreground">
-                {formatDateTime(item.lastMessageAt)}
+                <div>{formatDateTime(item.lastMessageAt)}</div>
+                <div className={`mt-0.5 text-[11px] ${activityClass(activity.level)}`}>
+                  {activity.label}
+                </div>
               </TableCell>
               {financeReadable ? (
                 <TableCell className="text-right text-sm text-foreground">
@@ -582,7 +600,9 @@ function CustomerDetailDialog({
     id: string
     customer: CustomerDetailDto | null
     error: string | null
-  }>({ id: '', customer: null, error: null })
+    /** 详情到达的时刻，活跃度按它算。理由同列表那处。 */
+    at: number
+  }>({ id: '', customer: null, error: null, at: 0 })
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState<CustomerStage>('consulting')
   const [reason, setReason] = useState('')
@@ -596,12 +616,17 @@ function CustomerDetailDialog({
     loadCustomer(customerId)
       .then((data) => {
         if (cancelled) return
-        setLoaded({ id: customerId, customer: data, error: null })
+        setLoaded({ id: customerId, customer: data, error: null, at: Date.now() })
         setStage(data.stage)
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
-          setLoaded({ id: customerId, customer: null, error: describeFailure(caught) })
+          setLoaded({
+            id: customerId,
+            customer: null,
+            error: describeFailure(caught),
+            at: Date.now(),
+          })
         }
       })
     return () => {
@@ -624,7 +649,8 @@ function CustomerDetailDialog({
     setError(null)
     try {
       const updated = await action()
-      setLoaded({ id: customerId, customer: updated, error: null })
+      // 保留 `at`：这次改的是阶段或环节，`lastMessageAt` 没动，活跃度的基准不该跳。
+      setLoaded((previous) => ({ ...previous, id: customerId, customer: updated, error: null }))
       setStage(updated.stage)
       onChanged()
     } catch (caught) {
@@ -663,6 +689,7 @@ function CustomerDetailDialog({
               <Field label="图片/语音跳过" value={`${customer.skipImg} / ${customer.skipVoice}`} />
               <Field label="首条消息" value={formatDateTime(customer.firstMessageAt)} />
               <Field label="最近消息" value={formatDateTime(customer.lastMessageAt)} />
+              <Field label="活跃度" value={activityOf(customer.lastMessageAt, loaded.at).label} />
               <Field label="来源群文件" value={customer.groupFile ?? '手工录入'} />
             </dl>
 
@@ -719,8 +746,13 @@ function CustomerDetailDialog({
                     customerId={customer.id}
                     busy={busy}
                     onCreated={(updated) => {
-                      // 与 `apply` 一致：写接口回整条详情，直接替换。
-                      setLoaded({ id: customer.id, customer: updated, error: null })
+                      // 与 `apply` 一致：写接口回整条详情，直接替换，`at` 保持不动。
+                      setLoaded((previous) => ({
+                        ...previous,
+                        id: customer.id,
+                        customer: updated,
+                        error: null,
+                      }))
                       setStage(updated.stage)
                       onChanged()
                     }}

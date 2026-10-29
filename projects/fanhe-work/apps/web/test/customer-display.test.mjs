@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  activityOf,
   fillStageBuckets,
   formatFen,
   formatWan,
@@ -155,4 +156,43 @@ test('复核标签：已确认不显示，待复核区分高低置信', () => {
   assert.equal(reviewLabel('pending', 'low'), '待复核 · 低置信')
   assert.equal(reviewLabel('pending', 'none'), '待复核 · 低置信')
   assert.equal(reviewLabel('rejected', 'high'), '已驳回')
+})
+
+test('活跃度按自然日算，不按毫秒 —— 昨晚 23:50 是「昨天」而不是「今天」', () => {
+  // 2026-10-29 08:00 本地时间
+  const now = new Date(2026, 9, 29, 8, 0).getTime()
+
+  // 昨晚 23:50 距今不到 9 小时。按毫秒算会得出「今天」，而人说的今天是日历上的今天。
+  const yesterdayLate = new Date(2026, 9, 28, 23, 50).getTime()
+  assert.equal(activityOf(new Date(yesterdayLate).toISOString(), now).label, '昨天有消息')
+
+  // 今天凌晨 00:10（哪怕只过了 8 小时）算今天。
+  const todayEarly = new Date(2026, 9, 29, 0, 10).getTime()
+  assert.equal(activityOf(new Date(todayEarly).toISOString(), now).label, '今天有消息')
+})
+
+test('活跃度分档：一周内、一月内、半年内、超过半年', () => {
+  const now = new Date(2026, 9, 29, 8, 0).getTime()
+  const daysAgo = (n) => new Date(2026, 9, 29 - n, 12, 0).toISOString()
+
+  assert.equal(activityOf(daysAgo(3), now).label, '近一周有消息')
+  assert.equal(activityOf(daysAgo(3), now).level, 'active')
+
+  assert.equal(activityOf(daysAgo(12), now).label, '12 天前')
+  assert.equal(activityOf(daysAgo(12), now).level, 'warm')
+
+  assert.equal(activityOf(daysAgo(75), now).label, '2 个月前')
+  assert.equal(activityOf(daysAgo(75), now).level, 'idle')
+
+  assert.equal(activityOf(daysAgo(300), now).label, '超过半年没动')
+  assert.equal(activityOf(daysAgo(300), now).level, 'cold')
+})
+
+test('没有消息、时间坏掉、未来时间都不许显示成负数', () => {
+  const now = new Date(2026, 9, 29, 8, 0).getTime()
+  assert.equal(activityOf(null, now).label, '没有消息')
+  assert.equal(activityOf('', now).level, 'unknown')
+  assert.equal(activityOf('不是时间', now).level, 'unknown')
+  // 时钟不同步或手工改过库时会出现未来时间。显示「-3 天前」比不显示更糟。
+  assert.equal(activityOf(new Date(2026, 9, 30, 12, 0).toISOString(), now).label, '今天有消息')
 })

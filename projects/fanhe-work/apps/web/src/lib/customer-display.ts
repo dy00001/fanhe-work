@@ -243,6 +243,67 @@ export function formatDate(value: string | null): string {
   return value === null || value === '' ? '—' : value
 }
 
+/**
+ * 活跃度：从「最近消息」再往前说一步 —— 这单还在动，还是已经凉了。
+ *
+ * 列表里那一列原本只有 `2026-10-28 11:48`，看上去每个客户都在同一天说过话，
+ * 差别全藏在日期里，要一行一行读才知道谁在沉默。这里把它折成一句话。
+ *
+ * **按自然日算，不按毫秒。** 昨晚 23:50 的消息距今不到 10 小时，按毫秒算会得出
+ * 「今天」；而人说的「今天」是日历上的今天。同步每天只跑一次，日期差本来也只需
+ * 精确到天。
+ */
+export type ActivityLevel = 'active' | 'warm' | 'idle' | 'cold' | 'unknown'
+
+export type Activity = {
+  label: string
+  level: ActivityLevel
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** 取本地零点，用于把「距今多少毫秒」换成「差几个自然日」。 */
+function startOfLocalDay(value: Date): number {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+}
+
+export function activityOf(lastMessageAt: string | null, nowMs: number): Activity {
+  if (lastMessageAt === null || lastMessageAt === '') {
+    return { label: '没有消息', level: 'unknown' }
+  }
+  const last = new Date(lastMessageAt)
+  if (Number.isNaN(last.getTime())) return { label: '没有消息', level: 'unknown' }
+
+  const now = new Date(nowMs)
+  // `Math.round` 而不是 `floor`：跨夏令时的一天是 23 或 25 小时，直接除会有 ±1 的漂移。
+  const days = Math.round((startOfLocalDay(now) - startOfLocalDay(last)) / DAY_MS)
+
+  // 未来时间（时钟不同步、或手工改过库）按「今天」处理，不显示「-3 天前」。
+  if (days <= 0) return { label: '今天有消息', level: 'active' }
+  if (days === 1) return { label: '昨天有消息', level: 'active' }
+  if (days <= 7) return { label: '近一周有消息', level: 'active' }
+  if (days <= 30) return { label: `${days} 天前`, level: 'warm' }
+  if (days <= 180) return { label: `${Math.floor(days / 30)} 个月前`, level: 'idle' }
+  return { label: '超过半年没动', level: 'cold' }
+}
+
+/** 活跃度对应的文字色。沉默越久越显眼，但不用红色警报——它只是「很久没聊」。 */
+export function activityClass(level: ActivityLevel): string {
+  switch (level) {
+    case 'active':
+    case 'warm':
+      return 'text-muted-foreground'
+    case 'idle':
+      // 用 `foreground` 而不是加深的 muted：这一档要「看起来比上面重一点」，
+      // 但项目里没有现成的第三级灰，硬造一个会绕过令牌。
+      return 'text-foreground'
+    case 'cold':
+      return 'text-destructive'
+    default:
+      return 'text-muted-foreground'
+  }
+}
+
 export type StageBucket = { stage: CustomerStage; count: number }
 
 /**
