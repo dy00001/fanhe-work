@@ -7,7 +7,13 @@ import { OpsSection } from './OpsSection'
 
 /**
  * 五店并列指标带。结构与原型 `.store-strip / .store` 一致：
- * 店名 + 数据状态标 → 支付金额 → 买家 / 访客 / 转化 → 迷你柱。
+ * 店名 + 数据状态标 → 访客数 → 买家 / 支付金额 / 转化 → 迷你柱。
+ *
+ * **主数字是访客数，不是支付金额**（2026-10-29 按阿阳要求对调）。理由是这张卡的用途是
+ * 「哪家店今天有人在看」——五家店连续多日支付为 0 时，一排 ¥0 让五张卡完全同质，扫一眼
+ * 什么也读不出来；访客数有差异，主数字才有信息量。支付金额退到下面那行，与买家、转化
+ * 并列，仍是可见的。主数字后跟一个极小的「访客」单位，因为纯数字没有货币符号兜底，
+ * 不加单位会被读成金额或订单数。
  *
  * 与原型的两处差别，都是数据现实决定的：
  *
@@ -62,8 +68,11 @@ export function OpsShopStrip(props: {
                   </span>
                 </span>
 
-                <span className="text-xl font-medium tracking-tight text-foreground tabular-nums">
-                  {board.hasData ? formatFen(board.payAmountFen, { compact: true }) : '—'}
+                <span className="flex items-baseline gap-1 text-xl font-medium tracking-tight text-foreground tabular-nums">
+                  {board.hasData ? formatCount(board.visitors) : '—'}
+                  {board.hasData ? (
+                    <span className="text-[11px] font-normal text-muted-foreground-weak">访客</span>
+                  ) : null}
                 </span>
 
                 <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
@@ -72,8 +81,10 @@ export function OpsShopStrip(props: {
                     <b className="font-normal text-foreground">{formatCount(board.payBuyers)}</b>
                   </span>
                   <span>
-                    访客{' '}
-                    <b className="font-normal text-foreground">{formatCount(board.visitors)}</b>
+                    支付{' '}
+                    <b className="font-normal text-foreground">
+                      {formatFen(board.payAmountFen, { compact: true })}
+                    </b>
                   </span>
                   <span>
                     转化{' '}
