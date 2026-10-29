@@ -1,4 +1,6 @@
-import { formatCount, formatFen, formatPercent } from './ops-display'
+import type { OpsDailyPoint } from '@fanhe/shared'
+
+import { formatCount, formatFen, formatPercent } from './ops-display.ts'
 
 /**
  * 数据大屏的四条曲线。
@@ -30,3 +32,20 @@ export const OPS_SCREEN_SERIES: readonly {
     format: (value) => formatPercent(value),
   },
 ]
+
+/**
+ * 取某一天某一项指标的数值。
+ *
+ * 转化率是**算出来的**，库里没有这一列：它由买家数与访客数相除得到，访客为 0 时
+ * 没有意义（不是 0%，是「算不出来」），所以返回 `null` 而不是 0 —— 折线遇到 null
+ * 会画到基线，看起来像「那天转化率是零」，与「那天没人来」是两回事。
+ *
+ * 放在这里而不是组件内：折线绘制与悬停提示都要用它，两处各写一份迟早会漂。
+ */
+export function seriesValue(point: OpsDailyPoint, key: OpsScreenSeriesKey): number | null {
+  if (key === 'payRate') {
+    if (point.payBuyers === null || point.visitors === null || point.visitors === 0) return null
+    return point.payBuyers / point.visitors
+  }
+  return point[key]
+}

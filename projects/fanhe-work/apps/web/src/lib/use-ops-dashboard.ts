@@ -1,8 +1,17 @@
-import type { OpsDashboardResponse, OpsHealthResponse, OpsShopBoardsResponse } from '@fanhe/shared'
+import type { OpsHealthResponse, OpsShopBoardsResponse } from '@fanhe/shared'
 import { useEffect, useState } from 'react'
 
 import { ApiError } from './api'
+import {
+  dashboardKey,
+  dashboardRangeKey,
+  resolveDashboardState,
+  type DashboardEntry,
+  type OpsLoadState,
+} from './ops-load-state'
 import { loadOpsDashboard, loadOpsHealth, loadOpsShopBoards } from './ops'
+
+export type { OpsLoadState }
 
 /**
  * 运营看板的数据加载。
@@ -19,23 +28,12 @@ import { loadOpsDashboard, loadOpsHealth, loadOpsShopBoards } from './ops'
  *
  * 指纹里带上 `ticket`，`reload()` 递增它即可让「重试」回到加载态。
  *
+ * **店铺不进「区间指纹」**：换店只是同一页换一个人看，让内容区整块卸载会塌陷页面
+ * 高度、把滚动位置顶到最上面。规则与理由见 `ops-load-state.ts`。
+ *
  * 空态不在这里判：接口返回 200 且 `dailyDays === 0` 也是一种「成功」，而空态该
  * 说什么（还没采集、还是这段时间没数据）取决于页头选中的区间 —— 那是界面的判断。
  */
-
-export type OpsLoadState =
-  | { status: 'loading' }
-  | { status: 'error'; error: ApiError }
-  | { status: 'ready'; data: OpsDashboardResponse }
-
-type DashboardEntry = { key: string; state: Exclude<OpsLoadState, { status: 'loading' }> }
-
-function dashboardKey(
-  input: { days?: number; from?: string; to?: string; shop: string | null },
-  ticket: number,
-): string {
-  return [input.days ?? '', input.from ?? '', input.to ?? '', input.shop ?? '', ticket].join('|')
-}
 
 export function useOpsDashboard(input: {
   days?: number
@@ -54,8 +52,12 @@ export function useOpsDashboard(input: {
   const [entry, setEntry] = useState<DashboardEntry | null>(null)
 
   const key = dashboardKey(input, ticket)
-  const state: OpsLoadState =
-    entry !== null && entry.key === key ? entry.state : { status: 'loading' }
+  const rangeKey = dashboardRangeKey(input, ticket)
+  /*
+   * 推导而非写入。规则本身在 `ops-load-state.ts`：**只有店铺变了不进加载态**，
+   * 否则点一下店铺卡，内容区整块卸载、页面高度塌陷，滚动位置会被浏览器钳到 0。
+   */
+  const state: OpsLoadState = resolveDashboardState(entry, key, rangeKey)
 
   /*
    * 切回这个标签页时静默重取一次。
@@ -91,7 +93,7 @@ export function useOpsDashboard(input: {
       shop: input.shop,
     })
       .then((data) => {
-        if (active) setEntry({ key, state: { status: 'ready', data } })
+        if (active) setEntry({ key, rangeKey, state: { status: 'ready', data } })
       })
       .catch((error: unknown) => {
         if (!active) return
@@ -104,6 +106,7 @@ export function useOpsDashboard(input: {
           if (prev !== null && prev.key === key && prev.state.status === 'ready') return prev
           return {
             key,
+            rangeKey,
             state: {
               status: 'error',
               error:
@@ -116,7 +119,7 @@ export function useOpsDashboard(input: {
     return () => {
       active = false
     }
-  }, [input.days, input.from, input.to, input.shop, input.enabled, key, refreshToken])
+  }, [input.days, input.from, input.to, input.shop, input.enabled, key, rangeKey, refreshToken])
 
   return {
     state,

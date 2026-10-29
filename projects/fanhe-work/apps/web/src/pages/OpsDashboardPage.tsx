@@ -125,6 +125,12 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
   })
 
   const data = dashboard.state.status === 'ready' ? dashboard.state.data : null
+  /*
+   * 换店途中：屏幕上是上一家店的数，新数据还在路上。**不加视觉提示**（请求通常
+   * 几十毫秒，闪现一行「正在切换」比不闪更晃眼），只给辅助技术一个 `aria-busy`。
+   * 用户能看到的即时反馈来自店铺卡高亮 —— 它读的是地址栏，点下去立刻变。
+   */
+  const switching = dashboard.state.status === 'ready' && dashboard.state.switching === true
   const coverage = data?.flags.covered ?? null
   const query = presetQuery(preset, coverage, custom)
 
@@ -178,7 +184,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
         }`
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3" aria-busy={switching || undefined}>
       {/* ── 页头：标题 + 副标题 + 店铺分段（原型 page-head + storeSeg） ── */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-0">

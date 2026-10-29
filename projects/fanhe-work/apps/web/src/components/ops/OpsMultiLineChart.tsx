@@ -1,7 +1,9 @@
 import type { OpsDailyPoint } from '@fanhe/shared'
+import { useState, type MouseEvent } from 'react'
 
 import { shortDate } from '../../lib/ops-display'
-import { OPS_SCREEN_SERIES, type OpsScreenSeriesKey } from '../../lib/ops-series'
+import { hoverIndexAt, hoverRatioAt, hoverRows } from '../../lib/ops-hover'
+import { OPS_SCREEN_SERIES, seriesValue, type OpsScreenSeriesKey } from '../../lib/ops-series'
 import { cn } from '../../lib/utils'
 
 /**
@@ -15,14 +17,6 @@ import { cn } from '../../lib/utils'
  * 说明转化在改善）。柱状图在四条并列时互相遮挡，折线不会。
  */
 export type OpsSeriesKey = OpsScreenSeriesKey
-
-function valueOf(point: OpsDailyPoint, key: OpsSeriesKey): number | null {
-  if (key === 'payRate') {
-    if (point.payBuyers === null || point.visitors === null || point.visitors === 0) return null
-    return point.payBuyers / point.visitors
-  }
-  return point[key]
-}
 
 export function OpsMultiLineChart(props: {
   series: readonly OpsDailyPoint[]
@@ -92,7 +86,7 @@ export function OpsMultiLineChart(props: {
                   {item.label}
                 </div>
                 <div className="mt-1 text-sm text-foreground tabular-nums">
-                  {item.format(first === undefined ? null : valueOf(first, item.key))}
+                  {item.format(first === undefined ? null : seriesValue(first, item.key))}
                 </div>
               </div>
             ))}
@@ -100,52 +94,7 @@ export function OpsMultiLineChart(props: {
         </div>
       ) : (
         <>
-          <svg
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            className="h-40 w-full overflow-visible"
-            role="img"
-            aria-label="四指标趋势，各曲线按自身峰值归一"
-          >
-            {/* 两条参考线：顶部与中线。只做视觉锚点，不标数值。 */}
-            {[0, 50].map((y) => (
-              <line
-                key={y}
-                x1="0"
-                y1={y}
-                x2="100"
-                y2={y}
-                stroke="var(--border)"
-                strokeWidth="0.5"
-                strokeDasharray="2 3"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-
-            {OPS_SCREEN_SERIES.filter((item) => props.enabled.includes(item.key)).map((item) => {
-              const values = usable.map((point) => valueOf(point, item.key))
-              const peak = Math.max(1, ...values.map((value) => value ?? 0))
-              const path = values
-                .map((value, index) => {
-                  const x = usable.length === 1 ? 50 : (index / (usable.length - 1)) * 100
-                  const y = 100 - ((value ?? 0) / peak) * 96 - 2
-                  return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
-                })
-                .join(' ')
-              return (
-                <path
-                  key={item.key}
-                  d={path}
-                  fill="none"
-                  stroke={item.color}
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
-                  vectorEffect="non-scaling-stroke"
-                />
-              )
-            })}
-          </svg>
+          <TrendPlot usable={usable} enabled={props.enabled} />
 
           <div className="flex justify-between text-[10px] text-muted-foreground-weak tabular-nums">
             <span>{first === undefined ? '' : shortDate(first.date)}</span>
@@ -153,6 +102,140 @@ export function OpsMultiLineChart(props: {
             <span>{last === undefined ? '' : shortDate(last.date)}</span>
           </div>
         </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 折线本体 + 悬停读数层。
+ *
+ * ## 为什么提示框是 HTML 而不是 SVG 里的 `<text>`
+ *
+ * `viewBox` 是 100×100，容器却是「宽几百像素、高 160 像素」，配
+ * `preserveAspectRatio="none"` 意味着 X 与 Y 的缩放比不同。SVG 内的文字会被横向
+ * 拉伸成畸形字 —— 这也是参考线要用 `vectorEffect` 保持 1px 的原因。所以只有竖线
+ * 留在 SVG 里（细线不怕拉伸），提示框用 HTML 绝对定位叠在图上。
+ *
+ * ## 为什么按「最近的点」取读数而不是插值
+ *
+ * 这是逐日数据，日与日之间没有观测值。插值会凭空造出一个「10-23 12:00 支付金额
+ * 多少」，读者没法分辨哪些数是采到的、哪些是算出来的。取最近点最多偏半格，但每个
+ * 读数都对应真实的一天。
+ */
+function TrendPlot(props: {
+  usable: readonly OpsDailyPoint[]
+  enabled: readonly OpsScreenSeriesKey[]
+}) {
+  const [hover, setHover] = useState<number | null>(null)
+  const usable = props.usable
+  const active = hover === null ? null : (usable[hover] ?? null)
+  const ratio = hover === null ? 0 : hoverRatioAt(hover, usable.length)
+
+  const onMove = (event: MouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0) return
+    setHover(hoverIndexAt((event.clientX - rect.left) / rect.width, usable.length))
+  }
+
+  return (
+    <div className="relative">
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="h-40 w-full overflow-visible"
+        role="img"
+        aria-label="四指标趋势，各曲线按自身峰值归一；鼠标移入可按日读数"
+        onMouseMove={onMove}
+        onMouseLeave={() => {
+          setHover(null)
+        }}
+      >
+        {/* 两条参考线：顶部与中线。只做视觉锚点，不标数值。 */}
+        {[0, 50].map((y) => (
+          <line
+            key={y}
+            x1="0"
+            y1={y}
+            x2="100"
+            y2={y}
+            stroke="var(--border)"
+            strokeWidth="0.5"
+            strokeDasharray="2 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+
+        {OPS_SCREEN_SERIES.filter((item) => props.enabled.includes(item.key)).map((item) => {
+          const values = usable.map((point) => seriesValue(point, item.key))
+          const peak = Math.max(1, ...values.map((value) => value ?? 0))
+          const path = values
+            .map((value, index) => {
+              const x = usable.length === 1 ? 50 : (index / (usable.length - 1)) * 100
+              const y = 100 - ((value ?? 0) / peak) * 96 - 2
+              return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
+            })
+            .join(' ')
+          return (
+            <path
+              key={item.key}
+              d={path}
+              fill="none"
+              stroke={item.color}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          )
+        })}
+
+        {/* 悬停竖线：告诉用户读数取的是哪一天，否则只有数字没有位置。 */}
+        {hover === null ? null : (
+          <line
+            x1={ratio * 100}
+            y1="0"
+            x2={ratio * 100}
+            y2="100"
+            stroke="var(--foreground)"
+            strokeWidth="1"
+            strokeOpacity="0.25"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </svg>
+
+      {active === null ? null : (
+        <div
+          className="pointer-events-none absolute top-2 z-10 min-w-[8.5rem] rounded-lg border border-border bg-card px-2.5 py-2 shadow-md"
+          style={{
+            left: `${ratio * 100}%`,
+            /*
+             * 靠边时改锚点而不是让提示框溢出容器：`-translate-x-1/2` 在两端会把
+             * 半个框推到可视区外，看起来像被裁掉了。
+             */
+            transform:
+              ratio <= 0.2
+                ? 'translateX(0)'
+                : ratio >= 0.8
+                  ? 'translateX(-100%)'
+                  : 'translateX(-50%)',
+          }}
+        >
+          <div className="text-[11px] text-muted-foreground">{active.date}</div>
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {hoverRows(active, props.enabled).map((row) => (
+              <li key={row.key} className="flex items-center gap-1.5 text-[11px]">
+                <i
+                  className="inline-block size-1.5 shrink-0 rounded-full"
+                  style={{ background: row.color }}
+                />
+                <span className="text-muted-foreground">{row.label}</span>
+                <b className="ml-auto pl-2 font-normal text-foreground tabular-nums">{row.text}</b>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )
