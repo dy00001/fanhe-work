@@ -58,10 +58,13 @@ export function isValidUsername(normalized: string): boolean {
 /**
  * 密码长度下限。
  *
- * 比常见的 8 位更严，因为超级管理员是系统里唯一的入口账号，而且没有找回通道。
+ * 取 6 位是产品口径：初始密码由管理员当面转述给员工，门槛定得过高，现场就会
+ * 退回「好记的短口令」或者被写在便签上。真正的强度交给「重置密码」里的随机生成
+ * 按钮，那里给的是 16 位易混字符已剔除的随机串。
+ *
  * 上限与登录接口一致，防止超长输入先被完整读进内存再交给 Argon2。
  */
-export const PASSWORD_MIN_LENGTH = 12
+export const PASSWORD_MIN_LENGTH = 6
 export const PASSWORD_MAX_LENGTH = 512
 
 /** 显示名长度上限。与 `users.display_name` 的 VarChar(64) 一致，允许中文。 */

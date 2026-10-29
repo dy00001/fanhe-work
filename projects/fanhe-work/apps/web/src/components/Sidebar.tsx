@@ -6,7 +6,7 @@ import {
   type NavSection,
 } from '@fanhe/shared'
 import { Bell, ChevronDown, Monitor, Moon, PanelLeft, Sun, type LucideIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { NavLink, type NavLinkRenderProps } from 'react-router'
 
 import { NAV_GROUP_ICONS, NAV_ICONS } from '../lib/nav-icons'
@@ -30,13 +30,27 @@ const THEME_OPTIONS: readonly { value: ThemePreference; label: string; Icon: Luc
 ]
 
 /**
+ * 当前档位匹配不到时的兜底。
+ *
+ * 三个合法值与 `THEME_OPTIONS` 一一对应，正常路径永远走不到这里；它能存在，是为了
+ * 在类型上收住 `find()` 的 `undefined`，而不是靠 `!` 断言 ——
+ * `noUncheckedIndexedAccess` 生效后，断言会把「两处定义不同步」这种真实缺陷一直
+ * 藏到运行时。
+ */
+const THEME_FALLBACK: (typeof THEME_OPTIONS)[number] = {
+  value: 'system',
+  label: '跟随系统',
+  Icon: Monitor,
+}
+
+/**
  * 左侧主导航。
  *
  * 结构与 `UI合并方案/梵禾Work-首页改造预览.html` 的侧栏逐条对齐，四段：
  *
  *   1. 品牌行（编号 1）：logo + 名称，高 72px —— 与顶栏同高，两条下边缘接成一条线；
  *   2. 主列表（编号 2~6）：顶层项「首页 / 资产 / 搜索」+ 四个分组；
- *   3. 底部图标行（编号 7）：外观三档 + 系统设置 + 通知；
+ *   3. 底部图标行（编号 7）：外观主按钮（三档收进浮层）+ 系统设置 + 通知；
  *   4. 折叠按钮：**刻意渲染在 `<aside>` 之外**。
  *
  * 尺寸取原型实测值：展开 240px、折叠 72px。
@@ -348,10 +362,31 @@ function NavGroupBlock({
 }
 
 /**
- * 侧栏底部：外观三档 + 系统设置 + 通知（编号 7）。
+ * 侧栏底部：外观主按钮 + 系统设置 + 通知（编号 7）。
  *
- * 三档做成同组单选而不是「点一下切一下」的按钮：循环切换看不出有「跟随系统」
- * 这一档，用户只能靠反复点击去猜。
+ * **外观为什么收成一个按钮。** 上一版把「跟随系统 / 浅色 / 深色」三个图标平铺在
+ * 底部，轨道用 `flex-1` 吃掉整行剩余宽度：三个同等重量的图标并列，读起来像三个
+ * 并列的快捷入口，而它们其实是**同一个**互斥选项的三档；同时视觉重心压向左侧，
+ * 设置与通知被推到行尾。这一版收成单个主按钮，图标跟着当前档位走（当前是哪档
+ * 一眼可见），三档改在浮层里展开。
+ *
+ * **没有退回「点一下切一下」的循环按钮。** 循环切换看不出存在「跟随系统」这一档，
+ * 用户只能靠反复点击去猜。浮层保住了「一次看全三档」这个优点，只是把它收进一个
+ * 动作之后。
+ *
+ * **浮层手写，没有引入 Radix Popover。** 依赖表里没有 `@radix-ui/react-popover`，
+ * 而这里需要的东西只有三样：定位、点外部收起、进出场过渡。同样的三样在
+ * `NavGroupBlock` 的折叠态浮层里已经用「透明全屏遮罩 + 绝对定位面板」实现过一遍，
+ * 为省这十几行再加一个依赖不划算。
+ *
+ * **面板常驻 DOM，用 `inert` 切换，不靠条件渲染。** 条件渲染没有退场动画：节点在
+ * 类名变化之前就被摘掉了，收起只能是硬切，而要求里明确要「收起也要过渡」。常驻的
+ * 反面风险是「看不见但 Tab 得到」——`opacity-0` 的按钮依然在焦点序列里；`inert`
+ * 一次解决焦点与读屏两件事（React 19 原生支持该属性），不必再叠 `aria-hidden`。
+ *
+ * **展开方向随侧栏状态变。** 展开态从主按钮向上展开：上方是导航区，遮住一两行
+ * 导航，好过被窗口下缘截断。折叠态（72px）放不下约 124px 宽的面板，改为向右展开，
+ * 与分组浮层同向。两种方向的右边界都在 210px 以内，窄视口同样不会溢出。
  *
  * **系统设置按裁决落在这里，排在通知左侧。** 它是 owner / admin 唯一的管理入口，
  * 而原型的主列表里没有它（编号文档的 11 条未覆盖到）。放在底部图标行而不是某个
@@ -367,82 +402,181 @@ function SideFoot({
   footerItems: readonly NavItem[]
 }) {
   const { preference, setPreference } = useTheme()
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelId = useId()
+
+  // 当前档位的图标与名称。`??` 落到兜底对象而不是 `THEME_OPTIONS[0]`：
+  // `noUncheckedIndexedAccess` 下下标取值是 `T | undefined`，兜底比断言干净。
+  const current = THEME_OPTIONS.find((option) => option.value === preference) ?? THEME_FALLBACK
+  const CurrentIcon = current.Icon
+
+  /**
+   * 收起并把焦点交还主按钮。
+   *
+   * 面板一 `inert`，焦点若还停在里面的某个档位上就会被浏览器丢掉（落到 `body`），
+   * 键盘用户的下一次 Tab 得从头开始 —— 而他们并不知道自己「在哪」。焦点回到主按钮，
+   * 位置才继续可预测。鼠标点击时这条同样跑，但按钮的焦点环走 `:focus-visible`，
+   * 鼠标触发不会画出来。
+   */
+  const closeAppearance = () => {
+    setAppearanceOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  // Esc 收起，并把焦点还给主按钮 —— 面板收起后焦点若停在面板里的按钮上，
+  // 用户的下一次 Tab 会从一处看不见的位置开始。只在展开时挂监听：收起后它没有
+  // 任何职责，留着会让每次按键都空转一次。
+  useEffect(() => {
+    if (!appearanceOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setAppearanceOpen(false)
+      triggerRef.current?.focus()
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [appearanceOpen])
 
   return (
     <div
       className={cn(
         'flex shrink-0 gap-2 border-t border-border-soft p-3',
-        // 折叠态：底部所有图标与导航/分组同一条 x=36 垂直中轴 —— `flex-col
-        // items-center` 让 48px 主题组与 32px 设置/通知整体在 72px 里居中，各自
-        // 组件的图标都收在 x=36 上（原型侧栏底部此处未居中，是它的一处不一致，
-        // 这里按「一条中轴」收敛补齐）；`px-0` 去掉左右内边距，上下留白取自 p-3。
+        // 折叠态：底部所有图标仍收在与导航同一的 x=36 中轴上 —— `flex-col
+        // items-center` 让主按钮与 32px 设置/通知在 72px 里居中（原型侧栏底部此处
+        // 未居中，是它的一处不一致，这里按「一条中轴」收敛补齐）；`px-0` 去掉
+        // 左右内边距，上下留白取自 p-3。
         collapsed ? 'flex-col items-center gap-2 px-0' : 'items-center',
       )}
     >
-      <div
-        role="group"
-        aria-label="外观"
-        className={cn(
-          'flex flex-1 gap-0.5 rounded-xl bg-secondary p-0.5',
-          // 折叠态：w-12 定宽 + 父级 `items-center` 把整个分组居中（盒 [12,60]），
-          // 三档按钮各自 `place-items-center` → 图标都收在 x=36，与设置/通知同线。
-          collapsed && 'w-12 flex-none flex-col',
+      {/* `relative z-40` 承担两件事：浮层与遮罩的定位上下文；让主按钮压在遮罩
+          之上 —— 否则展开后再点主按钮，命中的是全屏遮罩（结果同样是收起，但按钮
+          的悬停反馈会先消失一帧，看起来像点空了）。 */}
+      <div className="relative z-40">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => {
+            setAppearanceOpen((open) => !open)
+          }}
+          aria-label={`外观（当前：${current.label}）`}
+          aria-expanded={appearanceOpen}
+          aria-controls={panelId}
+          title={`外观：${current.label}`}
+          className={cn(
+            'grid size-8 shrink-0 place-items-center rounded-xl transition-[background,color,box-shadow] duration-200',
+            // 展开态额外加一圈描边。浅色下 `--accent` 与 `--secondary` 同值
+            // （#f4f4f5），只换底色区分不开「悬停在按钮上」与「面板已展开」，
+            // 描边是这里唯一稳定的差异。
+            appearanceOpen
+              ? 'bg-secondary text-foreground ring-1 ring-border'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+        >
+          <CurrentIcon className="size-[18px]" />
+        </button>
+
+        {appearanceOpen && (
+          // 透明遮罩：点面板以外的任何位置都收起，与分组浮层同一手法。不用全局
+          // click 监听，是因为「面板内部点击不关闭」那条判断得逐个事件做冒泡比对，
+          // 而遮罩把这层判断交给了布局本身。
+          <div className="fixed inset-0 z-30" onClick={closeAppearance} aria-hidden />
         )}
-      >
-        {THEME_OPTIONS.map(({ value, label, Icon }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setPreference(value)}
-            aria-label={label}
-            aria-pressed={preference === value}
-            title={label}
-            className={cn(
-              'grid h-7 flex-1 place-items-center rounded-lg transition-[background,color] duration-200',
-              collapsed && 'flex-none',
-              preference === value
-                ? 'bg-card text-foreground shadow-[var(--shadow-pop)]'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon className="size-4" />
-          </button>
-        ))}
+
+        <div
+          id={panelId}
+          role="group"
+          aria-label="外观"
+          // 收起的浮层整块 inert：不可聚焦、不进无障碍树。视觉上由 `opacity-0`
+          // 加 `pointer-events-none` 双重兜底。
+          inert={!appearanceOpen}
+          className={cn(
+            // 过渡属性里写 `scale` 而不是 `transform`：Tailwind 4 把 `scale-95`
+            // 编译成独立的 `scale` 属性（不是 `transform: scale()`），写错名字的
+            // 后果是透明度在淡、尺寸却硬跳 —— 只测颜色和终值断言看不出来。
+            'absolute z-40 flex gap-1 rounded-xl border border-border bg-popover p-1 shadow-[var(--shadow-pop)] transition-[opacity,scale] duration-150 ease-out',
+            collapsed
+              ? 'bottom-0 left-[calc(100%+10px)] origin-left'
+              : 'bottom-[calc(100%+8px)] left-0 origin-bottom-left',
+            appearanceOpen ? 'scale-100 opacity-100' : 'scale-95 opacity-0',
+          )}
+        >
+          {/* 轨道沿用原三档的观感：底槽 + 选中档抬起成一块白。悬停与选中因此分得
+              很开 —— 悬停只换图标颜色，选中是整块浮起，两者不会互相冒充。三档
+              等宽（size-8）、间距统一为 4px，与主按钮同级，排列不挤不叠。 */}
+          <div className="flex gap-1 rounded-lg bg-secondary p-1">
+            {THEME_OPTIONS.map(({ value, label, Icon }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setPreference(value)
+                  // 选完即收：面板停在底部会压住导航，而这里也没有第二个待改项。
+                  closeAppearance()
+                }}
+                aria-label={label}
+                aria-pressed={preference === value}
+                title={label}
+                className={cn(
+                  // `box-shadow` 一并过渡：选中档的「抬起」是靠阴影表达的，不带上
+                  // 它，切换档位时底色滑过去而阴影是硬切的。
+                  'grid size-8 place-items-center rounded-lg transition-[background,color,box-shadow] duration-150',
+                  preference === value
+                    ? 'bg-card text-foreground shadow-[var(--shadow-pop)]'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Icon className="size-[18px]" />
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {footerItems.map((item) => {
-        const Icon = NAV_ICONS[item.code]
-        return (
-          <NavLink
-            key={item.code}
-            to={navPath(item.code)}
-            aria-label={item.label}
-            title={item.label}
-            className={({ isActive }: NavLinkRenderProps) =>
-              cn(
-                'grid size-8 shrink-0 place-items-center rounded-xl',
-                isActive
-                  ? 'bg-accent text-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-              )
-            }
-          >
-            <Icon className="size-[18px]" />
-          </NavLink>
-        )
-      })}
+      {/* 设置与通知紧接在主按钮右侧，不再用 `ml-auto` 推到行尾。
+          上一版把它们推到右侧是为了填满「三个外观按钮平铺」时的整行宽度；外观收成
+          一个 32px 按钮后，这份推力在中间留下近百像素的空洞，三个图标被拆成左右两
+          摊，读起来像两组无关的控件。现在三项共用父级 `gap-2`，从左依次排开，间距
+          与图标尺寸都一致。折叠态本来就是 `flex-col` 一列居中，不需要额外处理。 */}
+      <div className={cn('flex items-center gap-2', collapsed && 'flex-col')}>
+        {footerItems.map((item) => {
+          const Icon = NAV_ICONS[item.code]
+          return (
+            <NavLink
+              key={item.code}
+              to={navPath(item.code)}
+              aria-label={item.label}
+              title={item.label}
+              className={({ isActive }: NavLinkRenderProps) =>
+                cn(
+                  'grid size-8 shrink-0 place-items-center rounded-xl',
+                  isActive
+                    ? 'bg-accent text-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                )
+              }
+            >
+              <Icon className="size-[18px]" />
+            </NavLink>
+          )
+        })}
 
-      <button
-        type="button"
-        aria-label="通知"
-        title="通知"
-        className="grid size-8 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <span className="relative grid place-items-center">
-          <Bell className="size-[18px]" />
-          <span className="absolute top-1 right-[5px] size-1.5 rounded-full bg-foreground ring-[1.5px] ring-card dark:bg-m-amber" />
-        </span>
-      </button>
+        <button
+          type="button"
+          aria-label="通知"
+          title="通知"
+          className="grid size-8 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <span className="relative grid place-items-center">
+            <Bell className="size-[18px]" />
+            <span className="absolute top-1 right-[5px] size-1.5 rounded-full bg-foreground ring-[1.5px] ring-card dark:bg-m-amber" />
+          </span>
+        </button>
+      </div>
     </div>
   )
 }

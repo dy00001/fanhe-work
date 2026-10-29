@@ -3,6 +3,8 @@ import {
   isValidUsername,
   mergePermissions,
   normalizeUsername,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
   ROLE_CODES,
   type AccountPermissions,
   type PermissionCode,
@@ -428,7 +430,7 @@ export async function createManagedUser(
     return { ok: false, reason: 'invalid_username' }
   }
 
-  if (input.password.length < 12 || input.password.length > 512) {
+  if (input.password.length < PASSWORD_MIN_LENGTH || input.password.length > PASSWORD_MAX_LENGTH) {
     return { ok: false, reason: 'invalid_password' }
   }
 

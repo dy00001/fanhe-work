@@ -24,6 +24,7 @@ import { after, before, describe, test } from 'node:test'
 
 import {
   AUDIT_ACTIONS,
+  PASSWORD_MIN_LENGTH,
   PERMISSIONS,
   ROLE_CODES,
   type PermissionCode,
@@ -300,7 +301,7 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
     assert.ok(signInResult.ok, '新建的账号应当能立即登录')
   })
 
-  test('密码短于 12 位被拒', async () => {
+  test('密码短于下限被拒', async () => {
     const owner = await signIn(ROLE_CODES.OWNER)
     const response = await app.inject({
       method: 'POST',
@@ -308,13 +309,40 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
       headers: auth(owner.token),
       payload: {
         username: `${TEST_DATA_PREFIX}shortpw`,
-        password: 'short',
+        password: 'a'.repeat(PASSWORD_MIN_LENGTH - 1),
         displayName: '短密码',
         roleCode: ROLE_CODES.MEMBER,
       },
     })
     // 长度校验在 schema 层就拦下，请求根本没进业务层。
     assert.equal(response.statusCode, 400)
+  })
+
+  // 上一条只证明「短了被拒」。下限本身也要能过，否则把常量调小这件事在测试里
+  // 是不可见的：两道关卡任意一处还留着旧数字，都表现为「还是不让建」。
+  test('密码刚好等于下限时放行', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const username = `${TEST_DATA_PREFIX}minpw${randomUUID().replaceAll('-', '').slice(0, 12)}`
+    const password = 'a'.repeat(PASSWORD_MIN_LENGTH)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password,
+        displayName: '下限密码',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(response.statusCode, 201)
+
+    const created = (response.json() as { user: { id: string } }).user
+    createdUserIds.push(created.id)
+
+    const signInResult = await login({ username, password, ip: TEST_IP })
+    assert.ok(signInResult.ok, '下限长度的密码应当能建号并登录')
   })
 
   test('停用会立刻吊销该账号的会话 —— 不是「下次不能登录」而已', async () => {

@@ -1,4 +1,4 @@
-import type { PermissionCode } from '@fanhe/shared'
+import { PASSWORD_MIN_LENGTH, type PermissionCode } from '@fanhe/shared'
 import { useState } from 'react'
 
 import { Badge } from '../ui/badge'
@@ -326,7 +326,7 @@ export function UserFormDialog({
                 id="su-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="至少 12 位"
+                placeholder={`至少 ${PASSWORD_MIN_LENGTH} 位`}
               />
               <p className="text-xs text-muted-foreground-weak">
                 明文显示而非掩码：管理员需要看到并转述它，掩码只会让两边都猜错字符。
@@ -486,7 +486,7 @@ export function ResetPasswordDialog({
               id="su-reset-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="至少 12 位"
+              placeholder={`至少 ${PASSWORD_MIN_LENGTH} 位`}
             />
             <Button type="button" variant="outline" onClick={generate}>
               生成
