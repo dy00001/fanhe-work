@@ -267,7 +267,14 @@ export type OpsShopBoard = {
   payBuyers: number | null
   visitors: number | null
   payRate: number | null
-  /** 金额是否被权限裁掉。true 时上面三个金额相关字段都是 null。 */
+  /**
+   * 金额是否被权限裁掉。true 时 `payAmountFen` 为 null，前端渲染成「—」。
+   *
+   * 只裁金额，不动 `payBuyers` 与 `payRate`：后两者是交易结果而不是金额，而且
+   * `payRate` 的分母是访客数 —— 一并置空会让非财务角色看到「转化率也没有」，
+   * 可他们本来就能看到访客数。这条边界要写清楚，否则很容易被「顺手补全」成
+   * 三个都 null，界面就从「金额保密」变成「整块数据缺失」。
+   */
   masked: boolean
   /** 迷你柱状用的逐日金额，直接取自逐日表，不插值。 */
   series: readonly OpsDailyPoint[]
@@ -489,7 +496,14 @@ export type OpsShopBindInput = {
   name: string
   platform: OpsPlatform
   sellerNick?: string | null
-  collectPort: number
+  /**
+   * 采集端口。**可以不给**：2026-10-29 起界面不再让人填端口。
+   *
+   * 端口只对旧 CDP 链路（每店一个 Edge 调试端口）有意义，插件链路取数不经过
+   * 它。但采集器的槽位表仍要求参与采集的店有唯一端口（`lib/shops.mjs` 会抛错），
+   * 所以「不给」不等于「可以没有」—— 由 `bindShop` 自动分配一个未占用的。
+   */
+  collectPort?: number
 }
 
 export type OpsShopBindValidated = {
@@ -497,7 +511,8 @@ export type OpsShopBindValidated = {
   name: string
   platform: OpsPlatform
   sellerNick: string | null
-  collectPort: number
+  /** null 表示调用方没有指定，由写库那一层分配。 */
+  collectPort: number | null
 }
 
 export type OpsShopBindValidation =
@@ -546,12 +561,23 @@ export function validateShopBindInput(input: unknown): OpsShopBindValidation {
     return { ok: false, message: '掌柜昵称最长 80 个字符' }
   }
 
-  const port = Number(raw.collectPort)
-  if (!Number.isInteger(port) || port < OPS_COLLECT_PORT_MIN || port > OPS_COLLECT_PORT_MAX) {
-    return {
-      ok: false,
-      message: `采集端口必须是 ${OPS_COLLECT_PORT_MIN} 到 ${OPS_COLLECT_PORT_MAX} 之间的整数`,
+  /*
+   * 端口可选。不传、传 null、传空串都表示「由写库那一层分配」；显式给了就必须
+   * 在采集端口段内。
+   *
+   * 先 Number 再判整数，而不是比 typeof：表单 Input 的原生输出就是字符串
+   * `'9222'`，按类型拒会把唯一正常的一条路径也挡掉。
+   */
+  let collectPort: number | null = null
+  if (raw.collectPort !== undefined && raw.collectPort !== null && raw.collectPort !== '') {
+    const port = Number(raw.collectPort)
+    if (!Number.isInteger(port) || port < OPS_COLLECT_PORT_MIN || port > OPS_COLLECT_PORT_MAX) {
+      return {
+        ok: false,
+        message: `采集端口必须是 ${OPS_COLLECT_PORT_MIN} 到 ${OPS_COLLECT_PORT_MAX} 之间的整数`,
+      }
     }
+    collectPort = port
   }
 
   return {
@@ -561,7 +587,7 @@ export function validateShopBindInput(input: unknown): OpsShopBindValidation {
       name,
       platform,
       sellerNick: sellerNick === '' ? null : sellerNick,
-      collectPort: port,
+      collectPort,
     },
   }
 }

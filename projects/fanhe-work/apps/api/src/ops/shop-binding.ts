@@ -17,7 +17,13 @@
  * 删店等于级联删历史，而历史是唯一能解释「上个月的数字为什么是这样」的东西。
  * 重新绑定同一个 code 时，历史自然接上。
  */
-import { validateShopBindInput, validateShopStateReport, type OpsShopSummary } from '@fanhe/shared'
+import {
+  OPS_COLLECT_PORT_MAX,
+  OPS_COLLECT_PORT_MIN,
+  validateShopBindInput,
+  validateShopStateReport,
+  type OpsShopSummary,
+} from '@fanhe/shared'
 
 import { prisma } from '../db/prisma.js'
 import {
@@ -52,6 +58,33 @@ async function portTaken(port: number, exceptCode: string): Promise<string | nul
 }
 
 /**
+ * 挑一个没被占用的采集端口。
+ *
+ * ## 为什么界面不问端口了还要分配
+ *
+ * 端口是旧 CDP 链路（每店一个 Edge 调试端口）的产物，插件链路取数完全不经过它。
+ * 但采集器的槽位表仍要求参与采集的店有唯一端口 —— `lib/shops.mjs` 遇到
+ * `collect: true` 却没有 port 会直接抛错，**整份配置都加载不起来**，五家店一起停。
+ * 所以「界面不问」必须配一个自动分配，否则绑定出来的店永远进不了槽位表。
+ *
+ * 从 `OPS_COLLECT_PORT_MIN` 起顺排，跳过启用中的店已占用的值。解绑的店不算占用：
+ * 它已经不参与采集，留着端口只会把后来的店往高位推。
+ */
+async function nextFreePort(): Promise<number> {
+  const rows = await prisma.ecomShop.findMany({
+    where: { enabled: true, collectPort: { not: null } },
+    select: { collectPort: true },
+  })
+  const taken = new Set(rows.map((row) => row.collectPort))
+  for (let port = OPS_COLLECT_PORT_MIN; port <= OPS_COLLECT_PORT_MAX; port += 1) {
+    if (!taken.has(port)) return port
+  }
+  /* 端口段用尽是理论上的情况（一万六千多个）。返回起点让下面那条 portTaken
+     查重把它当成冲突报出来，比在这里抛一个没人接的异常干净。 */
+  return OPS_COLLECT_PORT_MIN
+}
+
+/**
  * 绑定一家店。
  *
  * `syncRequestedAt` 在创建时就置为当前时刻，这是「绑定后自动同步」的触发点：
@@ -76,12 +109,16 @@ export async function bindShop(input: unknown, actorUserId: string): Promise<Sho
     }
   }
 
-  const takenBy = await portTaken(value.collectPort, value.code)
+  /* 调用方没给端口就自动分配。这一步不能省：槽位表要求参与采集的店必须有唯一
+     端口，缺了会让采集器整份配置加载失败，五家店一起停。 */
+  const collectPort = value.collectPort ?? (await nextFreePort())
+
+  const takenBy = await portTaken(collectPort, value.code)
   if (takenBy !== null) {
     return {
       ok: false,
       reason: 'port_conflict',
-      message: `端口 ${value.collectPort} 已被店铺 ${takenBy} 使用`,
+      message: `端口 ${collectPort} 已被店铺 ${takenBy} 使用`,
     }
   }
 
@@ -95,7 +132,7 @@ export async function bindShop(input: unknown, actorUserId: string): Promise<Sho
             name: value.name,
             platform: value.platform,
             sellerNick: value.sellerNick,
-            collectPort: value.collectPort,
+            collectPort,
             boundAt: now,
             loginState: 'unknown',
             syncRequestedAt: now,
@@ -110,7 +147,7 @@ export async function bindShop(input: unknown, actorUserId: string): Promise<Sho
             name: value.name,
             platform: value.platform,
             sellerNick: value.sellerNick,
-            collectPort: value.collectPort,
+            collectPort,
             enabled: true,
             boundAt: now,
             loginState: 'unknown',
@@ -122,7 +159,7 @@ export async function bindShop(input: unknown, actorUserId: string): Promise<Sho
         })
 
   /* 槽位写入失败不算绑定失败：库里已经有了，采集器下次读配置仍能按 code 采。 */
-  const slot = upsertSlot({ code: value.code, name: value.name, port: value.collectPort })
+  const slot = upsertSlot({ code: value.code, name: value.name, port: collectPort })
 
   return { ok: true, shop: toOpsShopSummary(row), slot }
 }
@@ -190,12 +227,16 @@ export async function updateShop(
   if (!validated.ok) return { ok: false, reason: 'invalid', message: validated.message }
   const value = validated.value
 
-  const takenBy = await portTaken(value.collectPort, code)
+  /* 早期种子里进来的店没有 collect_port，界面也不再让人补登记。改任何字段时
+     顺带分配一个 —— 否则这家店永远进不了槽位表，也永远采不到。 */
+  const collectPort = value.collectPort ?? (await nextFreePort())
+
+  const takenBy = await portTaken(collectPort, code)
   if (takenBy !== null) {
     return {
       ok: false,
       reason: 'port_conflict',
-      message: `端口 ${value.collectPort} 已被店铺 ${takenBy} 使用`,
+      message: `端口 ${collectPort} 已被店铺 ${takenBy} 使用`,
     }
   }
 
@@ -205,7 +246,7 @@ export async function updateShop(
     data: {
       name: value.name,
       sellerNick: value.sellerNick,
-      collectPort: value.collectPort,
+      collectPort,
       enabled,
       ownerId: nextOwnerId,
     },
@@ -213,7 +254,7 @@ export async function updateShop(
   })
 
   const slot = enabled
-    ? upsertSlot({ code, name: value.name, port: value.collectPort })
+    ? upsertSlot({ code, name: value.name, port: collectPort })
     : disableSlot(code)
 
   return { ok: true, shop: toOpsShopSummary(row), slot }

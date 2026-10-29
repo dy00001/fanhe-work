@@ -16,7 +16,6 @@ import {
   LOGIN_STATE_META,
   collectorView,
   loginDetail,
-  needsPortRegistration,
   shopSlotText,
   shopSyncView,
 } from '../src/lib/ops-display.ts'
@@ -94,9 +93,11 @@ test('登录态第二行显示校验时刻，绿点旁边才有时间参照', ()
   assert.match(detail, /09:30|17:30/, `本地时刻应可读：${detail}`)
 })
 
-test('副标题把代号与端口合成一行；端口缺失时明确说出来', () => {
-  assert.equal(shopSlotText(shop()), 'fanhe-main · 端口 9222')
-  assert.equal(shopSlotText(shop({ collectPort: null })), 'fanhe-main · 端口未登记')
+test('副标题只显示代号，不再带端口', () => {
+  /* 端口是旧 CDP 链路的产物，插件链路取数不经过它。界面上留着「端口 9222」
+     会让人以为那里需要维护，而实际上它已经由服务端自动分配、无人需要看。 */
+  assert.equal(shopSlotText(shop()), 'fanhe-main')
+  assert.equal(shopSlotText(shop({ collectPort: null })), 'fanhe-main', '端口为空也不该露出来')
 })
 
 test('采集器状态：在线、从未启动、离线三态必须分开', () => {
@@ -117,12 +118,4 @@ test('采集器状态：在线、从未启动、离线三态必须分开', () =>
   assert.equal(stale.tone, 'warn')
   assert.match(stale.label, /离线/)
   assert.match(stale.detail, /小时前/)
-})
-
-test('端口未登记要能被识别出来', () => {
-  /* 这条不只是文案问题：补槽位那条链路只处理「库里有端口」的店，
-     端口为空时它连碰都不碰，槽位丢了就补不回来。 */
-  assert.equal(needsPortRegistration({ collectPort: null }), true)
-  assert.equal(needsPortRegistration({}), true, '字段缺失也算没登记')
-  assert.equal(needsPortRegistration({ collectPort: 9222 }), false)
 })

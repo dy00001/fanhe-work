@@ -24,7 +24,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, before, describe, test } from 'node:test'
 
-import { ROLE_CODES, type RoleCode } from '@fanhe/shared'
+import {
+  OPS_COLLECT_PORT_MAX,
+  OPS_COLLECT_PORT_MIN,
+  ROLE_CODES,
+  type RoleCode,
+} from '@fanhe/shared'
 
 import { resolveTestDatabaseUrl, TEST_DATA_PREFIX } from './helpers/db.js'
 
@@ -458,6 +463,42 @@ describe('店铺绑定入口', { skip: reachable ? false : '数据库不可达�
     assert.equal(rebound.statusCode, 201, rebound.body)
     const reboundBody = JSON.parse(rebound.body) as { shop: { id: string } }
     assert.equal(reboundBody.shop.id, before.id, '重新绑定必须接上原来那行，否则历史数据悬空')
+  })
+
+  test('不传端口时自动分配一个未占用的，并写进槽位表', async () => {
+    /* 界面已不再让人填端口（2026-10-29）。但采集器的槽位表要求参与采集的店有
+       唯一端口，缺了会让整份配置加载失败、五家店一起停 —— 所以「不问」必须配
+       「自动分配」，而且分配结果要同时落在库与槽位表里。 */
+    await prisma.ecomShop.deleteMany({ where: { code: OTHER_CODE } })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/ops/shops',
+      headers: auth(adminToken),
+      payload: { code: OTHER_CODE, name: '自动端口', platform: 'taobao' },
+    })
+    assert.equal(response.statusCode, 201, response.body)
+
+    const body = JSON.parse(response.body) as { shop: { collectPort: number | null } }
+    const port = body.shop.collectPort
+    assert.ok(port !== null, '不传端口必须被分配一个，而不是留空')
+    if (port === null) return
+    assert.equal(Number.isInteger(port), true, `端口必须是整数：${String(port)}`)
+    assert.ok(port >= OPS_COLLECT_PORT_MIN && port <= OPS_COLLECT_PORT_MAX, `端口越界：${port}`)
+
+    /* 唯一性：启用中的店不能有两个同端口，否则采到的必然是同一个账号。 */
+    const samePort = await prisma.ecomShop.count({ where: { enabled: true, collectPort: port } })
+    assert.equal(samePort, 1, `端口 ${port} 被重复分配`)
+
+    /* 槽位表要写同一个值，否则采集器按槽位走、界面按库显示，两边对不上。 */
+    const slots = JSON.parse(fs.readFileSync(SLOTS_FILE, 'utf8')) as {
+      shops: Array<{ code: string; port: number }>
+    }
+    const slot = slots.shops.find((item) => item.code === OTHER_CODE)
+    assert.ok(slot !== undefined, '自动分配的端口同样要写进槽位表')
+    assert.equal(slot.port, port)
+
+    await prisma.ecomShop.deleteMany({ where: { code: OTHER_CODE } })
   })
 })
 

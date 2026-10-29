@@ -76,6 +76,25 @@ test('端口必须在采集端口段内，且不接受字符串以外的隐式�
   )
 })
 
+test('端口可以不给：界面不再让人填，由写库那一层分配', () => {
+  /* 端口对插件链路取数没有作用（那是旧 CDP 链路的产物），但采集器的槽位表仍
+     要求参与采集的店有唯一端口。所以「不给」不等于「可以没有」—— 校验层只把
+     null 传下去，分配发生在 `bindShop`。 */
+  const withoutPort = { code: 'fanhe-main', name: '梵禾', platform: 'taobao' }
+
+  const result = validateShopBindInput(withoutPort)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.value.collectPort, null, '没给就是 null，交给写库层分配')
+
+  assert.equal(
+    validateShopBindInput({ ...withoutPort, collectPort: '' }).ok,
+    true,
+    '空串同「没给」',
+  )
+  assert.equal(validateShopBindInput({ ...withoutPort, collectPort: null }).ok, true)
+})
+
 test('平台只接受枚举值', () => {
   assert.equal(validateShopBindInput({ ...valid, platform: 'jd' }).ok, false)
 })

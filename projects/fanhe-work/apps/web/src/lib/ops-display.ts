@@ -472,10 +472,15 @@ export function loginDetail(shop: OpsShopSummary): string {
   return `校验于 ${formatCollectedAt(shop.loginCheckedAt)}`
 }
 
-/** 端口与代号合成一行副标题，表格里省一列。 */
+/**
+ * 店铺副标题：只显示代号。
+ *
+ * 2026-10-29 起不再带端口。端口是旧 CDP 链路（每店一个 Edge 调试端口）的产物，
+ * 插件链路取数完全不经过它，界面上多一行「端口 9222」只会让人以为那里需要维护。
+ * 代号才是真正要核对的值 —— 它同时是采集目录名与 ingest 的 upsert 键。
+ */
 export function shopSlotText(shop: OpsShopSummary): string {
-  const port = shop.collectPort === null ? '端口未登记' : `端口 ${shop.collectPort}`
-  return `${shop.code} · ${port}`
+  return shop.code
 }
 
 /**
@@ -514,15 +519,4 @@ export function collectorView(
       Number.isFinite(hours) && hours >= 1 ? `（${Math.floor(hours)} 小时前）` : ''
     }`,
   }
-}
-
-/**
- * 这家店是否还缺采集端口。
- *
- * 早期种子写进来的店没有 `collect_port`，界面显示「端口未登记」。这不只是难看：
- * 补槽位那条链路只处理「库里有端口」的店，端口为空时它连碰都不碰，槽位丢了就
- * 补不回来。所以界面要能一眼看出哪几家还欠这一步。
- */
-export function needsPortRegistration(shop: OpsShopSummary): boolean {
-  return shop.collectPort === null || shop.collectPort === undefined
 }
