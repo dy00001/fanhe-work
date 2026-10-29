@@ -83,3 +83,15 @@ infra/portable/state/leak-baseline.json
 # Local assistant memory. Managed by the memory system, scoped to this user and
 # session history, therefore kept out of version control.
 .workbuddy-ai/
+
+# 客户别名表与员工通讯录。这两份文件**必然**含客户真实姓名、手机号与住址，
+# 而本仓库远端已于 2026-10-11 由私有转为公开，一旦入库即等于公开发布他人个人信息。
+# 生成方式见 projects/fanhe-work/docs/CUSTOMER-CRM-IDENTITY-RULES-2026-10-29.md，
+# 需要时在本地重跑生成脚本即可，不必也不应从远端取回。
+#
+# 说明：projects/fanhe-work/.gitignore 第 4 行的 data/* 已覆盖此处，本段是第二道保险。
+# 两份都留的理由：那个人 .gitignore 是为「构建产物不入库」写的，日后有人觉得 data/
+# 该入库时很可能整段删掉，届时这里能挡住客户个人信息一并被推上去。
+/projects/fanhe-work/data/customer-aliases.json
+/projects/fanhe-work/data/customer-staff*.json
+/projects/fanhe-work/data/customer-*.local.json

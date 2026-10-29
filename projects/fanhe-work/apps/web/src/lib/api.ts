@@ -41,10 +41,17 @@ import type {
   ReorderLaunchProfilesRequest,
   RoleListResponse,
   RunLaunchProfileResponse,
+  CreateCustomerOrderRequest,
+  CreateCustomerRequest,
+  CustomerDetailResponse,
+  CustomerListResponse,
+  SetCustomerStageRequest,
   SetEventStatusRequest,
   SetNoteArchivedRequest,
   SetNotePinnedRequest,
   SetupStatusResponse,
+  UpdateCustomerRequest,
+  UpdateCustomerStepRequest,
   UpdateEventRequest,
   UpdateLaunchProfileRequest,
   UpdateManagedUserRequest,
@@ -990,6 +997,108 @@ export function moveCaseItemsRequest(
   input: MoveCaseItemsRequest,
 ): Promise<CaseLibraryResponse> {
   return request<CaseLibraryResponse>('/api/cases/placements', {
+    method: 'PUT',
+    body: input,
+    accessToken,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 客户信息平台
+// ---------------------------------------------------------------------------
+// 路由的 `:idx` 是环节序号（1..14），不是数组下标 —— 服务端按 `(orderId, idx)`
+// 唯一定位一行。用序号做路径段的好处是：环节模板增删时，前端书签不会指向
+// 「第 12 个元素」，而是指向「第 12 环」，语义稳定。
+
+/** 客户列表的查询条件。空串一律不发送，与 `notesRequest` 同一条规矩。 */
+export type CustomerListQuery = {
+  region?: string | undefined
+  scope?: string | undefined
+  stage?: string | undefined
+  /** 只看待复核（`reviewStatus = pending`）。 */
+  pendingReview?: boolean | undefined
+  q?: string | undefined
+  limit?: number | undefined
+}
+
+export function customersRequest(
+  accessToken: string,
+  query: CustomerListQuery = {},
+): Promise<CustomerListResponse> {
+  const search = new URLSearchParams()
+  if (query.region !== undefined && query.region !== '') search.set('region', query.region)
+  if (query.scope !== undefined && query.scope !== '') search.set('scope', query.scope)
+  if (query.stage !== undefined && query.stage !== '') search.set('stage', query.stage)
+  if (query.pendingReview === true) search.set('review', 'pending')
+  if (query.q !== undefined && query.q !== '') search.set('q', query.q)
+  if (query.limit !== undefined) search.set('limit', String(query.limit))
+  const queryString = search.toString()
+  const path = queryString === '' ? '/api/customers' : `/api/customers?${queryString}`
+  return request<CustomerListResponse>(path, { method: 'GET', accessToken })
+}
+
+export function customerDetailRequest(
+  accessToken: string,
+  id: string,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function createCustomerRequest(
+  accessToken: string,
+  input: CreateCustomerRequest,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>('/api/customers', {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+export function updateCustomerRequest(
+  accessToken: string,
+  id: string,
+  input: UpdateCustomerRequest,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+export function createCustomerOrderRequest(
+  accessToken: string,
+  id: string,
+  input: CreateCustomerOrderRequest,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}/orders`, {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+export function updateCustomerStepRequest(
+  accessToken: string,
+  id: string,
+  orderId: string,
+  idx: number,
+  input: UpdateCustomerStepRequest,
+): Promise<CustomerDetailResponse> {
+  const path = `/api/customers/${encodeURIComponent(id)}/orders/${encodeURIComponent(orderId)}/steps/${idx}`
+  return request<CustomerDetailResponse>(path, { method: 'PATCH', body: input, accessToken })
+}
+
+export function setCustomerStageRequest(
+  accessToken: string,
+  id: string,
+  input: SetCustomerStageRequest,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}/stage`, {
     method: 'PUT',
     body: input,
     accessToken,

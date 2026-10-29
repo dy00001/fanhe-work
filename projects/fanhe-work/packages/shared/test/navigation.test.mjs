@@ -21,8 +21,10 @@
  * 手写一份「角色应有的权限」等于把被测对象换成了测试自己的假设。
  *
  * UI 二次改造后（与原型对齐）清单为十八项；2026-10-20 运营看板接入后运维分组
- * 由「1 个入口 + 3 个槽位」改为七个具名入口，清单增至二十一项。本文件把它们钉住：
- * 分组头不再可路由、子项路径是两层的、预留槽位是有编号的真项。
+ * 由「1 个入口 + 3 个槽位」改为七个具名入口，清单增至二十一项。2026-10-29 客户
+ * 信息平台落地，客户分组的两个具名子项从「不设门槛的占位」改为绑 `customer` 模块，
+ * 于是有门槛的项从九项增至十一项。本文件把它们钉住：分组头不再可路由、子项路径
+ * 是两层的、预留槽位是有编号的真项。
  */
 
 import assert from 'node:assert/strict'
@@ -113,18 +115,36 @@ const OPS_CODES = [
 ]
 
 /**
- * 不设权限门槛的十二项（`module === null`），对已认证用户一律可见。
+ * 客户信息平台的两个具名入口。都绑 `customer` 模块，对 member / viewer 一律不可见。
  *
- * 带门槛的共九项：首页 `personal`、系统设置 `system`、运营看板七项 `ops`。
+ * 与 `OPS_CODES` 同样用清单：漏掉一项，下面几条断言就会静默放宽，而「成员能看到
+ * 全部客户档案」这种偏差不会报错 —— 它只表现为菜单多了一行，而那行里装的是
+ * 姓名、电话与全年聊天原文。
+ */
+const CUSTOMER_CODES = [NAV_CODES.CUSTOMER_OVERVIEW, NAV_CODES.CUSTOMER_PROGRESS]
+
+/**
+ * 不设权限门槛的十项（`module === null`），对已认证用户一律可见。
+ *
+ * 带门槛的共十一项：首页 `personal`、系统设置 `system`、运营看板七项 `ops`、
+ * 客户平台两项 `customer`。**这个减法要减全**：只减了 ops 而漏掉 customer 时，
+ * `UNGATED_CODES` 会包含两个其实有门槛的项，而下面那条「一律可见」的断言会在
+ * member 身上立刻变红 —— 好在它红在推导这一步，不是红在别处。
  */
 const UNGATED_CODES = ALL_CODES.filter(
   (code) =>
-    code !== NAV_CODES.WORKBENCH && code !== NAV_CODES.SYSTEM_SETTINGS && !OPS_CODES.includes(code),
+    code !== NAV_CODES.WORKBENCH &&
+    code !== NAV_CODES.SYSTEM_SETTINGS &&
+    !OPS_CODES.includes(code) &&
+    !CUSTOMER_CODES.includes(code),
 )
 
-/** 除系统设置与七个运营入口外的十三项。member 与 viewer 的可见范围就是它。 */
-const WITHOUT_SYSTEM_SETTINGS = ALL_CODES.filter(
-  (code) => code !== NAV_CODES.SYSTEM_SETTINGS && !OPS_CODES.includes(code),
+/** 除系统设置、七个运营入口与两个客户入口外的十一项。member 与 viewer 的可见范围就是它。 */
+const WITHOUT_GATED_MODULES = ALL_CODES.filter(
+  (code) =>
+    code !== NAV_CODES.SYSTEM_SETTINGS &&
+    !OPS_CODES.includes(code) &&
+    !CUSTOMER_CODES.includes(code),
 )
 
 test('导航清单为二十一项，编号唯一且顺序稳定', () => {
@@ -137,25 +157,33 @@ test('owner 可见全部二十一项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.owner)), ALL_CODES)
 })
 
-test('admin 可见全部二十一项：有 personal 全权、system.user.read 与 ops 三项', () => {
+test('admin 可见全部二十一项：personal 全权 + system 三项 + ops 四项 + customer 五项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.admin)), ALL_CODES)
 })
 
-test('member 看不到系统设置与七个运营入口，其余十三项可见', () => {
+test('member 看不到系统设置、七个运营入口与两个客户入口，其余十一项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.member))
-  assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
+  assert.deepEqual(visible, WITHOUT_GATED_MODULES)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
   // 运营数据默认对成员不可见：店铺 GMV 与客单价属于经营机密。
   for (const code of OPS_CODES) {
     assert.ok(!visible.includes(code), `member 不应看到 ${code}`)
   }
+  // 客户档案同理，但理由不同：它是客户资产清单，不是「看数」。默认发给 member
+  // 等于每个成员的侧栏里都有一份完整客户名录，而这件事发出去就收不回来。
+  for (const code of CUSTOMER_CODES) {
+    assert.ok(!visible.includes(code), `member 不应看到 ${code}`)
+  }
 })
 
-test('viewer 看不到系统设置与七个运营入口，其余十三项可见', () => {
+test('viewer 看不到系统设置、七个运营入口与两个客户入口，其余十一项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.viewer))
-  assert.deepEqual(visible, WITHOUT_SYSTEM_SETTINGS)
+  assert.deepEqual(visible, WITHOUT_GATED_MODULES)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
   for (const code of OPS_CODES) {
+    assert.ok(!visible.includes(code), `viewer 不应看到 ${code}`)
+  }
+  for (const code of CUSTOMER_CODES) {
     assert.ok(!visible.includes(code), `viewer 不应看到 ${code}`)
   }
 })
@@ -170,6 +198,35 @@ test('单独授予 ops.shop.read 后，七个运营入口一次全开', () => {
   }
 })
 
+test('单独授予 customer.record.read 后，两个客户入口一次全开', () => {
+  // 客户平台的正常用法同样是「不给角色，给账号」：老板在账号上单独授予只读，
+  // 该账号就能进客户平台看档案，但仍然看不到金额 —— 金额由
+  // `customer.finance.read` 在字段级控制，与入口是两件事。
+  const granted = [...ROLE_PERMISSIONS.member, PERMISSIONS.CUSTOMER_RECORD_READ]
+  const visible = codesOf(filterNavigation(granted))
+  for (const code of CUSTOMER_CODES) {
+    assert.ok(visible.includes(code), `持有 customer.record.read 后应看到 ${code}`)
+  }
+})
+
+test('只授予 customer.finance.read 也会打开两个入口 —— 这是当前实现的粗糙处，不是设计意图', () => {
+  // `customer.finance.read` 也以 `customer.` 开头，而入口判准入用的是
+  // `canAccessModule(permissions, 'customer')`（模块前缀），于是「只能看金额」的
+  // 账号也会看到这两个菜单项。点进去之后列表接口按 `customer.record.read` 返回 403，
+  // 因此**不是安全漏洞**，只是菜单多画了两行。
+  //
+  // 这条测试的标题与断言都在描述现状，不是给它背书。真要收紧，做法是给 `NavItem`
+  // 加一个「准入权限点」字段（`module` 只回答「属于哪个模块」），两者分开之后
+  // 这条自然会红 —— 那时改标题、改断言即可。写在这里是为了让这个已知偏差留下痕迹，
+  // 而不是靠某天有人点菜单才发现「我怎么进得去」。
+  const granted = [...ROLE_PERMISSIONS.member, PERMISSIONS.CUSTOMER_FINANCE_READ]
+  const visible = codesOf(filterNavigation(granted))
+  for (const code of CUSTOMER_CODES) {
+    assert.ok(visible.includes(code), `入口按模块判定，因此 ${code} 当前可见`)
+  }
+  // 数据侧仍然是关着的：准入用的权限点不在这一组里。
+  assert.ok(!granted.includes(PERMISSIONS.CUSTOMER_RECORD_READ))
+})
 test('首页对四种角色都可见', () => {
   for (const role of ['owner', 'admin', 'member', 'viewer']) {
     const visible = codesOf(filterNavigation(ROLE_PERMISSIONS[role]))
@@ -180,7 +237,7 @@ test('首页对四种角色都可见', () => {
   }
 })
 
-test('尚无权限点可绑的十二项对已认证用户一律可见', () => {
+test('尚无权限点可绑的十项对已认证用户一律可见', () => {
   for (const role of ['owner', 'admin', 'member', 'viewer']) {
     const visible = codesOf(filterNavigation(ROLE_PERMISSIONS[role]))
     for (const code of UNGATED_CODES) {
@@ -189,7 +246,7 @@ test('尚无权限点可绑的十二项对已认证用户一律可见', () => {
   }
 })
 
-test('没有权限点时只剩不设门槛的十二项', () => {
+test('没有权限点时只剩不设门槛的十项', () => {
   // 当前四个内置角色都持有 personal 段权限，走不到这一支；断言它存在，是为了
   // 钉住「module 为 null 即不设门槛」这条规则本身。
   assert.deepEqual(codesOf(filterNavigation([])), UNGATED_CODES)
@@ -203,16 +260,19 @@ test('模块判定按 `模块.` 前缀匹配，不误伤同前缀的其它模块
 })
 
 test('canSeeNavItem 对不设门槛的项直接返回 true', () => {
-  const overview = NAV_ITEMS.find((item) => item.code === NAV_CODES.CUSTOMER_OVERVIEW)
-  assert.ok(overview)
-  assert.equal(overview.module, null)
-  assert.equal(canSeeNavItem(overview, []), true)
+  // 用「资产」而不是「综合看板」：后者在客户平台落地后已经绑了 `customer` 模块，
+  // 拿它举例会变成在测有门槛的分支。这一条要测的是 `module === null` 那一支，
+  // 因此必须挑一个真的不设门槛的项。
+  const assets = NAV_ITEMS.find((item) => item.code === NAV_CODES.ASSETS)
+  assert.ok(assets)
+  assert.equal(assets.module, null)
+  assert.equal(canSeeNavItem(assets, []), true)
 })
 
 test('激活项解析：请求的是可见项时就用它', () => {
   const visible = filterNavigation(ROLE_PERMISSIONS.member)
-  const active = resolveActiveNav(visible, NAV_CODES.CUSTOMER_OVERVIEW)
-  assert.equal(active?.code, NAV_CODES.CUSTOMER_OVERVIEW)
+  const active = resolveActiveNav(visible, NAV_CODES.ASSETS)
+  assert.equal(active?.code, NAV_CODES.ASSETS)
 })
 
 test('激活项解析：请求的是不可见项时回退到第一项', () => {

@@ -18,7 +18,9 @@
  *   1. 顶层项：首页 / 资产 / 搜索；
  *   2. 四个分组：客户信息平台 / 运维信息平台 / 设计信息平台 / 其他，
  *      每个分组头是**纯折叠开关**（原型里就是 `<button>`，没有 href）；
- *   3. 底部图标行：外观三档 + 系统设置 + 通知（系统设置由 `NAV_FOOTER_CODES` 标出）。
+ *   3. 底部图标行：外观（三档收进一个主按钮的浮层里）+ 系统设置 + 通知
+ *      （系统设置由 `NAV_FOOTER_CODES` 标出）。外观不是导航项，因此这里的清单
+ *      只收系统设置一项。
  *
  * 三处关键约定，改动前请先读这里：
  *
@@ -211,17 +213,16 @@ export const NAV_FOOTER_CODES: readonly NavCode[] = [NAV_CODES.SYSTEM_SETTINGS]
  * 结构分三层：`group` 为 `null` 且不在 `NAV_FOOTER_CODES` 里的项落在主列表顶层；
  * `group` 指向某个分组的项由侧栏渲染到该分组之下；系统设置落在底部图标行。
  *
- * **占位项的 `module` 为什么是 null。** 客户、运维、设计三段权限点目前不存在，
- * 它们的对象清单尚未确定（见 permissions.ts 顶部注释）。若在这里编造一个
- * `customer.read` 之类并不存在的权限点，判定结果对**所有**角色都是不可见，包括
- * owner，那等于把「预留占位」做成了「永远隐藏」，与实施方案「采用置灰加标签的
- * 方式」的意图相反。因此占位项暂时对所有已认证用户可见，等对象清单确定、追加
- * 权限点后，再把这里的 `module` 改成对应取值。
+ * **占位项的 `module` 为什么是 null。** 设计段与「其他」段的权限点目前不存在，
+ * 它们的对象清单尚未确定。若在这里编造一个 `design.read` 之类并不存在的权限点，
+ * 判定结果对**所有**角色都是不可见，包括 owner，那等于把「预留占位」做成了
+ * 「永远隐藏」，与实施方案「采用置灰加标签的方式」的意图相反。因此占位项暂时对
+ * 所有已认证用户可见，等对象清单确定、追加权限点后，再把这里的 `module` 改成对应取值。
  *
- * 这条路径已经走过一次：运维信息平台下的「数据看板」（`dashboard`）在接入千牛
- * 运营数据时补了 `ops` 段的三个权限点，于是 `module` 从 null 改成 `ops`、
- * `planned` 置为 false。后续任一占位项落地照此办理即可，改动只涉及本文件与
- * `permissions.ts` 两处。
+ * 这条路径已经走过两次：运维信息平台的七个入口在接入千牛时补了 `ops` 段权限点；
+ * 客户信息平台的「综合看板」「客户进度」在建客户档案表时补了 `customer` 段五点。
+ * 两处都是把 `module` 从 null 改成模块名、`planned` 置为 false。后续任一占位项
+ * 落地照此办理即可，改动只涉及本文件与 `permissions.ts` 两处。
  */
 export const NAV_ITEMS: readonly NavItem[] = [
   {
@@ -256,25 +257,30 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
 
   // ---- 分组一：客户信息平台。两个具名子项 + 两个预留槽位（原型编号 3）。 ----
+  //
+  // 客户段与运维段同一套做法：两项共用同一个页面组件（`CustomerPage`），由
+  // `item.code` 决定渲染哪一个视图 —— 综合看板是「按客户汇总」，客户进度是
+  // 「按订单环节展开」。权限只绑 `customer` 模块，金额由
+  // `customer.finance.read` 在字段级控制，不按页面拆权限点。
   {
     code: NAV_CODES.CUSTOMER_OVERVIEW,
     label: '综合看板',
     slug: 'overview',
     group: NAV_GROUP_CODES.CUSTOMER,
-    module: null,
-    planned: true,
+    module: 'customer',
+    planned: false,
     slot: false,
-    summary: '客户总量、跟进状态与近期活动的汇总视图。数据来源为下方客户进度记录。',
+    summary: '客户总量、地区分布与阶段分布，可按地区与阶段筛选后进入单个客户。',
   },
   {
     code: NAV_CODES.CUSTOMER_PROGRESS,
     label: '客户进度',
     slug: 'progress',
     group: NAV_GROUP_CODES.CUSTOMER,
-    module: null,
-    planned: true,
+    module: 'customer',
+    planned: false,
     slot: false,
-    summary: '按客户记录方案进度：初测、复尺、出图、报价、确认、下单、安装。',
+    summary: '按订单展开十四环节：初测、复尺、出图、报价、签约、生产、发货、安装、验收。',
   },
   {
     code: NAV_CODES.CUSTOMER_SLOT_1,

@@ -8,16 +8,15 @@
  * 命名固定三段式 模块.对象.操作，与 permissions.code 一一对应。三段之外不再
  * 加层级：权限点清单要能被人在评审时一次读完，更深的命名会迅速失控。
  *
- * 关于客户与运维平台：实施方案里 member 对这两处的权限写的是「按授权」，
- * 而数据模型中没有 user_permissions 表，两者的对象清单也还没定。因此这里
- * 不预先编造权限点，等阶段三这两个模块的对象确定后再追加。追加只需新增常量
- * 与权限行，不动表结构。
+ * 关于客户与运维平台：实施方案里 member 对这两处的权限写的是「按授权」。
+ * 两个模块的对象清单都已确定（运维 4 点、客户 5 点），权限点在此追加；账号级的
+ * 单独授予由 user_permissions 表承担，不必为它再造权限点。
  */
 
 /**
  * 权限点的模块段。与 permissions.module 的取值域一致。
  */
-export const PERMISSION_MODULES = ['system', 'personal', 'ops'] as const
+export const PERMISSION_MODULES = ['system', 'personal', 'ops', 'customer'] as const
 export type PermissionModule = (typeof PERMISSION_MODULES)[number]
 
 /**
@@ -53,6 +52,26 @@ export const PERMISSIONS = {
   // 写是改采集配置。把「能看五家店」等同于「能新增一家店并分配调试端口」，
   // 等于让任何能看报表的人都能改动采集链路。
   OPS_SHOP_BIND: 'ops.shop.bind',
+
+  // ---- 客户信息平台。客户档案、订单、金额、导入复核四件事分开授权。 ----
+  //
+  // 五个点而不是一个，是因为这四件事的敏感度完全不同，且**必须能独立授权**：
+  //
+  //   - `record.read` 开的是客户姓名、电话、微信昵称、门牌地址与全年聊天原文。
+  //     这是公司最核心的资产清单，一个刚入职的设计助理不该在第一天看到全部；
+  //   - `record.write` 改的是档案本身，写坏了不会报错，只会让某天的跟进找不到人；
+  //   - `finance.read` 是合同额与回款。与 ops 的金额点同一个理由：金额是经营机密，
+  //     而「客户叫什么、做到哪一步」是设计岗的日常必需。合成一个点时，结果必然是
+  //     所有人都能看到金额 —— 因为没人愿意为了看客户名字去开一道审批；
+  //   - `order.write` 推进的是十四环节进度。这一项要单独给，是因为它会被**客户看到**
+  //     （进度对外播报），而改档案不会；
+  //   - `import.review` 复核的是从聊天记录里自动抽出来的结果。它一旦放行就把
+  //     几百条机器猜测变成正式档案，比逐条录入危险得多，因此不随 `record.write` 一起给。
+  CUSTOMER_RECORD_READ: 'customer.record.read',
+  CUSTOMER_RECORD_WRITE: 'customer.record.write',
+  CUSTOMER_FINANCE_READ: 'customer.finance.read',
+  CUSTOMER_ORDER_WRITE: 'customer.order.write',
+  CUSTOMER_IMPORT_REVIEW: 'customer.import.review',
 } as const
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -82,6 +101,12 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.OPS_FINANCE_READ]: '查看运营看板中的金额类指标',
   [PERMISSIONS.OPS_COLLECT_READ]: '查看采集批次与数据新鲜度',
   [PERMISSIONS.OPS_SHOP_BIND]: '绑定、修改与解绑店铺，请求立即同步',
+
+  [PERMISSIONS.CUSTOMER_RECORD_READ]: '进入客户平台并查看客户档案、订单与沟通原文',
+  [PERMISSIONS.CUSTOMER_RECORD_WRITE]: '新增、修改客户档案与显示名、地区等身份字段',
+  [PERMISSIONS.CUSTOMER_FINANCE_READ]: '查看合同额、已收款与欠款金额',
+  [PERMISSIONS.CUSTOMER_ORDER_WRITE]: '新建订单并推进十四环节进度与节点日期',
+  [PERMISSIONS.CUSTOMER_IMPORT_REVIEW]: '复核聊天记录自动抽取结果并确认入库',
 }
 
 export type PermissionMeta = {
@@ -168,6 +193,13 @@ export const ROLES: readonly RoleDefinition[] = [
       PERMISSIONS.OPS_FINANCE_READ,
       PERMISSIONS.OPS_COLLECT_READ,
       PERMISSIONS.OPS_SHOP_BIND,
+      // 客户段同样逐条列出，理由与上面 ops 那四点一致：`customer.*` 会把将来新增的
+      // 导出、合并、批量改派一并授予管理员，而这类「顺手多给」在界面上看不出来。
+      PERMISSIONS.CUSTOMER_RECORD_READ,
+      PERMISSIONS.CUSTOMER_RECORD_WRITE,
+      PERMISSIONS.CUSTOMER_FINANCE_READ,
+      PERMISSIONS.CUSTOMER_ORDER_WRITE,
+      PERMISSIONS.CUSTOMER_IMPORT_REVIEW,
     ],
   },
   {
@@ -176,6 +208,12 @@ export const ROLES: readonly RoleDefinition[] = [
     // 刻意不给 ops 任何权限点。店铺 GMV 与客单价属于经营机密，默认放开等于
     // 让每个成员都能看到全店营业额；需要时由 owner 在账号上单独授予
     // `ops.shop.read`（此时能看到商品与流量，看不到金额）。
+    //
+    // 客户段同样默认不给，但理由不同：客户平台不是「看数」，它装的是姓名、电话、
+    // 微信昵称与全年聊天原文。这类数据一旦按角色默认发放，就再也收不回来 ——
+    // 离职的人带走的是一份完整客户清单。因此入口只给 owner 与 admin，其他账号
+    // 按人授予 `customer.record.read`（看不到金额），需要动档案时再单独加
+    // `customer.record.write`。这条路径依赖 user_permissions 表，它已存在。
     description: '个人工作台全权',
     rank: 50,
     isSystem: true,

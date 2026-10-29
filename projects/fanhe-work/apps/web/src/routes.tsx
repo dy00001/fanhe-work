@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
+import { CustomerPage } from './pages/CustomerPage'
 import { NoAccessPage } from './pages/NoAccessPage'
 import { OpsDashboardPage } from './pages/OpsDashboardPage'
 import { isOpsNavCode } from './lib/ops-view'
@@ -135,6 +136,17 @@ export function AppRoutes() {
  * 这一层只承担体验职责。真正的访问控制在服务端的 `requirePermission`，绕过它
  * 只会让请求返回 403，不会拿到数据。
  */
+/**
+ * 客户平台的两个编号。
+ *
+ * 写成函数而不是在 `ModuleRoute` 里串两个 `===`：新增第三个客户入口时只改这一处，
+ * 而漏改的表现是「点进去看到占位页」—— 界面不报错，只是内容不对，与运营看板那边
+ * `isOpsNavCode` 要防的是同一种错。
+ */
+function isCustomerNavCode(code: NavCode): boolean {
+  return code === NAV_CODES.CUSTOMER_OVERVIEW || code === NAV_CODES.CUSTOMER_PROGRESS
+}
+
 function ModuleRoute({ code }: { code: NavCode }) {
   const visibleItems = useVisibleNavItems()
   const { pathname } = useLocation()
@@ -155,6 +167,11 @@ function ModuleRoute({ code }: { code: NavCode }) {
   // 判据用 `isOpsNavCode` 而不是逐个 `===`：七项写成一串 if 之后，新增第八个入口时
   // 很容易漏掉一支，而漏掉的表现是「点进去看到占位页」—— 界面不报错，只是内容不对。
   if (isOpsNavCode(target.code)) return <OpsDashboardPage item={target} />
+
+  // 客户信息平台的两个入口共用同一个页面（`CustomerPage`），由编号决定是「综合看板」
+  // 还是「客户进度」。与上面七个运营入口同一条做法，理由也一样：两块看的是同一份
+  // 数据、同一套筛选，拆成两个组件就等于把筛选条件维护两遍。
+  if (isCustomerNavCode(target.code)) return <CustomerPage item={target} />
 
   // 账号与权限管理（T7-01）。放在 planned 判断之后、分派表末尾的兜底之前 ——
   // 这两处都不能省：planned 拦掉未落地的模块，兜底则接住清单里新增却还没写页面的

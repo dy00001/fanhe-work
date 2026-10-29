@@ -976,8 +976,8 @@ model OpsCollectorHeartbeat {
 }
 
 model EcomCollectRun {
-  id     String   @id @default(uuid(7)) @db.Uuid
-  shopId String   @map("shop_id") @db.Uuid
+  id     String @id @default(uuid(7)) @db.Uuid
+  shopId String @map("shop_id") @db.Uuid
 
   statFrom DateTime @map("stat_from") @db.Date
   statTo   DateTime @map("stat_to") @db.Date
@@ -1003,4 +1003,175 @@ model EcomCollectRun {
   @@index([shopId, startedAt])
   @@index([shopId, statTo])
   @@map("ecom_collect_runs")
+}
+
+// ---------------------------------------------------------------------------
+// 客户信息平台。三张表，金额挂在订单上而不是客户上。
+// ---------------------------------------------------------------------------
+//
+// 为什么金额必须挂订单：`ai_schema` 的合同金额与已收金额都在**客户级**生成，
+// 而 53 个客户里有 10 个复购客户，蔣文增一人三单、糖糖姐一人两单。客户级的
+// 合同记的是某一单、已收记的是全部累计，两者相减必然为负。实测 53 群中
+// 「已收大于合同」的 15 群里有 4 群是复购客户，属于结构性矛盾，不是脏数据。
+// 客户级的 `contractTotalFen` 只是派生汇总，不得回填，也不得作为唯一金额来源。
+
+model Customer {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 微信群 chatroom id。天然唯一，是导入时的业务主键，也是将来接增量更新的依据。
+  chatroom String @unique @db.VarChar(80)
+
+  /// 列表与详情页显示用的全名，形如「青海李婧」「美国糖糖姐」。由
+  /// `customerDisplayName(region, name, project)` 计算，不手工填写。
+  /// 58 个客户里「李姐」有 3 个，去掉地区就无法辨认，所以地区进显示名。
+  displayName String @map("display_name") @db.VarChar(80)
+
+  /// 去掉地区与重复姓后的称呼。与 displayName 的关系见 B7 规则。
+  shortName String @map("short_name") @db.VarChar(60)
+
+  /// 地区，可独立筛选。台湾、香港、澳门一律存「中国台湾」「中国香港」「中国澳门」。
+  region String @db.VarChar(40)
+
+  /// 地区层级，用于列表分组：special-region / overseas / domestic。
+  /// 不存枚举是因为层级划分标准可能变，而 region 本身不能变。
+  regionScope String @map("region_scope") @db.VarChar(20)
+
+  /// 客户真名。来自建群欢迎语或群名，可能与 shortName 相同。
+  /// 与 displayName 分开存：真名是事实，显示名是展示规则，规则改了不该动事实。
+  realName String? @map("real_name") @db.VarChar(60)
+
+  /// 客户本人手机号。海外客户不是 11 位，长度留到 30。
+  /// 内部员工号码绝不写入此列，白名单见 `tools/crm/rules.mjs` 的 STAFF_PHONES。
+  phone String? @db.VarChar(30)
+
+  /// 真名的来源，取值 `welcome:P1` 到 `welcome:P4`、`groupname`。审计用。
+  nameSource String? @map("name_source") @db.VarChar(40)
+
+  /// 判定为主客户的那个微信昵称，与 realName 往往毫无字面关系。
+  primaryNickname String? @map("primary_nickname") @db.VarChar(80)
+
+  /// 主客户判定的置信度：high / medium / low / none。
+  /// low 与 none 必须人工复核后才能当作正式客户使用。
+  confidence String @default("low") @db.VarChar(10)
+
+  /// 人工复核状态：pending / confirmed / rejected。缺省 pending 表示没签过字。
+  reviewStatus String @default("pending") @map("review_status") @db.VarChar(20)
+
+  /// 当前状态。取值集合见 `packages/shared/src/customer.ts` 的 CUSTOMER_STAGES。
+  /// 用 varchar 不用数据库枚举：契约是唯一来源，加档位只改代码不写迁移，
+  /// 避免两侧定义漂移。
+  stage String @default("consulting") @db.VarChar(20)
+
+  /// 状态的判定来源：board（看板环节明细）/ ledger（人工台账纠正）/ ai_stage（模型推断）。
+  /// 必须存下来，否则无法回答「这个客户的状态是谁定的」。
+  stageSource String @default("ai_stage") @map("stage_source") @db.VarChar(20)
+
+  /// 来源群文件基名，不存绝对路径 —— 工作区在移动介质上，盘符会变。
+  groupFile String? @map("group_file") @db.VarChar(200)
+
+  msgRows        Int       @default(0) @map("msg_rows")
+  firstMessageAt DateTime? @map("first_message_at") @db.Timestamptz(3)
+  lastMessageAt  DateTime? @map("last_message_at") @db.Timestamptz(3)
+  /// 被跳过的图片与语音条数。图片是报价单与效果图的主要载体，这个数字决定
+  /// 证据链的完整度，所以留在客户行上而不是只记在导入日志里。
+  skipImg        Int       @default(0) @map("skip_img")
+  skipVoice      Int       @default(0) @map("skip_voice")
+
+  /// 复购关系指向同一客户的首单记录。一群一客户，复购第二单是独立客户行，
+  /// 用这一列串起来。指向自身会导致无限递归展示，写入时必须校验。
+  repeatOfId String?    @map("repeat_of_id") @db.Uuid
+  repeatOf   Customer?  @relation("CustomerRepeat", fields: [repeatOfId], references: [id], onDelete: SetNull)
+  repeats    Customer[] @relation("CustomerRepeat")
+
+  /// 客户级合同额汇总，单位分。派生值，由该客户所有订单的 contractFen 相加，
+  /// 导入时重算，任何地方都不得直接写入。
+  contractTotalFen Int? @map("contract_total_fen")
+
+  /// `ai_schema` 原始块。保留是为了回溯：净化规则改了以后能重新跑，不必重读源文件。
+  legacyBlocks Json? @map("legacy_blocks")
+
+  orders CustomerOrder[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([region])
+  @@index([regionScope])
+  @@index([stage])
+  @@index([reviewStatus])
+  @@index([repeatOfId])
+  @@map("customers")
+}
+
+model CustomerOrder {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 订单编号。有看板明细的用看板编号（BT-01、TW-03），其余按导入顺序生成
+  /// ORD-001 形式。人工录入的新单也走 ORD- 前缀，避免与看板编号冲突。
+  code String @unique @db.VarChar(20)
+
+  customerId String   @map("customer_id") @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  /// 同一客户内的序号，从 1 开始。首单为 1，复购依次递增。
+  seq      Int     @default(1)
+  isRepeat Boolean @default(false) @map("is_repeat")
+
+  stage       String @default("consulting") @db.VarChar(20)
+  stageSource String @default("ai_stage") @map("stage_source") @db.VarChar(20)
+
+  /// 合同额，单位分。唯一可靠来源是看板的合同证据表，那 5 笔是逐单核对过的。
+  /// 其余订单留空，宁缺勿错。
+  contractFen Int? @map("contract_fen")
+  /// 已收金额，单位分。看板未给出，只有 ai_schema 的客户级累计值可参考，
+  /// 而那个值无法确定归属哪一单，故一律留空，等人工录入。
+  receivedFen Int? @map("received_fen")
+  /// 未收金额，单位分。与上同理留空，不按合同减已收自行推算。
+  unpaidFen   Int? @map("unpaid_fen")
+
+  /// 金额来源：board-evidence（高）/ ai_schema-sanitized（低）/ cleared / none。
+  amountSource       String?   @map("amount_source") @db.VarChar(30)
+  amountConfidence   String?   @map("amount_confidence") @db.VarChar(10)
+  /// 合同证据的日期，来自看板「复购判定依据」表。金额没有日期就无法审计。
+  amountEvidenceDate DateTime? @map("amount_evidence_date") @db.Date
+  amountEvidenceNote String?   @map("amount_evidence_note") @db.VarChar(300)
+
+  steps CustomerOrderStep[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([customerId, seq])
+  @@index([stage])
+  @@map("customer_orders")
+}
+
+model CustomerOrderStep {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  orderId String        @map("order_id") @db.Uuid
+  order   CustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// 环节序号 1 到 14，定义见 `packages/shared/src/customer.ts` 的 ORDER_STAGE_DEFS。
+  idx  Int
+  name String @db.VarChar(40)
+
+  /// 是否已到达该环节。有日期或明确状态词即为已到达。
+  reached Boolean @default(false)
+  /// 是否已完成。看板里「预安装沟通，完成日期未提及」「待确认」这类有日期但
+  /// 未完成的情形，`reached` 为 true 而这里为 false，两者不能合并。
+  done    Boolean @default(false)
+
+  startedAt  DateTime? @map("started_at") @db.Date
+  finishedAt DateTime? @map("finished_at") @db.Date
+
+  /// 日期只到月份精度。看板里有「2026-02 起客户自装」这类记录，落成具体日期
+  /// 等于编造，标记出来让界面显示为「2026 年 2 月」。
+  dateImprecise Boolean @default(false) @map("date_imprecise")
+
+  /// 看板原文。像「谈妥，07-24 进场」这种无法用字段表达的信息只能留在原文里。
+  note String? @db.VarChar(300)
+
+  @@unique([orderId, idx])
+  @@map("customer_order_steps")
 }
