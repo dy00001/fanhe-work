@@ -35,6 +35,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 
 /** 配置文件相对工作区根的位置。 */
 const CONFIG_RELATIVE_PATH = join('.config', 'fanhe-work', 'service.json')
@@ -53,8 +54,14 @@ export type ServiceConfig = {
 export type LoadResult = {
   /** 最终生效的配置。 */
   config: ServiceConfig
-  /** 配置是从哪来的，供界面与日志说明「现在为什么连到这个地址」。 */
-  source: 'environment' | 'file' | 'default'
+  /**
+   * 配置是从哪来的，供界面与日志说明「现在为什么连到这个地址」。
+   *
+   * `local-probe` 是安装态专有的来源：没有配置文件，但启动时探测到本机跑着
+   * api，于是改用它并写回文件。加这一项而不是复用 `default`，是因为两者在
+   * 排障时含义完全不同 —— 「用的是内置兜底」和「探测到了本机服务」该被区分开。
+   */
+  source: 'environment' | 'file' | 'default' | 'local-probe'
   /** 文件路径。仅在 `source === 'file'` 或写回时有意义。 */
   path: string
   /**
@@ -257,6 +264,120 @@ export async function saveServiceConfig(
   return next
 }
 
+/**
+ * 探测一个地址上是否跑着 api。
+ *
+ * 判据是「有没有 HTTP 层」，不是「业务是否成功」：未带令牌的 `/api/health`
+ * 可能回 401，那也证明端口上有个服务在听。把 401 当失败会让这个探测在最需要
+ * 它的场合（刚装完、还没登录）判死。
+ *
+ * 用 `node:http` 而不是 `fetch`：主进程里的 fetch 会带上 Electron 的网络栈与
+ * 代理设置，而这里要的是一个纯粹的「本机端口通不通」，不该受代理影响 —— 这台
+ * 机器上代理恰好会把回环请求也劫持掉。
+ *
+ * 超时取 1.2 秒：本机回环端口要么立刻回，要么根本没人听。给长了只是在启动
+ * 路径上白等，而这段代码跑在首屏之前。
+ */
+export function probeServiceHealth(baseUrl: string, timeoutMs = 1200): Promise<boolean> {
+  let url: URL
+  try {
+    url = new URL(`${baseUrl.replace(/\/+$/, '')}/api/health`)
+  } catch {
+    return Promise.resolve(false)
+  }
+  if (url.protocol !== 'http:') return Promise.resolve(false)
+
+  return new Promise((resolveProbe) => {
+    let settled = false
+    const finish = (alive: boolean): void => {
+      if (settled) return
+      settled = true
+      resolveProbe(alive)
+    }
+
+    const req = httpRequest(
+      {
+        host: url.hostname,
+        port: url.port === '' ? 80 : Number(url.port),
+        path: url.pathname,
+        method: 'GET',
+        timeout: timeoutMs,
+      },
+      (res) => {
+        // 响应体不读，但要消费掉，否则连接不会释放。
+        //
+        // 任何状态码都算活着。实测过只认 200 的写法：401 会被判死，而
+        // `test/config.test.mjs` 里「401 也算」那条用例就是为了拦住这种回归。
+        res.resume()
+        finish(true)
+      },
+    )
+    req.on('timeout', () => {
+      req.destroy()
+      finish(false)
+    })
+    req.on('error', () => finish(false))
+    req.end()
+  })
+}
+
+/**
+ * 安装态兜底：没有配置文件时，先看看本机有没有 api，别直接绕公网。
+ *
+ * ## 为什么需要
+ *
+ * `loadServiceConfig` 在配置文件缺失时退回 `defaultUrl`，而安装态那个值是内置
+ * 的公网隧道地址。于是本机明明跑着 api，桌面端却从公网绕一圈回来：隧道一断界面
+ * 全挂，而本地服务其实一切正常。2026-10-28 的登录失败就是这样 —— 数据库里
+ * `failed_login_attempts` 是 0，说明请求根本没到后端。
+ *
+ * ## 什么时候不动手
+ *
+ * 只在 `source === 'default'` 时生效。配置文件存在、或环境变量给了值，都表示
+ * 用户已经表过态，不该被探测结果覆盖。
+ *
+ * ## 为什么写回文件
+ *
+ * 启动路径上不该每次都花一秒去探一个基本不变的事实。写回之后 `service:set`
+ * 那条界面入口读到的也是同一个值，不会出现「界面显示隧道地址、实际连本地」。
+ * 写失败不算错：下次启动重新探测一次就是了。
+ */
+export async function adoptReachableLocalService(
+  current: LoadResult,
+  options: {
+    probeUrl?: string
+    probe?: (url: string) => Promise<boolean>
+    persist?: boolean
+  } = {},
+): Promise<LoadResult> {
+  if (current.source !== 'default') return current
+
+  const target = options.probeUrl ?? DEFAULT_SERVICE_URL
+  // 兜底值本来就是本机地址（开发态就是这种情形），没有可改的东西。
+  if (current.config.serviceUrl === target) return current
+
+  const probe = options.probe ?? probeServiceHealth
+  const alive = await probe(target)
+  if (!alive) {
+    const note = `已探测本机 ${target}，没有响应。`
+    return { ...current, warning: current.warning === null ? note : `${current.warning}${note}` }
+  }
+
+  const persist = options.persist ?? true
+  let warning = `未找到服务地址配置，已探测到本机服务可用（${target}），改用本地直连。`
+  if (persist && isWritablePath(current.path)) {
+    try {
+      await saveServiceConfig(current.path, { serviceUrl: target })
+      warning += `已写入 ${current.path}，下次启动直接读它。`
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      warning += `写入失败（${detail}），下次启动会重新探测。`
+    }
+  }
+
+  return { config: { serviceUrl: target }, source: 'local-probe', path: current.path, warning }
+}
+
 /** 配置里是否应当带一句说明。写文件时带上，好让手工编辑的人知道每个值可选什么。 */
 export function renderConfigFile(config: ServiceConfig): string {
   return `${JSON.stringify(config, null, 2)}\n`
@@ -266,6 +387,7 @@ export function renderConfigFile(config: ServiceConfig): string {
 export function describeSource(source: LoadResult['source']): string {
   if (source === 'environment') return '环境变量覆盖'
   if (source === 'file') return '配置文件'
+  if (source === 'local-probe') return '本机探测'
   return '缺省值'
 }
 

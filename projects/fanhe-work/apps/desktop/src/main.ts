@@ -88,6 +88,7 @@ import {
   type CredentialVault,
 } from './credential-vault.js'
 import {
+  adoptReachableLocalService,
   describeSource,
   findWorkspaceRoot,
   loadServiceConfig,
@@ -1411,6 +1412,15 @@ async function bootstrap(): Promise<void> {
     ? { configDir: app.getPath('userData'), defaultUrl: PACKAGED_SERVICE_URL }
     : {}
   currentService = await loadServiceConfig({ fromDir: __dirname, ...packagedOnly })
+
+  // 安装态没有配置文件时会退回内置的公网地址。如果本机其实跑着 api，那条兜底
+  // 就是让流量绕公网隧道再回来，而隧道一断界面就全挂 —— 2026-10-28 的登录失败
+  // 正是这种情形，后端日志里失败次数是 0，说明请求根本没到。先探一下本机，通了
+  // 就用它并把地址写回配置，下次启动直接读文件。
+  if (app.isPackaged) {
+    currentService = await adoptReachableLocalService(currentService)
+  }
+
   const serviceUrl = currentService.config.serviceUrl
 
   // 这三行是「配置跟着工作空间走」这件事的直接后果：换台电脑时它读的是那边工作区

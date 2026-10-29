@@ -139,15 +139,40 @@ function parseJson(text: string): unknown {
   }
 }
 
-function readErrorPayload(payload: unknown): { code: string; message: string } {
+/**
+ * 没有可读 message 时，按状态码给一句能指明层级的话。
+ *
+ * 为什么需要它
+ * -----------
+ * 后端所有错误都是 `{ error, message }`，正常情况下直接展示 message 就够了。
+ * 但**不是所有错误都来自后端**：桌面壳的反向代理会把上游失败原样透出来，而
+ * Cloudflare 隧道断开时回的是 530 加一张 HTML 错误页，502 也是 HTML。
+ *
+ * 以前这些情况一律落到「请求失败，请稍后重试」，把「隧道断了」「后端没起」
+ * 「鉴权失败」糊成同一句 —— 2026-10-28 就是这样白查了一轮：界面说请求失败，
+ * 数据库里 `failed_login_attempts` 却是 0，说明请求根本没到后端。
+ *
+ * 530 是 Cloudflare 的专用码（源站不可达），不是标准 HTTP 码，所以单独列。
+ */
+function describeHttpFailure(status: number): string {
+  if (status === 530) return '边缘网关未连上（HTTP 530），服务隧道可能已断开'
+  if (status === 502 || status === 503 || status === 504) {
+    return `服务暂时不可用（HTTP ${status}），后端可能未启动`
+  }
+  if (status === 401 || status === 403) return `没有权限（HTTP ${status}），请重新登录`
+  if (status === 404) return '接口不存在（HTTP 404），客户端与服务端版本可能不一致'
+  return `服务返回了无法解析的响应（HTTP ${status}）`
+}
+
+function readErrorPayload(payload: unknown, status: number): { code: string; message: string } {
   if (typeof payload === 'object' && payload !== null) {
     const candidate = payload as Partial<ApiErrorResponse>
     const code = typeof candidate.error === 'string' ? candidate.error : 'unknown_error'
     const message =
-      typeof candidate.message === 'string' ? candidate.message : '请求失败，请稍后重试'
+      typeof candidate.message === 'string' ? candidate.message : describeHttpFailure(status)
     return { code, message }
   }
-  return { code: 'unknown_error', message: '请求失败，请稍后重试' }
+  return { code: 'unknown_error', message: describeHttpFailure(status) }
 }
 
 async function request<T>(path: string, options: RequestOptions): Promise<T> {
@@ -217,7 +242,7 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const payload = parseJson(body)
 
   if (!response.ok) {
-    const { code, message } = readErrorPayload(payload)
+    const { code, message } = readErrorPayload(payload, response.status)
     const retryAfterHeader = response.headers.get('retry-after')
     const retryAfterSeconds =
       retryAfterHeader === null || Number.isNaN(Number(retryAfterHeader))

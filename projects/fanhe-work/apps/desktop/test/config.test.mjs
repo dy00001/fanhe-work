@@ -14,6 +14,7 @@
  * TS 源码），因此不需要先构建。
  */
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -27,12 +28,14 @@ import { test } from 'node:test'
 import { SYSTEM_SCRATCH } from './scratch.mjs'
 
 import {
+  adoptReachableLocalService,
   configPathFor,
   DEFAULT_SERVICE_URL,
   findWorkspaceRoot,
   loadServiceConfig,
   normalizeServiceUrl,
   parseConfig,
+  probeServiceHealth,
   saveServiceConfig,
 } from '../src/config.ts'
 
@@ -345,6 +348,140 @@ test('安装态：configDir 压过工作区根（插着介质也不读那边的�
       'https://from-package.tld',
       '不该读到工作区那份 https://from-workspace.tld',
     )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+// ------------------------------------------------- 安装态的本机探测兜底
+//
+// 2026-10-28 的登录失败：安装态没有 service.json，于是退回内置的公网隧道地址，
+// 而那条隧道当时正好断了。界面显示「请求失败」，后端 `failed_login_attempts`
+// 却是 0 —— 请求根本没到后端，全在隧道层被挡掉。本机 api 一直好好的。
+//
+// 这几条钉住的是「本机有 api 时不要绕公网」这个判定，以及它的两个边界：
+// 探测不到时不能瞎改，用户已经表态时不能覆盖。
+
+test('探测：没人监听的端口判为不可用', async () => {
+  // 高位端口，本机没有东西听它。给 800ms 是留出「连接被拒」这条快路径。
+  assert.equal(await probeServiceHealth('http://127.0.0.1:45999', 800), false)
+})
+
+test('探测：只要回了 HTTP 就算活着，401 也算', async () => {
+  // 判据是「有没有 HTTP 层」而不是「业务成不成功」。未带令牌的 /api/health 回
+  // 401 是正常的，把它当失败会让这个探测在刚装完、还没登录时判死 —— 而那正是
+  // 它唯一被调用的时机。
+  const server = createServer((_req, res) => {
+    res.statusCode = 401
+    res.setHeader('content-type', 'application/json')
+    res.end('{"error":"unauthorized"}')
+  })
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const port = server.address().port
+  try {
+    assert.equal(await probeServiceHealth(`http://127.0.0.1:${port}`, 2000), true)
+  } finally {
+    await new Promise((resolve) => {
+      server.close(resolve)
+    })
+  }
+})
+
+test('安装态兜底：本机有 api 时改走本地，并把地址写回配置', async () => {
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-config-adopt-'))
+  const configDir = join(root, 'userData')
+  try {
+    const loaded = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+    assert.equal(loaded.source, 'default')
+
+    // 注入探测结果，不真起一个 api：这条用例要钉的是「判定之后做了什么」，
+    // 探测本身由上面两条单独负责。
+    const adopted = await adoptReachableLocalService(loaded, { probe: async () => true })
+
+    assert.equal(adopted.source, 'local-probe')
+    assert.equal(adopted.config.serviceUrl, DEFAULT_SERVICE_URL)
+    assert.match(adopted.warning ?? '', /已探测到本机服务可用/)
+
+    // 写回之后，下一次启动读到的是文件而不是兜底 —— 不然每次启动都要白探一秒。
+    // defaultUrl 必须和上面那次给成一样：不给的话兜底本身就是 127.0.0.1，
+    // 「写回了」与「没写回」两种情形读到同一个值，这条断言就废了。
+    const again = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+    assert.equal(again.source, 'file')
+    assert.equal(again.config.serviceUrl, DEFAULT_SERVICE_URL)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('安装态兜底：本机没有 api 时保持内置地址，不落盘', async () => {
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-config-noadopt-'))
+  const configDir = join(root, 'userData')
+  try {
+    const loaded = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+
+    const adopted = await adoptReachableLocalService(loaded, { probe: async () => false })
+
+    assert.equal(adopted.source, 'default')
+    assert.equal(adopted.config.serviceUrl, 'https://work.example.tld')
+    assert.match(adopted.warning ?? '', /没有响应/)
+
+    // 关键：探测失败不能留下一个写着 127.0.0.1 的配置文件，否则下次启动会
+    // 直接读它，连兜底都没了。
+    const again = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+    assert.equal(again.source, 'default')
+    assert.equal(again.config.serviceUrl, 'https://work.example.tld')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('探测不覆盖用户已经表态的配置', async () => {
+  const root = await mkdtemp(join(SYSTEM_SCRATCH, 'fanhe-config-pinned-'))
+  const configDir = join(root, 'userData')
+  try {
+    await saveServiceConfig(join(configDir, 'service.json'), {
+      serviceUrl: 'https://pinned.example.tld',
+    })
+    const loaded = await loadServiceConfig({
+      fromDir: root,
+      configDir,
+      defaultUrl: 'https://work.example.tld',
+      env: {},
+    })
+    assert.equal(loaded.source, 'file')
+
+    let probed = false
+    const adopted = await adoptReachableLocalService(loaded, {
+      probe: async () => {
+        probed = true
+        return true
+      },
+    })
+
+    assert.equal(probed, false, 'source 是 file 时不该去探测')
+    assert.equal(adopted.config.serviceUrl, 'https://pinned.example.tld')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
