@@ -60,6 +60,28 @@ scripts\qianniu.cmd api <mtop.api.name> --v 1.0 --json-body '{"...":"..."}'
 能直接验证。**不要凭名字猜**：MTOP 对不存在的 api 回 `FAIL_SYS_API_NOT_FOUNDED`，对存在但参数错的
 回 `FAIL_SYS_BIZPARAM_MISSED::缺少业务参数xxx` —— 后者明确告诉你缺哪个参数，比在生意参谋里盲猜路径可靠得多。
 
+## 落盘格式（`--raw --out <文件>`）
+
+```json
+{
+  "total": 48,
+  "account": { "nick": "梵禾定制家具:小阳", "uid": "3965512335" },
+  "collectedAt": "2026-10-30T16:00:49",
+  "rows": [ ... ]
+}
+```
+
+`ask-pending` 多一个 `pending` 字段（待答条数），`total` 是问大家总数。
+
+**`account` 不是为了好看，是为了事后能判串店。** 千牛接口只认「浏览器里现在登录的是谁」，
+不认调用方以为是谁；多店采集是一个循环里逐店切账号，切失败时甲店的数会顶着乙店的名字
+入库且不报错。采集侧的 `export-sycm-ingest.mjs` 拿这个 `nick` 与槽位的 `pluginAccount`
+逐字比对，对不上就丢弃。**删掉这个字段等于把串店保护一起删掉。**
+
+`collectedAt` 同理：这两个数是**采集那一刻的快照**，不是「那一天的历史」。导出侧只允许
+「今天 / 昨天」两个窗口（日常那一轮采的是 T-1），回填更早的日期整块跳过，见
+`appendQianniu` 里的注释。
+
 ## 只读护栏
 
 - `write_re` 与插件 `background.js` 里千牛那一项的 `WRITE` **逐字一致**：路径里出现
