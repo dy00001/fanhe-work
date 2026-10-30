@@ -1,10 +1,8 @@
 import {
-  NAV_CODES,
   PERMISSIONS,
   navPath,
   opsRangeDays,
   parseOpsDate,
-  type NavCode,
   type NavItem,
   type OpsDailyPoint,
   type OpsDashboardResponse,
@@ -48,6 +46,7 @@ import {
   freshnessOf,
   shortDate,
 } from '../lib/ops-display'
+import { buildOpsModuleCards } from '../lib/ops-module-cards'
 import {
   OPS_PENDING_ADS,
   OPS_PENDING_CONTENT,
@@ -87,9 +86,6 @@ import { useOpsDashboard, useOpsHealth, useOpsShopBoards } from '../lib/use-ops-
  * 点击侧栏与右侧内容因此天然同步，不需要另存一份选中态。切店与切区间都只改地址栏，
  * 刷新与分享都能复现同一屏。
  */
-
-/** 六张模块入口卡里的数字。缺数据的页显示「待接入」，不编造。 */
-const PENDING = '待接入'
 
 export function OpsDashboardPage({ item }: { item: NavItem }) {
   const [params, setParams] = useSearchParams()
@@ -411,7 +407,7 @@ function ScreenView(props: {
   const visitors = sumFen(props.shops.map((board) => board.visitors))
   const current = props.shops.find((board) => board.shop.code === props.selectedCode) ?? null
 
-  const modules = buildModuleCards(data, props.shops, current)
+  const modules = buildOpsModuleCards(data, props.shops, current)
 
   return (
     <div className="flex flex-col gap-3">
@@ -504,97 +500,6 @@ function ScreenView(props: {
       </div>
     </div>
   )
-}
-
-function buildModuleCards(
-  data: OpsDashboardResponse,
-  shops: readonly OpsShopBoard[],
-  current: OpsShopBoard | null,
-): readonly {
-  code: NavCode
-  label: string
-  desc: string
-  numbers: { label: string; value: string }[]
-}[] {
-  const total = sumFen(shops.map((board) => board.payAmountFen))
-  const sold = data.dimensions.items.rows.filter(
-    (row) => typeof row.metrics.payAmountFen === 'number' && row.metrics.payAmountFen > 0,
-  ).length
-  const summaryValue = (key: string): number | null => {
-    const row = data.dimensions.summary.rows.find((entry) => entry.key === key)
-    const value = row?.metrics.value
-    return typeof value === 'number' ? value : null
-  }
-
-  return [
-    {
-      code: NAV_CODES.OPS_TRADE,
-      label: '交易分析',
-      desc: '区间重算、逐日明细、转化与客单价',
-      numbers: [
-        { label: '当前店铺', value: formatFen(current?.payAmountFen ?? null, { compact: true }) },
-        { label: '五店合计', value: formatFen(total, { compact: true }) },
-      ],
-    },
-    {
-      code: NAV_CODES.OPS_ITEMS,
-      label: '商品分析',
-      desc: '链接表现、零成交诊断、素材与评分健康',
-      numbers: [
-        { label: '有成交链接', value: `${sold} / ${data.dimensions.items.rows.length}` },
-        { label: '商品基础分', value: PENDING },
-      ],
-    },
-    {
-      code: NAV_CODES.OPS_FLOW,
-      label: '流量分析',
-      desc: '渠道结构、推荐与搜索拆分、地域与搜索词',
-      numbers: [
-        { label: '推荐访客', value: formatCount(summaryValue('flowRecommendUv')) },
-        { label: '跳失率', value: formatPercent(summaryValue('bounceRate'), 1) },
-      ],
-    },
-    {
-      code: NAV_CODES.OPS_SERVICE,
-      label: '服务体验',
-      desc: '响应率、响应时长、咨询量、评价与问大家',
-      numbers: [
-        { label: '三分钟响应', value: PENDING },
-        { label: '待回复', value: PENDING },
-      ],
-    },
-    {
-      code: NAV_CODES.OPS_ADS,
-      label: '推广投放',
-      desc: '关键词推广效率、账户余额、活动报名',
-      numbers: [
-        { label: '推广花费', value: PENDING },
-        { label: '点击率', value: PENDING },
-      ],
-    },
-    {
-      code: NAV_CODES.OPS_CONTENT,
-      label: '内容运营',
-      desc: '内容曝光到商品点击的转化链路',
-      numbers: [
-        {
-          label: '内容来源访客',
-          // 没有内容行时给「待接入」而不是 0：reduce 的初值是 0，会把「没采到」
-          // 显示成「访客为零」，而这两件事在经营上的含义完全不同。
-          value:
-            data.dimensions.content.rows.length === 0
-              ? PENDING
-              : formatCount(
-                  data.dimensions.content.rows.reduce((total, row) => {
-                    const value = row.metrics.visitors
-                    return total + (typeof value === 'number' ? value : 0)
-                  }, 0),
-                ),
-        },
-        { label: '内容查看', value: PENDING },
-      ],
-    },
-  ]
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

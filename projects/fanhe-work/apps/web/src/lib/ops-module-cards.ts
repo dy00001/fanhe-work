@@ -1,0 +1,140 @@
+/**
+ * 六张模块入口卡里的数字。
+ *
+ * 抽成纯函数而不是留在页面组件里，是因为这里的对错只有开浏览器才看得出：该显示
+ * 真值的位置显示成「待接入」，界面看起来完全正常，也没有任何断言会失败。
+ *
+ * 取值口径统一为「summary 里有没有这一行」：有就按单位格式化，没有就显示待接入。
+ * **不补 0**，也不把 `null` 格式化成破折号 —— 破折号会被读成「这一项有口径、当前
+ * 为零」，而实际含义是这一项还没接进来。
+ */
+
+import {
+  NAV_CODES,
+  opsSummaryMetric,
+  type NavCode,
+  type OpsDashboardResponse,
+  type OpsShopBoard,
+  type OpsSummaryMetricKey,
+} from '@fanhe/shared'
+
+// 相对导入写全 `.ts`：本模块要能在 Node 的 `--experimental-strip-types` 下被单测
+// 直接加载，而 Node ESM 不会自动补扩展名（既有先例见 `launch-detect.ts`）。
+import { formatCount, formatFen, formatPercent } from './ops-display.ts'
+
+/** 未接入的占位文案。全项目只有这一处定义。 */
+export const OPS_MODULE_PENDING = '待接入'
+
+export type OpsModuleCardNumber = { label: string; value: string }
+
+export type OpsModuleCard = {
+  code: NavCode
+  label: string
+  desc: string
+  numbers: readonly OpsModuleCardNumber[]
+}
+
+export function buildOpsModuleCards(
+  data: OpsDashboardResponse,
+  shops: readonly OpsShopBoard[],
+  current: OpsShopBoard | null,
+): readonly OpsModuleCard[] {
+  const total = sumFen(shops.map((board) => board.payAmountFen))
+  const sold = data.dimensions.items.rows.filter(
+    (row) => typeof row.metrics.payAmountFen === 'number' && row.metrics.payAmountFen > 0,
+  ).length
+
+  const metric = (key: OpsSummaryMetricKey, format: (value: number) => string): string => {
+    const value = opsSummaryMetric(data.dimensions.summary, key)
+    return value === null ? OPS_MODULE_PENDING : format(value)
+  }
+
+  /*
+   * 内容来源访客是唯一按「有没有行」判断的一项：它取自 content 维度，不在 summary
+   * 里。reduce 的初值是 0，所以必须先判空，否则「没采到」会被显示成「访客为零」。
+   */
+  const contentVisitors = (): string => {
+    const rows = data.dimensions.content.rows
+    if (rows.length === 0) return OPS_MODULE_PENDING
+    const sum = rows.reduce((acc, row) => {
+      const value = row.metrics.visitors
+      return acc + (typeof value === 'number' ? value : 0)
+    }, 0)
+    return formatCount(sum)
+  }
+
+  return [
+    {
+      code: NAV_CODES.OPS_TRADE,
+      label: '交易分析',
+      desc: '区间重算、逐日明细、转化与客单价',
+      numbers: [
+        { label: '当前店铺', value: formatFen(current?.payAmountFen ?? null, { compact: true }) },
+        { label: '五店合计', value: formatFen(total, { compact: true }) },
+      ],
+    },
+    {
+      code: NAV_CODES.OPS_ITEMS,
+      label: '商品分析',
+      desc: '链接表现、零成交诊断、素材与评分健康',
+      numbers: [
+        { label: '有成交链接', value: `${sold} / ${data.dimensions.items.rows.length}` },
+        { label: '商品基础分', value: metric('itemBaseScore', formatCount) },
+      ],
+    },
+    {
+      code: NAV_CODES.OPS_FLOW,
+      label: '流量分析',
+      desc: '渠道结构、推荐与搜索拆分、地域与搜索词',
+      numbers: [
+        { label: '推荐访客', value: metric('flowRecommendUv', formatCount) },
+        { label: '跳失率', value: metric('bounceRate', (value) => formatPercent(value, 1)) },
+      ],
+    },
+    {
+      code: NAV_CODES.OPS_SERVICE,
+      label: '服务体验',
+      desc: '响应率、响应时长、咨询量、评价与问大家',
+      numbers: [
+        {
+          label: '三分钟响应',
+          value: metric('csThreeMinRate', (value) => formatPercent(value, 1)),
+        },
+        { label: '待回复', value: metric('rateUnrepliedCnt', formatCount) },
+      ],
+    },
+    {
+      code: NAV_CODES.OPS_ADS,
+      label: '推广投放',
+      desc: '关键词推广效率、账户余额、活动报名',
+      numbers: [
+        {
+          label: '推广花费',
+          value: metric('kwCost', (value) => formatFen(value, { compact: true })),
+        },
+        { label: '点击率', value: metric('kwCtr', (value) => formatPercent(value, 1)) },
+      ],
+    },
+    {
+      code: NAV_CODES.OPS_CONTENT,
+      label: '内容运营',
+      desc: '内容曝光到商品点击的转化链路',
+      numbers: [
+        { label: '内容来源访客', value: contentVisitors() },
+        { label: '内容查看', value: metric('contentViewUv', formatCount) },
+      ],
+    },
+  ]
+}
+
+/** 金额求和：全部为 null（未接入 / 无权限）时返回 null，不返回 0。 */
+function sumFen(values: readonly (number | null)[]): number | null {
+  let total = 0
+  let seen = false
+  for (const value of values) {
+    if (value === null) continue
+    total += value
+    seen = true
+  }
+  return seen ? total : null
+}

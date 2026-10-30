@@ -223,6 +223,125 @@ export type OpsDimensionGroup = {
   rows: readonly OpsDimensionRow[]
 }
 
+/**
+ * 模块入口卡里那几个「补充指标」。
+ *
+ * 共同点是既不逐日、也不属于任何长尾维度，落位统一是 `dimensions.summary` 的一行：
+ * `key` 就是下表键名，值放在 `metrics.value`。走 summary 而非新增维度类型，是为了
+ * 不动 `OPS_DIMENSION_TYPES` 白名单、不动库结构 —— 采集器上报一行 `type: 'summary'`
+ * 就进得来，查询层原样透传。
+ *
+ * 写进契约的理由：卡片此前把这几个位置写死成「待接入」字符串，数据已经入库也不会
+ * 显示，而且没有任何测试会红。键名集中在这里之后，采集映射、接口、界面引用同一个
+ * 常量，拼错会变成编译错误而不是静默的空白。
+ *
+ * `pending` 只描述当前实施状态，**不参与任何运行时判断**。判断一律看 summary 里
+ * 有没有这一行；状态变了要同步改 `apps/web/src/lib/ops-pending.ts` 的清单。
+ */
+export type OpsModuleKey = 'flow' | 'items' | 'service' | 'ads' | 'content'
+
+export type OpsSummaryMetricSpec = {
+  readonly key: string
+  readonly label: string
+  readonly unit: OpsMetricUnit
+  readonly module: OpsModuleKey
+  readonly source: OpsMetricSource
+  /** 当前是否还没接入。仅作说明，运行时以 summary 里有没有这一行为准。 */
+  readonly pending: boolean
+}
+
+export const OPS_SUMMARY_METRICS = [
+  {
+    key: 'flowRecommendUv',
+    label: '推荐访客',
+    unit: 'count',
+    module: 'flow',
+    source: 'period',
+    pending: false,
+  },
+  {
+    key: 'bounceRate',
+    label: '跳失率',
+    unit: 'percent',
+    module: 'flow',
+    source: 'period',
+    pending: false,
+  },
+  {
+    key: 'itemBaseScore',
+    label: '商品基础分',
+    unit: 'count',
+    module: 'items',
+    source: 'period',
+    pending: true,
+  },
+  {
+    key: 'csThreeMinRate',
+    label: '三分钟响应',
+    unit: 'percent',
+    module: 'service',
+    source: 'period',
+    pending: true,
+  },
+  {
+    key: 'rateUnrepliedCnt',
+    label: '待回复',
+    unit: 'count',
+    module: 'service',
+    source: 'period',
+    pending: true,
+  },
+  {
+    key: 'kwCost',
+    label: '推广花费',
+    unit: 'fen',
+    module: 'ads',
+    source: 'period',
+    pending: true,
+  },
+  {
+    key: 'kwCtr',
+    label: '点击率',
+    unit: 'percent',
+    module: 'ads',
+    source: 'period',
+    pending: true,
+  },
+  {
+    key: 'contentViewUv',
+    label: '内容查看',
+    unit: 'count',
+    module: 'content',
+    source: 'period',
+    pending: true,
+  },
+] as const satisfies readonly OpsSummaryMetricSpec[]
+
+export type OpsSummaryMetricKey = (typeof OPS_SUMMARY_METRICS)[number]['key']
+
+/**
+ * 从 summary 组里取一项。
+ *
+ * 找不到行、或行在但 `value` 不是有限数，一律返回 `null`。`null` 的含义是「这一项
+ * 没有数据」，由界面显示「待接入」；返回 0 会把「没采到」说成「为零」，这两件事在
+ * 经营上的含义完全相反。
+ *
+ * 键名用 `OpsSummaryMetricKey` 而不是 `string`：拼错时是编译错误，不会变成一次
+ * 静默的「取不到值」。
+ */
+export function opsSummaryMetric(
+  group: Pick<OpsDimensionGroup, 'rows'> | null | undefined,
+  key: OpsSummaryMetricKey,
+): number | null {
+  if (group === null || group === undefined) return null
+  for (const row of group.rows) {
+    if (row.key !== key) continue
+    const value = row.metrics.value
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+  }
+  return null
+}
+
 export type OpsFlags = {
   lastCollectedAt: string | null
   lastRunStatus: OpsCollectStatus | null
