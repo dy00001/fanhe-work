@@ -164,6 +164,37 @@ export function presetRange(
   return opsRangeDays({ from: start, to: end }) > 0 ? { from: start, to: end } : null
 }
 
+/**
+ * 时间条右侧的说明。**七个入口一视同仁**，没有哪个视图可以不给区间控件。
+ *
+ * 2026-10-30 之前，服务 / 推广 / 内容三栏走的是时间条的 `simple` 模式：只显示一行
+ * 「30 天整段快照」，把六档预设与两个日期框整块藏起来。当时的理由是那三页的数字
+ * 不随区间变，摆一个点了不动的控件像坏了。实际效果相反 —— 同一排按钮在三个入口里
+ * 凭空消失，用户第一反应是「这页没加载完」。
+ *
+ * 现在统一给出控件，用一句话说清「这个区间的数字是怎么来的」：
+ *
+ *   - 客服指标是单日口径（`OPS_DAILY_ONLY_SUMMARY_KEYS`），区间不累加，它决定的是
+ *     「取用哪一天的单日快照」。不点明的话，用户会把 30 天响应率当成加权平均。
+ *   - 推广 / 内容还没有真实数据，切换区间确实不会改变下方内容。与其藏控件，不如
+ *     直说「尚未接入」，让「点了没反应」有一个明确解释。
+ */
+export function opsToolbarNote(view: OpsView, rangeLabel: string): string {
+  switch (view) {
+    case 'service':
+      return `${rangeLabel} · 客服指标为单日口径，区间决定取用哪一天`
+    case 'ads':
+      return `${rangeLabel} · 推广指标尚未接入，切换区间暂不改变下方说明`
+    case 'content':
+      return `${rangeLabel} · 内容指标尚未接入，切换区间暂不改变下方说明`
+    case 'screen':
+    case 'trade':
+    case 'items':
+    case 'flow':
+      return rangeLabel
+  }
+}
+
 /** 区间说明。原型在时间条右侧写「数据范围 …（N 天）」，这里统一成一句。 */
 export function rangeCaption(coverage: OpsDateRange | null, days: number): string {
   if (coverage === null) return `当前区间 ${days} 天`

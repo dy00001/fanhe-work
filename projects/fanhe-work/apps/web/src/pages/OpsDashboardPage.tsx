@@ -55,7 +55,13 @@ import {
   OPS_PENDING_SERVICE,
 } from '../lib/ops-pending'
 import { OPS_SCREEN_SERIES, type OpsScreenSeriesKey } from '../lib/ops-series'
-import { presetQuery, resolvePreset, viewFromNav, type OpsPreset } from '../lib/ops-view'
+import {
+  opsToolbarNote,
+  presetQuery,
+  resolvePreset,
+  viewFromNav,
+  type OpsPreset,
+} from '../lib/ops-view'
 import { useNow } from '../lib/use-now'
 import { useOpsDashboard, useOpsHealth, useOpsShopBoards } from '../lib/use-ops-dashboard'
 
@@ -257,7 +263,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
       {/* ── 店铺绑定与管理。默认收起，且只有持有 `ops.shop.bind` 的账号能看到。 ── */}
       <OpsShopBindingPanel />
 
-      {/* ── 时间条：整段快照页不提供区间控件（原型 snapshotBar） ── */}
+      {/* ── 时间条：七个入口同一套控件，口径差异写在右侧说明里 ── */}
       <OpsToolbar
         preset={preset}
         onPreset={(next) => {
@@ -273,8 +279,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
         }}
         coverageFrom={coverage?.from ?? null}
         coverageTo={coverage?.to ?? null}
-        note={rangeLabel}
-        simple={view === 'service' || view === 'ads' || view === 'content'}
+        note={opsToolbarNote(view, rangeLabel)}
       />
 
       {healthOpen ? (
@@ -373,7 +378,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
           {view === 'ads' ? (
             <OpsPendingPanel
               title="推广投放"
-              intro="万相台无界是独立后台，需要单独登录一次才能复用会话。以下三项尚未接入。"
+              intro="万相台登录态已确认可用，但本店近一周关键词推广没有投放记录（各场景花费均为 0），余额接口也在返回「系统异常」。以下三项仍未入库。"
               items={OPS_PENDING_ADS}
             />
           ) : null}

@@ -63,28 +63,36 @@ export const OPS_PENDING_SERVICE: readonly OpsPendingItem[] = [
   },
 ]
 
-/** 推广投放页。 */
+/**
+ * 推广投放页。
+ *
+ * 2026-10-30 复核：万相台**登录态是通的**（`tb alimama doctor` 拿到 csrfId），
+ * 之前写的「需要独立登录态」不成立。真正的卡点有两个：本店近一周关键词推广没有
+ * 投放记录（`charge-summary` 各场景均为 0.00、`scene-daily` 返回「该区间无投放数据」），
+ * 以及余额接口 `/account/checkRealBalance.json` 稳定返回「系统异常」。所以三项仍空着，
+ * 但阻塞原因要如实写，别再让人以为去扫个码就能出数。
+ */
 export const OPS_PENDING_ADS: readonly OpsPendingItem[] = [
   {
     name: '关键词推广点击率',
     field: 'kwCtr',
     backend: '万相台无界 › 关键词推广 › 报表',
     batch: 'D',
-    blockedBy: '需要万相台独立登录态',
+    blockedBy: '近一周无投放，报表无展现也就没有点击率',
   },
   {
     name: '关键词推广花费',
     field: 'kwCost',
     backend: '万相台无界 › 关键词推广 › 账户',
     batch: 'D',
-    blockedBy: '需要万相台独立登录态',
+    blockedBy: '报表口径可用，但本店近一周各场景花费均为 0，未入库',
   },
   {
     name: '万象台账户余额',
     field: 'wxtBalance',
     backend: '万相台无界 › 账户 › 余额',
     batch: 'D',
-    blockedBy: '需要万相台独立登录态',
+    blockedBy: '余额接口 checkRealBalance 稳定返回「系统异常」',
   },
 ]
 
@@ -95,21 +103,21 @@ export const OPS_PENDING_CONTENT: readonly OpsPendingItem[] = [
     field: 'contentViewUv',
     backend: '光合平台 › 内容中心 › 数据',
     batch: 'D',
-    blockedBy: '需要光合平台独立登录态',
+    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
   },
   {
     name: '内容商品点击人数',
     field: 'contentItemClickUv',
     backend: '光合平台 › 内容中心 › 数据',
     batch: 'D',
-    blockedBy: '需要光合平台独立登录态',
+    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
   },
   {
     name: '内容活动人数',
     field: 'contentActUv',
     backend: '光合平台 › 内容中心 › 活动',
     batch: 'D',
-    blockedBy: '需要光合平台独立登录态',
+    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
   },
 ]
 
@@ -193,7 +201,7 @@ export const OPS_BATCH_TABLE: readonly {
     batch: 'D',
     scope: '万相台三项、光合三项',
     state: 'blocked',
-    note: '需两套独立登录态，要人配合扫码',
+    note: '万相台登录态已通（10-30 复核），但本店近一周无投放、余额接口异常；光合需另开取数链路',
   },
   { batch: 'E', scope: '服务保障状态', state: 'next', note: '单字段，随 B 批一起跑' },
   { batch: 'F', scope: '分店 2 至 5 全量', state: 'blocked', note: '需 4 套店铺授权' },
