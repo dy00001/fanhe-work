@@ -25,7 +25,7 @@ tools/collector/
 │  ├─ check_daily.mjs           日增门禁：按页判 PASS / WARN / FAIL，有空采时退出码 1
 │  ├─ export-daily-ingest.mjs   ★ data/daily/<日期> → 入库契约（窗口 = 那一天）
 │  ├─ export-ingest.mjs         data/csv30 → 入库契约（30 天回填）
-│  ├─ probe-page.mjs            单页探针：页面发了哪些请求、统计时间是什么
+│  ├─ probe-page.mjs            单页探针：连调试端口，抓这个页面实际发出的 XHR/Fetch
 │  ├─ run-daily.ps1             一条命令串起「起 Edge → 采集 → 收尾」
 │  ├─ build_preview_data.mjs    csv30 → 原型页面常量（视觉对照用）
 │  ├─ check_data.mjs            页面常量与 csv30 对账（11 组 + 4 个金额锚点）
@@ -40,6 +40,8 @@ tools/collector/
 ├─ preview/                     原型单文件 HTML，视觉与交互的参照物
 ├─ docs/                        采集口径与页面设计的原始文档，见第六节
 ├─ start-edge-debug.cmd         起一个带 9222 调试端口的 Edge（采集前置）
+├─ start-edge.cmd               按店铺起一个带调试端口的浏览器（一店一 profile 一端口）
+├─ start-plugin-edge.cmd        同上，并打开扩展管理页方便装一次插件（**不要用 --load-extension**，见第五节）
 └─ .gitattributes               全目录按字节原样存储（CSV 带 BOM，行尾不能改写）
 ```
 
@@ -104,6 +106,8 @@ node .\scripts\check_daily.mjs --date 2026-10-19
 | 采集用时很短，文件数是 1、大小 183 字节 | 那个文件是不是 `ipoll/activity/getCurrentTime` | 是则页面根本没发业务请求，等待时间不够（默认 60 秒） |
 | 某页一直空 | `_manifest.json` 里这页的 `bodyHead` | 面包屑停在业务模块说明路由通了，问题在数据没加载；被弹回首页才需要改导航 |
 | 端口起不来 | `netstat -ano | findstr 9222` | 为空说明存根进程占着同一个 user-data-dir，参数被吞了 |
+| 浏览器明明开着，调试端口却连不上 | 启动参数里有没有 `--load-extension` | **有就是它**。实测 Edge 156：带扩展加载时进程活着但端口根本不监听（三组对照见 `start-plugin-edge.cmd` 顶部注释）。插件请装进 profile 手动加载一次，别走命令行 |
+| `probe-page.mjs` 抓到了请求，但没有一条是店铺数据 | 输出里的「落点」 | 落点若变成 `login.htm` / `havanalogin`，说明该 profile 登录态已过期；抓到的是登录页自己的杂项。脚本对此单独返回退出码 4 |
 | 页面数据与后台对不上 | `check_data.mjs` 的四个金额锚点 | 锚点先过，再查采集批次；不要先去改计算公式 |
 
 ## 六、口径文档（改动前必读）
