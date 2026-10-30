@@ -350,7 +350,29 @@ export const OPS_SUMMARY_METRICS = [
     unit: 'count',
     module: 'service',
     source: 'period',
-    pending: true,
+    /*
+     * 千牛 `mtop.rm.sellercenter.list.data.pc`（`pageType=rateWait4PC`）的
+     * `pagination.total`。**采集时刻的快照，不是那一天的历史**：平台没有「10-24 那天
+     * 还欠多少条」这种口径。所以采集器只允许「今天 / 昨天」两个窗口（日常那一轮本来就
+     * 采 T-1），回填更早的日期一律跳过，见 `export-sycm-ingest.mjs` 的 `appendQianniu`。
+     *
+     * 也正因为它是快照，才进 `OPS_DAILY_ONLY_SUMMARY_KEYS`：区间视图里从最近一份
+     * 单日快照补齐，并在数字旁标注数据日期。
+     */
+    pending: false,
+  },
+  {
+    key: 'wendaPendingCnt',
+    label: '问大家待答',
+    unit: 'count',
+    module: 'service',
+    source: 'period',
+    /*
+     * 千牛 `mtop.rm.sellercenter.ask.list` 翻完所有页，按行内 `hasAnswer` 数出来的
+     * 待答条数。平台**没有「只看未答」的筛选项**（传 `hasAnswer=0/1` 回的是同一批，
+     * 无声忽略），所以这一项的采集成本比别的高：104 条要翻六页。
+     */
+    pending: false,
   },
   {
     key: 'kwCost',
@@ -397,6 +419,14 @@ export const OPS_DAILY_ONLY_SUMMARY_KEYS: readonly OpsSummaryMetricKey[] = [
   'csAvgReplySec',
   'csConsultUv',
   'csReplyUv',
+  /*
+   * 下面两项是**待办快照**，不是日累计：平台只回「现在欠多少条」，没有历史口径。
+   * 它们同样属于「平台压根没有区间口径」，所以进这份名单 —— 区间视图从最近一份
+   * 单日快照补齐并标注日期，比让小方格永远空着诚实，也比悄悄按区间求和正确
+   * （待办数跨天相加没有任何含义）。
+   */
+  'rateUnrepliedCnt',
+  'wendaPendingCnt',
 ]
 
 /**

@@ -118,5 +118,42 @@ test('未接入的项仍留在格子里，而不是从版面上消失', () => {
   )
 
   const pending = cells.filter((cell) => cell.value === null).map((cell) => cell.key)
-  assert.deepEqual(pending, ['csAvgReplySec', 'csConsultUv', 'csReplyUv', 'rateUnrepliedCnt'])
+  assert.deepEqual(pending, [
+    'csAvgReplySec',
+    'csConsultUv',
+    'csReplyUv',
+    'rateUnrepliedCnt',
+    'wendaPendingCnt',
+  ])
+})
+
+/*
+ * 待办计数是「采集那一刻欠着多少条」，与响应率那四项同批但不同源：
+ *
+ *   - 它们由自建的千牛模块采，不经过生意参谋的 csp 接口；
+ *   - 为 0 是**真的没有待办**，必须显示 0，不能回落成「待接入」（48 天前那种
+ *     「一条都没欠」和「没采到」在界面上必须能分开）。
+ */
+test('待办计数为 0 显示 0，不当成未接入', () => {
+  const { cells } = buildServiceMetrics(
+    group({
+      window: { from: '2026-10-30', to: '2026-10-30' },
+      rows: [row('rateUnrepliedCnt', 0), row('wendaPendingCnt', 0)],
+    }),
+  )
+
+  assert.equal(valueOf(cells, 'rateUnrepliedCnt'), '0')
+  assert.equal(valueOf(cells, 'wendaPendingCnt'), '0')
+})
+
+test('待办计数按人数格式带千分位，不写成比率或时长', () => {
+  const { cells } = buildServiceMetrics(
+    group({
+      window: { from: '2026-10-30', to: '2026-10-30' },
+      rows: [row('rateUnrepliedCnt', 48), row('wendaPendingCnt', 1234)],
+    }),
+  )
+
+  assert.equal(valueOf(cells, 'rateUnrepliedCnt'), '48')
+  assert.equal(valueOf(cells, 'wendaPendingCnt'), '1,234')
 })

@@ -134,6 +134,19 @@ def _dump(path: str, payload) -> None:
     print(f"已写入 {path}")
 
 
+def _account() -> dict:
+    """当前登录的卖家账号。--raw 落盘时必须带上它。
+
+    为什么：千牛的接口只认「浏览器里现在登录的是谁」，不认调用方以为是谁。多店采集
+    是一个循环里逐店切账号，切失败或卖家中心与生意参谋登录态不同步时，会拿甲店的
+    数是顶着乙店的名字入库，**而且不报错**。落一个 nick/uid 进文件，导出侧才有东西
+    可比对，否则事后无法分辨这份文件是哪家店的。
+    """
+    account = getattr(getattr(client(), "session", None), "account", None) or {}
+    return {"nick": account.get("nick"), "uid": account.get("uid")}
+
+
+
 # ---------- 业务命令 ----------
 
 
@@ -230,7 +243,8 @@ def cmd_review_pending(args) -> None:
     print(f"待商家回复的评价：{total} 条")
     if args.raw:
         _dump(args.out or "qianniu-review-pending.json",
-              {"total": total, "rows": rows})
+              {"total": total, "account": _account(),
+               "collectedAt": datetime.now().isoformat(timespec="seconds"), "rows": rows})
         return
     if not rows:
         print("  没有待回复的评价。")
@@ -253,7 +267,8 @@ def cmd_ask_pending(args) -> None:
     total, pending, rows = ask_pending(args.page_size, args.max_pages)
     if args.raw:
         _dump(args.out or "qianniu-ask-pending.json",
-              {"total": total, "pending": pending, "rows": rows})
+              {"total": total, "pending": pending, "account": _account(),
+               "collectedAt": datetime.now().isoformat(timespec="seconds"), "rows": rows})
         return
     print(f"问大家：共 {total} 条，已答 {total - pending} 条，待回答 {pending} 条")
     if not pending:

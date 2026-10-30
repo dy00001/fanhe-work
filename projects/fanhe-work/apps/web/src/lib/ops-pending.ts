@@ -40,20 +40,16 @@ export const OPS_PENDING_SERVICE: readonly OpsPendingItem[] = [
    * 判断「接入没接入」看 summary 里有没有那一行，不看这里的清单 —— 清单只解释
    * 「为什么还没有」，数据通了就该删掉，否则会出现「数字已经显示、清单还在说没接」。
    */
-  {
-    name: '评价待商家回复',
-    field: 'rateUnrepliedCnt',
-    backend: '卖家中心 › 评价管理 › 待回复',
-    batch: 'B',
-    blockedBy: '需补页面路径与接口录制',
-  },
-  {
-    name: '问大家待回答',
-    field: 'wendaPendingCnt',
-    backend: '千牛 › 问大家 › 待回答',
-    batch: 'B',
-    blockedBy: '接口不稳定，需 DOM 兜底',
-  },
+  /*
+   * 2026-10-30 同日第二批：**评价待商家回复 / 问大家待回答也接进来了**。
+   * 千牛那两条走自建的 `tb qianniu` 模块（`tools/qianniu-module`），全走 MTOP 网关，
+   * 不经过做生意参谋。原先写的两个卡点都不成立：
+   *   「需补页面路径与接口录制」→ 接口是 `mtop.rm.sellercenter.list.data.pc`，
+   *      参数要包进 `jsonBody`，摊平写不报错只回空壳；
+   *   「接口不稳定，需 DOM 兜底」→ 不稳定的是 `hasAnswer` 筛选（被无声忽略），
+   *      翻页数下来是准的，不需要 DOM。
+   * 一并删掉的还有这两项的 `blockedBy` —— 留着会让人以为还卡着。
+   */
   {
     name: '服务保障状态',
     field: 'protectStatus',
@@ -187,9 +183,9 @@ export const OPS_BATCH_TABLE: readonly {
 }[] = [
   {
     batch: 'B',
-    scope: '客服绩效四项（已接入）、评价、问大家',
-    state: 'next',
-    note: '客服响应与接待已入库；剩评价待回复与问大家待回答',
+    scope: '客服绩效四项、评价待回复、问大家待回答（均已接入）',
+    state: 'done',
+    note: '客服四项走 csp 汇总接口，评价与问大家走自建的千牛模块；四项客服指标按日出，两项待办是采集时刻快照',
   },
   {
     batch: 'C',

@@ -184,6 +184,9 @@ const CMD = {
   itemList: 9,
   /* 服务洞察的序号接在四条维度探测（50~53）之后。见 collect-via-plugin.mjs 的 API_CMDS。 */
   serviceLayer: 54,
+  /* 千牛两条接在六条裸探测（50~55）之后，见 collect-via-plugin.mjs 的 QIANNIU_CMDS。 */
+  reviewPending: 56,
+  askPending: 57,
 }
 
 /**
@@ -221,6 +224,78 @@ const SERVICE_LAYER_FIELDS = [
   ['csConsultUv', 'cstUv1d'],
   ['csReplyUv', 'replyUv1d'],
 ]
+
+/* ── 千牛待办计数 ─────────────────────────────────────────────────────── */
+
+/**
+ * 东八区的某一天（0 = 今天，-1 = 昨天）。用 `sv-SE` 而不是自己拼 `getMonth()+1`：
+ * 那个格式恰好是 `YYYY-MM-DD`，且 `timeZone` 走的是 ICU 时区数据库，不受机器本地时区影响。
+ */
+function shanghaiDate(offsetDays = 0) {
+  return new Date(Date.now() + offsetDays * 86_400_000).toLocaleDateString('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+  })
+}
+
+/**
+ * 评价待回复 / 问大家待回答 → summary 两行。
+ *
+ * **两条口径决定，都不能省：**
+ *
+ *   1. **只允许「今天或昨天」这两个窗口，再往前一律跳过。**
+ *      这两个是**采集那一刻的待办快照**，平台没有历史口径（不能问「10-24 那天还欠
+ *      多少条」）。日常这一轮窗口是 T-1（`run-daily.ps1` 默认 `AddDays(-1)`），把快照
+ *      记在 T-1 上可以接受 —— 服务页整页本来就是 T-1 口径，多标一天反而不一致。
+ *      要挡的是**回填**：`--date 2026-10-01` 时照填，会让半个月前的窗口突然冒出
+ *      「今天欠 48 条」，数字看着正常但它是假的，页面上还分不出来。
+ *      偏差最多一天，是有意的取舍，不是没想过。
+ *
+ *   2. **登录账号对不上就不入库。** 千牛接口只认「浏览器里现在登录的是谁」，不认
+ *      调用方以为是谁。多店采集是一个循环里逐店切账号，切失败时甲店的 48 条会顶着
+ *      乙店的名字入库，**全程不报错**。模块的 `--raw` 落盘里带了 `account.nick`，
+ *      这里逐条比对槽位的 `pluginAccount`；对不上就丢弃并写进 notes。
+ */
+function appendQianniu({ dir, slot, notes, dimensions }) {
+  const today = shanghaiDate(0)
+  const yesterday = shanghaiDate(-1)
+  if (DATE !== today && DATE !== yesterday) {
+    notes.push(
+      `千牛待办是采集时刻的快照，只记在今天（${today}）或昨天（${yesterday}）的窗口，` +
+        `回填 ${DATE} 跳过`,
+    )
+    return
+  }
+
+  const expected = String(slot.pluginAccount ?? slot.name ?? '')
+  const wanted = [
+    ['rateUnrepliedCnt', CMD.reviewPending, 'total', '评价待回复'],
+    ['wendaPendingCnt', CMD.askPending, 'pending', '问大家待回答'],
+  ]
+
+  for (const [key, index, field, label] of wanted) {
+    const file = readCommand(dir, index)
+    if (file === null) {
+      notes.push(`缺 ${label}（第 ${index} 号文件），${key} 为空`)
+      continue
+    }
+    const nick = String(file.json?.account?.nick ?? '')
+    if (nick === '') {
+      /* 老版本模块不写 account。不能因此丢数据，但要把「这份数没经过串店校验」
+         说出来 —— 事后对不上数时，这条 note 是唯一的线索。 */
+      notes.push(`${label} 的文件里没有登录账号，无法校验是否串店（运行时可能是旧版模块）`)
+    } else if (expected !== '' && nick !== expected) {
+      notes.push(`${label} 的登录账号是「${nick}」，与槽位「${expected}」不一致，丢弃不入库`)
+      continue
+    }
+
+    const value = Number(file.json?.[field])
+    if (!Number.isFinite(value)) {
+      notes.push(`${label} 的回包里没有可用的 ${field}`)
+      continue
+    }
+    dimensions.push({ type: 'summary', key, label: key, metrics: { value } })
+  }
+}
 
 /* ── 单店转换 ─────────────────────────────────────────────────────────── */
 
@@ -489,6 +564,10 @@ function buildPayload(account) {
     }
   }
 
+  /* 8. 千牛的待办计数。排在最后：它读的是第 56/57 号文件，与上面各段互不影响，
+        失败只留 note，不会让逐日或 17 项核心指标跟着断。 */
+  appendQianniu({ dir, slot, notes, dimensions })
+
   return {
     payload: {
       contractVersion: 1,
@@ -508,7 +587,6 @@ function buildPayload(account) {
     notes,
   }
 }
-
 /* ── 主流程 ───────────────────────────────────────────────────────────── */
 
 if (!fs.existsSync(SOURCE_ROOT)) {

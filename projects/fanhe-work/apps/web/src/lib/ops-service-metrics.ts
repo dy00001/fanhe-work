@@ -51,7 +51,10 @@ export const OPS_SERVICE_HINT: Record<string, string> = {
   csAvgReplySec: '千牛 › 客服绩效 › 平均响应时长，取本店（base_avg）行，单位秒',
   csConsultUv: '千牛 › 客服绩效 › 咨询人数（去重），取本店（base_avg）行',
   csReplyUv: '千牛 › 客服绩效 › 接待人数（去重），取本店（base_avg）行',
-  rateUnrepliedCnt: '卖家中心 › 评价管理 › 待回复，接口尚未录制',
+  /* 这两项是采集那一刻的待办快照，平台没有历史口径。文案里要写清「此刻」，
+     否则区间视图里看到 48 会被当成「那段时间一共欠了 48 条」。 */
+  rateUnrepliedCnt: '卖家中心 › 评价管理 › 待回复，采集时刻的快照，不是当日历史',
+  wendaPendingCnt: '千牛 › 问大家 › 待回答，采集时刻的快照，平台没有「只看未答」筛选',
 }
 
 export type OpsServiceCell = {

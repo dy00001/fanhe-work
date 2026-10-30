@@ -369,7 +369,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
               <OpsServiceMetrics group={data.dimensions.summary} />
               <OpsPendingPanel
                 title="服务体验 · 缺口"
-                intro="响应与接待已经接入（见上方四格）。评价与问大家还缺页面路径与接口录制，服务保障状态随 E 批一起跑。"
+                intro="响应与接待已经接入（见上方六格），评价待回复与问大家待答也已接上。剩下的服务保障状态随 E 批一起跑。"
                 items={OPS_PENDING_SERVICE}
               />
             </div>

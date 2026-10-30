@@ -39,8 +39,10 @@ export function OpsServiceMetrics(props: { group: OpsDimensionGroup }) {
       </dl>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground-weak">
-        四项响应与接待指标取自千牛客服绩效的本店行（base_avg），同行的平均与优秀行不入库 ——
-        取错行不会报错，只会把别人的数字当成自己的。「待回复」仍走评价管理接口， 尚未接入。
+        前四项响应与接待指标取自千牛客服绩效的本店行（base_avg），同行的平均与优秀行不入库 ——
+        取错行不会报错，只会把别人的数字当成自己的。「待回复」与「问大家待答」是采集那一刻
+        的待办快照，平台没有按日的历史口径，所以区间视图里显示的是最近一次采集的值并标注
+        数据日期，不随区间累加。
       </p>
     </OpsSection>
   )

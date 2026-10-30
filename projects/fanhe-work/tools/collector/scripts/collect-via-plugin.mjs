@@ -287,17 +287,42 @@ const API_CMDS = [
   ],
 ]
 
+/*
+ * 千牛（卖家中心）的两条待办计数。走 `tb qianniu`，**不是** `tb sycm`：
+ * 两者是不同的平台描述（不同 host、不同会话钩子），命令不能混发。
+ *
+ * 为什么这两条必须单独取：它们是「此刻还欠着多少事」的快照，生意参谋里没有对应
+ * 口径 —— 评价管理、问大家都不在 sycm 的菜单里（`35-menu.json` 只有「问大家分析」，
+ * 那是同行声量，不是待办数）。
+ *
+ * 序号 56/57，接在六条裸探测（50~55）之后。写死而不自增：加命令时插在中间会让
+ * 适配器按旧序号读错文件，而且**不报错**（读到隔壁那条，字段全空）。
+ *
+ * 耗时：`review-pending` 一次请求；`ask-pending` 要翻页把 104 条数完（六次请求），
+ * 单店约 10 到 15 秒。比 36 条主命令便宜得多，所以不放进 `--minimal` 的开关里。
+ */
+const QIANNIU_CMDS = [
+  ['qianniu-review-pending', ['--limit', '20'], 'raw'],
+  ['qianniu-ask-pending', ['--page-size', '20', '--max-pages', '30', '--limit', '20'], 'raw'],
+]
+/** 千牛两条的起始序号。见上，固定在 55 之后。 */
+const QIANNIU_BASE = SHOP_CMDS.length + ITEM_CMDS.length + API_CMDS.length
+
 /* 命令名到完整清单位置。见上方注释，必须放在清单定义之后。 */
 const SHOP_SEQ = new Map(SHOP_CMDS.map((entry, i) => [entry[0], i + 1]))
 /** 单品级同理，接在店铺级之后，从 37 起。 */
 const ITEM_SEQ = new Map(ITEM_CMDS.map((entry, i) => [entry[0], SHOP_CMDS.length + i + 1]))
 
-/* 日志里的分母。序号本身固定（探测永远是 50 到 55，文件命名要稳定），
-   这里只影响「[3/6]」这类显示。 */
-const TOTAL = ONLY_API
-  ? API_CMDS.length
-  : (MINIMAL ? MINIMAL_KEEP.size : SHOP_CMDS.length + (NO_ITEM ? 0 : ITEM_CMDS.length)) +
-    API_CMDS.length
+/* 日志里的分母。序号本身固定（探测永远是 50 到 55、千牛 56 到 57，文件命名要稳定），
+   这里只影响「[3/6]」这类显示。千牛两条两种模式都跑，所以加在括号外面。 */
+const TOTAL =
+  (ONLY_API
+    ? API_CMDS.length
+    : (MINIMAL ? MINIMAL_KEEP.size : SHOP_CMDS.length + (NO_ITEM ? 0 : ITEM_CMDS.length)) +
+      API_CMDS.length) + QIANNIU_CMDS.length
+/* 日志里的分母要的是「清单总长度」，不是「这一轮要跑几条」。`--only-api` 只跑 8 条
+   但序号从 50 起（文件名必须固定），用 TOTAL 当分母会打成 `[50/8]`，看着像越界。 */
+const SEQ_TOTAL = QIANNIU_BASE + QIANNIU_CMDS.length
 const SWITCH_WAIT_MS = 65_000
 
 /*
@@ -414,6 +439,7 @@ if (DRY) {
       }
     }
     for (const [name] of API_CMDS) console.log(`  · ${name}（裸探测）`)
+    for (const [name] of QIANNIU_CMDS) console.log(`  · ${name}（千牛 ${QIANNIU_BASE + 1} 起）`)
   }
   process.exit(0)
 }
@@ -484,21 +510,28 @@ for (const slot of TARGETS) {
   let consecutiveFail = 0
   let recoveries = 0
 
-  const exec = async (name, args, mode, seq = null) => {
+  const exec = async (name, args, mode, seq = null, platform = 'sycm') => {
     if (aborted !== null) {
       return { result: { code: 'skipped', seconds: 0, stdout: '', stderr: '' }, outFile: null, skipped: true }
     }
     /* 序号可以由调用方指定：单品级命令可能整段跳过，靠自增会让后面三条探测错位。 */
     index = seq === null ? index + 1 : seq
-    const realName = name === 'item-sku-list-live' ? 'item-sku-list' : name
+    /* 千牛的 `qianniu-` 前缀只用于文件与日志 —— `tb qianniu` 的子命令本身不带它
+       （review-pending / ask-pending），带过去会被 argparse 判成非法选择、exit=2。 */
+    const realName =
+      platform === 'qianniu'
+        ? name.replace(/^qianniu-/, '')
+        : name === 'item-sku-list-live'
+          ? 'item-sku-list'
+          : name
     const outFile = path.join(dayDir, `${String(index).padStart(2, '0')}-${name}.json`)
     let cmd
     if (mode === 'api') {
       const [apiPath, pairs] = args
-      cmd = ['sycm', 'api', apiPath]
+      cmd = [platform, 'api', apiPath]
       for (const [key, val] of pairs) cmd.push('--param', `${key}=${val}`)
     } else {
-      cmd = ['sycm', realName, ...args]
+      cmd = [platform, realName, ...args]
       if (mode === 'raw') cmd.push('--raw', '--out', outFile)
       else if (mode === 'out') cmd.push('--out', outFile)
       else if (mode === 'stdout' && realName === 'list') cmd.push('--raw')
@@ -511,10 +544,10 @@ for (const slot of TARGETS) {
     const size = fs.existsSync(outFile) ? fs.statSync(outFile).size : 0
     const tag = result.code === 0 ? '' : ` ← ${lastLine(result.stderr)}`
     console.log(
-      `  [${String(index).padStart(2, '0')}/${TOTAL}] ${name.padEnd(22)} exit=${result.code} ${String(result.seconds).padStart(5)}s ${String(size).padStart(7)}B${tag}`,
+      `  [${String(index).padStart(2, '0')}/${SEQ_TOTAL}] ${name.padEnd(22)} exit=${result.code} ${String(result.seconds).padStart(5)}s ${String(size).padStart(7)}B${tag}`,
     )
     results.push({
-      shop: slot.code, account, index, name, exit: result.code,
+      shop: slot.code, account, index, name, platform, exit: result.code,
       seconds: result.seconds, bytes: size, error: result.code === 0 ? '' : lastLine(result.stderr),
     })
 
@@ -523,6 +556,9 @@ for (const slot of TARGETS) {
       consecutiveFail = 0
       return { result, outFile }
     }
+    /* 千牛不参与断连自愈：它排在最后，恢复成功也没有下一条要跑；而且它失败最常见
+       的原因是卖家中心没登录，重连一百次也一样。让它只记一笔失败就够。 */
+    if (platform === 'qianniu') return { result, outFile }
     const failureText = `${lastLine(result.stderr)} ${lastLine(result.stdout)}`
     if (!RECOVERABLE.test(failureText)) return { result, outFile }
 
@@ -539,12 +575,23 @@ for (const slot of TARGETS) {
     recoveries += 1
     consecutiveFail = 0
     console.log(`  连续失败，第 ${recoveries}/${MAX_RECOVERIES} 次尝试恢复连接…`)
-    const doctor = await runTb(['sycm', 'doctor'], 150_000)
-    if (doctor.code === 0) {
+    /* doctor 本身也要重试一次。2026-10-30 撞上过：桥其实活着（三十秒后手跑 doctor
+       就全绿），但 doctor 那一次读回包时抛了 UnicodeDecodeError，一次偶发就把整店
+       判死 —— 后面 13 条单品级 + 6 条探测 + 2 条千牛全部跳过，比插件的故障本身贵
+       得多。偶发解码错误与「真断线」在 doctor 的退出码上分不出来，所以一律给两次。 */
+    let doctor = null
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      doctor = await runTb(['sycm', 'doctor'], 150_000)
+      if (doctor.code === 0) break
+      const why = lastLine(doctor.stderr) || lastLine(doctor.stdout)
+      console.error(`  doctor 第 ${attempt} 次失败：${why}`)
+      if (attempt === 1) await sleep(5_000)
+    }
+    if (doctor?.code === 0) {
       console.log('  连接已恢复，继续')
       return { result, outFile }
     }
-    aborted = `恢复失败：${lastLine(doctor.stderr) || lastLine(doctor.stdout)}`
+    aborted = `恢复失败：${lastLine(doctor?.stderr) || lastLine(doctor?.stdout) || 'doctor 无输出'}`
     console.error(`  ✗ ${aborted}`)
     console.error('    处理：打开浏览器，点一下取数桥图标唤醒插件，再重跑本店')
     return { result, outFile }
@@ -577,7 +624,12 @@ for (const slot of TARGETS) {
     console.log('  只补维度探测，跳过店铺级与单品级命令')
   } else if (NO_ITEM) {
     console.log('  跳过单品级下钻（--no-item），只取店铺级与维度')
-  } else if (itemId === '') {
+  } else if (!itemId) {
+    /* 判空用 `!itemId` 而不是 `=== ''`：`item-list` 空榜时（当天数据还没结算就是这种，
+       回 `data.data: []`、recordCount 0）上面的解析走不到赋值，itemId 仍是初始的
+       `null`，与 `''` 不相等 —— 于是 13 条单品级命令会带着 `--item-id null` 白跑一遍，
+       每条都在服务端报错，最后整轮以 exit=2 收场。2026-10-30 实际撞上：那天 09:26 采
+       当天，商品榜 0 行，白跑 13 条。 */
     console.log('  没有 itemId，跳过单品级命令')
   } else {
     for (const [name, args, mode] of ITEM_CMDS) {
@@ -589,6 +641,13 @@ for (const slot of TARGETS) {
   const apiBase = SHOP_CMDS.length + ITEM_CMDS.length
   for (const [offset, [name, apiPath, pairs]] of API_CMDS.entries()) {
     await exec(name, [apiPath, pairs], 'api', apiBase + offset + 1)
+  }
+
+  /* 千牛两条待办计数。**失败不中断本店**：它们只喂服务板块两格，缺了照旧上报，
+     不该因为卖家中心没登录就把 36 条主命令已经采到的数一起作废（落盘的文件仍在，
+     但整店会被记成中断，看板上会显示成采集失败）。 */
+  for (const [offset, [name, args, mode]] of QIANNIU_CMDS.entries()) {
+    await exec(name, args, mode, QIANNIU_BASE + offset + 1, 'qianniu')
   }
 
   if (aborted !== null) {
@@ -612,8 +671,18 @@ fs.writeFileSync(
   'utf8',
 )
 
+/*
+ * 千牛两条单独统计，**不计入退出码**。
+ *
+ * 理由：它们依赖的是「这个浏览器登录了卖家中心」，与生意参谋的登录态是两回事。
+ * 二三店的卖家中心还没登过，如果混进 bad，每天都会以 exit=2 收场，而实际上
+ * 36 条主命令全都采到了 —— 结果是「天天红，红到没人看」。所以：记录进
+ * `_runs-<date>.json`、在终端单独打一行，但不改退出码。
+ */
 const ok = results.filter((row) => row.exit === 0).length
-const bad = results.length - ok
+const qianniuRows = results.filter((row) => row.platform === 'qianniu')
+const bad = results.filter((row) => row.platform !== 'qianniu' && row.exit !== 0).length
+const badQianniu = qianniuRows.filter((row) => row.exit !== 0).length
 console.log('\n' + '='.repeat(56))
 console.log(`完成：成功 ${ok} / 失败 ${bad} / 共 ${results.length}`)
 for (const slot of TARGETS) {
@@ -621,9 +690,18 @@ for (const slot of TARGETS) {
   const good = rows.filter((row) => row.exit === 0).length
   console.log(`  ${slot.name}(${slot.code}): ${good}/${rows.length}`)
 }
+if (qianniuRows.length > 0) {
+  console.log(
+    `千牛待办（评价待回复 / 问大家待回答）：成功 ${qianniuRows.length - badQianniu} / 失败 ${badQianniu}`,
+  )
+  for (const row of qianniuRows.filter((entry) => entry.exit !== 0)) {
+    console.log(`  ${row.shop} ${row.name} ${row.error.slice(0, 100)}`)
+    console.log('    处理：在采集浏览器里登录一次卖家中心（myseller.taobao.com）再重跑')
+  }
+}
 if (bad > 0) {
   console.log('\n失败明细：')
-  for (const row of results.filter((entry) => entry.exit !== 0)) {
+  for (const row of results.filter((entry) => entry.platform !== 'qianniu' && entry.exit !== 0)) {
     console.log(`  ${row.shop} ${String(row.index).padStart(2, '0')} ${row.name.padEnd(22)} ${row.error.slice(0, 100)}`)
   }
 }
