@@ -238,13 +238,12 @@ export function CaseLibraryDialog({
    * 落点：正在看某个文件夹就进那个文件夹，否则进未归档。这与「移动」不同 —— 上传时
    * 没有「原来在哪」，放进用户此刻正在看的那个组里，是他按下按钮时的预期。
    */
-  async function addFiles(files: FileList | readonly File[]): Promise<void> {
+  async function addFiles(files: readonly File[]): Promise<void> {
     if (uploadProgress !== null) return
-    const all = Array.from(files)
-    if (all.length === 0) return
+    if (files.length === 0) return
 
-    const batch = all.slice(0, CASE_LIBRARY_LIMITS.UPLOAD_BATCH_MAX)
-    const skipped = all.length - batch.length
+    const batch = files.slice(0, CASE_LIBRARY_LIMITS.UPLOAD_BATCH_MAX)
+    const skipped = files.length - batch.length
     const folderId = filter.kind === 'folder' ? filter.folderId : null
 
     const failures: string[] = []
@@ -345,7 +344,10 @@ export function CaseLibraryDialog({
           event.preventDefault()
           dragDepth.current = 0
           setDragging(false)
-          if (event.dataTransfer.files.length > 0) void addFiles(event.dataTransfer.files)
+          // 同样先拷成数组：`dataTransfer.files` 在 drop 处理函数返回后可能失效，
+          // 而上传是异步的，不该让后续逻辑依赖一个已经过期的对象。
+          const files = Array.from(event.dataTransfer.files)
+          if (files.length > 0) void addFiles(files)
         }}
       >
         {/* 投放提示。`pointer-events-none` 是必须的：它盖在网格上，若接管了鼠标事件，
@@ -414,10 +416,15 @@ export function CaseLibraryDialog({
               multiple
               className="hidden"
               onChange={(event) => {
-                const files = event.target.files
-                // 先清空 value：不清的话「再选同一张」不会触发 change，用户会以为点击没反应。
+                // **必须先拷成数组，再清 value。** `input.files` 返回的 FileList 不是快照，
+                // 它与 input 的选中项绑在一起：把 value 置空会连带清空选中项。反过来写的话，
+                // 拿到手里的那个 FileList 会在下一行变成空的，`addFiles` 第一句就 return ——
+                // 用户看到的是「选了图，什么都没发生」，而且没有任何报错。
+                const files = Array.from(event.target.files ?? [])
+                // 清空 value 是为了「再选同一张」也能触发 change：不清的话浏览器认为选中项
+                // 没变，change 不触发，用户会以为按钮坏了。
                 event.target.value = ''
-                if (files !== null && files.length > 0) void addFiles(files)
+                if (files.length > 0) void addFiles(files)
               }}
             />
             <button
