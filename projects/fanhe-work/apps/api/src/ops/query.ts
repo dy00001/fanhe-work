@@ -1,4 +1,5 @@
 import {
+  OPS_DAILY_ONLY_SUMMARY_KEYS,
   OPS_LIMITS,
   addOpsDays,
   hasPermission,
@@ -281,7 +282,76 @@ async function loadDimensionGroup(
     }))
 
   const visibleRows = allowFinance ? rows : maskDimensionRows(rows, masked)
-  return { type, window, rows: sortDimensionRows(type, visibleRows) }
+  const sorted = sortDimensionRows(type, visibleRows)
+
+  /*
+   * summary 的单日补齐。
+   *
+   * 有些指标平台只按日出（名单见 `OPS_DAILY_ONLY_SUMMARY_KEYS`）。查「近 30 天」
+   * 时选中的那份快照里没有它们，不补就永远只有单日视图能看到，等于没接入。
+   *
+   * 三条边界：
+   *   1. 已经是单日窗口不补 —— 本来同源，补了是自找麻烦；
+   *   2. 只补名单里的键 —— 「缺什么补什么」会把「昨天下线」伪装成「显示上周的数」，
+   *      采集故障反而看不见了；
+   *   3. 补进来的行必须留下来源窗口（`supplementedFrom`），界面据此标注日期。
+   *      不标的话，用户会把「某一天的值」当成「这段区间的值」。
+   */
+  if (type !== 'summary' || window === null || window.from === window.to) {
+    return { type, window, rows: sorted }
+  }
+
+  const have = new Set(sorted.map((row) => row.key))
+  const missing = new Set<string>(OPS_DAILY_ONLY_SUMMARY_KEYS.filter((key) => !have.has(key)))
+  if (missing.size === 0) return { type, window, rows: sorted }
+
+  const dailyRows = await prisma.ecomDimensionSnapshot.findMany({
+    where: {
+      shopId,
+      dimType: type,
+      ...(toDate === null ? {} : { statTo: { lte: toDate } }),
+    },
+    orderBy: [{ statTo: 'desc' }, { dimKey: 'asc' }],
+    select: { statFrom: true, statTo: true, dimKey: true, dimLabel: true, metrics: true },
+  })
+
+  /*
+   * 从最近的一份单日快照往前找，取第一个真正含目标键的。
+   *
+   * 不取「最近一份单日快照」就完了：某天客服接口失败时那份快照里没有这个键，
+   * 直接用它会让指标一直空着，而往前一天的值本来就在库里。
+   */
+  const dailyWindows = new Map<string, typeof dailyRows>()
+  for (const row of dailyRows) {
+    if (row.statFrom.getTime() !== row.statTo.getTime()) continue
+    const key = String(row.statTo.getTime())
+    const bucket = dailyWindows.get(key)
+    if (bucket === undefined) dailyWindows.set(key, [row])
+    else bucket.push(row)
+  }
+
+  for (const bucket of dailyWindows.values()) {
+    const fill = bucket.filter((row) => missing.has(row.dimKey))
+    if (fill.length === 0) continue
+    const filled: OpsDimensionRow[] = fill.map((row) => ({
+      key: row.dimKey,
+      label: row.dimLabel,
+      metrics: (row.metrics ?? {}) as Record<string, number | string | null>,
+    }))
+    const kept = allowFinance ? filled : maskDimensionRows(filled, masked)
+    return {
+      type,
+      window,
+      rows: sortDimensionRows(type, [...sorted, ...kept]),
+      supplementedFrom: {
+        from: fromDbDate(bucket[0]!.statFrom) ?? '',
+        to: fromDbDate(bucket[0]!.statTo) ?? '',
+      },
+      supplementedKeys: filled.map((row) => row.key),
+    }
+  }
+
+  return { type, window, rows: sorted }
 }
 
 function toRunSummary(

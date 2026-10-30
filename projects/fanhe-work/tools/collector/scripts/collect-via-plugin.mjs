@@ -52,6 +52,11 @@ if (DATE === null || !/^\d{4}-\d{2}-\d{2}$/.test(DATE)) {
   console.error('必须给 --date YYYY-MM-DD')
   process.exit(1)
 }
+/*
+ * 服务洞察（csp）接口用的紧凑日期，如 `20261029`。与生意参谋的 `2026-10-29`
+ * 不能混用：混用不报错，服务端当成非法区间返回空数组。
+ */
+const DATE_COMPACT = DATE.replaceAll('-', '')
 const ONLY = option('account')
 const DRY = flag('dry-run')
 /* 只补三条维度探测。用于「主数据已在、只缺渠道/地域/搜索词」的补采，
@@ -230,6 +235,56 @@ const API_CMDS = [
       ['indexCode', 'uv,itmUv,payByrCnt,payAmt'],
     ],
   ],
+  /*
+   * 服务洞察（客服绩效）的两条汇总接口。
+   *
+   * `overview/layer` 才是数值来源。它按 `groupType` 返回三行，含义已用交叉验证
+   * 确定，不是推断：
+   *
+   *   base_avg  本店当日实际值   ← 只取这一行
+   *   avg       同行同层平均
+   *   exc       同行同层优秀
+   *
+   * 判据（2026-10-29）：base_avg 的 cstUv1d=1、replyUv1d=1，与同一天
+   * `reception-list` 只返回 1 条接待明细一致；`overview/list` 默认返回的那一层
+   * value 也等于 base_avg 的 1，且它给的环比 mmValue=-50% 与「本期 1、上期 2」
+   * 吻合。若误取 avg 行，得到的是同行平均（那天 20 人咨询、响应率 0.9903），
+   * 数字像真的、但根本不是本店的。
+   *
+   * `overview/list` 是同一批指标的「定义 + 本店值」清单（key / name / value），
+   * 只用于核对键名与本店值，不进 summary。
+   *
+   * 参数照抄 `data/csv30/INDEX.csv` 里的请求原文：`dateType=1d` + 紧凑日期。
+   * 传 `dateType=day&dateRange=1d` 也返回 200，但 data 是空数组 —— 空数组不报错，
+   * 很容易被当成「这天没有咨询」。
+   *
+   * 踩过的坑：在 Git Bash 里手工探测时，`/csp/api/...` 这种以斜杠开头的参数会被
+   * MSYS 当成 Windows 路径改写（实际发出去的是
+   * `/csp/api/D:/WorkBuddy/.../csp/api/core/monitor/overview/layer.json`），
+   * 服务端 302，看起来像「接口整族下线」。Node 里没有这层转换，本脚本不受影响；
+   * 手工复现时要加 `MSYS_NO_PATHCONV=1`。
+   */
+  [
+    'service-layer',
+    '/csp/api/core/monitor/overview/layer.json',
+    [
+      ['dateType', '1d'],
+      ['startDate', DATE_COMPACT],
+      ['endDate', DATE_COMPACT],
+      ['excludeDates', ''],
+    ],
+  ],
+  [
+    'service-list',
+    '/csp/api/core/monitor/overview/list',
+    [
+      ['dateType', 'day'],
+      ['dateRange', '1d'],
+      ['startDate', DATE_COMPACT],
+      ['endDate', DATE_COMPACT],
+      ['excludeDates', ''],
+    ],
+  ],
 ]
 
 /* 命令名到完整清单位置。见上方注释，必须放在清单定义之后。 */
@@ -237,7 +292,7 @@ const SHOP_SEQ = new Map(SHOP_CMDS.map((entry, i) => [entry[0], i + 1]))
 /** 单品级同理，接在店铺级之后，从 37 起。 */
 const ITEM_SEQ = new Map(ITEM_CMDS.map((entry, i) => [entry[0], SHOP_CMDS.length + i + 1]))
 
-/* 日志里的分母。序号本身固定（探测永远是 50 到 53，文件命名要稳定），
+/* 日志里的分母。序号本身固定（探测永远是 50 到 55，文件命名要稳定），
    这里只影响「[3/6]」这类显示。 */
 const TOTAL = ONLY_API
   ? API_CMDS.length
@@ -350,7 +405,7 @@ if (DRY) {
   for (const slot of TARGETS) {
     console.log(`${slot.name}(${slot.code})`)
     if (ONLY_API) {
-      console.log('  （只跑四条维度探测）')
+      console.log('  （只跑维度与汇总探测）')
     } else {
       const shopCmds = MINIMAL ? SHOP_CMDS.filter((entry) => MINIMAL_KEEP.has(entry[0])) : SHOP_CMDS
       for (const [name] of shopCmds) console.log(`  · ${name}`)

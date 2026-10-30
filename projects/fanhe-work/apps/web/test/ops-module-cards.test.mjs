@@ -205,3 +205,41 @@ test('五店金额全为 null 时合计是破折号，不是 ¥0', () => {
 
   assert.equal(valueOf(cards, NAV_CODES.OPS_TRADE, '五店合计'), '—')
 })
+
+/*
+ * 只有单日口径的指标会从另一份快照补进来，接口在 `supplementedFrom` 里说明来源。
+ * 页头写着「近 30 天」而卡片显示某一天的值、却不注明日期，等于把两个口径混成一句
+ * 话 —— 这种错不会让任何数字变成 NaN，只会让读数的人判断错。
+ */
+test('指标来自单日快照时，数值后面标出那一天', () => {
+  const data = makeData({
+    summary: [summaryRow('csThreeMinRate', 0.9941), summaryRow('visitors', 336)],
+  })
+  data.dimensions.summary = {
+    type: 'summary',
+    window: { from: '2026-09-19', to: '2026-10-18' },
+    rows: [summaryRow('csThreeMinRate', 0.9941), summaryRow('visitors', 336)],
+    supplementedFrom: { from: '2026-10-29', to: '2026-10-29' },
+    supplementedKeys: ['csThreeMinRate'],
+  }
+
+  const cards = buildOpsModuleCards(data, [], null)
+
+  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '三分钟响应'), '99.4% · 10-29')
+})
+
+test('同组里未标注的行不带日期，避免整组看起来都只有一天', () => {
+  const data = makeData()
+  data.dimensions.summary = {
+    type: 'summary',
+    window: { from: '2026-09-19', to: '2026-10-18' },
+    rows: [summaryRow('csThreeMinRate', 1), summaryRow('kwCtr', 0.05)],
+    supplementedFrom: { from: '2026-10-29', to: '2026-10-29' },
+    supplementedKeys: ['csThreeMinRate'],
+  }
+
+  const cards = buildOpsModuleCards(data, [], null)
+
+  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '三分钟响应'), '100.0% · 10-29')
+  assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), '5.0%')
+})

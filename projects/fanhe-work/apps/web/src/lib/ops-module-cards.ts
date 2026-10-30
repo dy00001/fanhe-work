@@ -44,9 +44,23 @@ export function buildOpsModuleCards(
     (row) => typeof row.metrics.payAmountFen === 'number' && row.metrics.payAmountFen > 0,
   ).length
 
+  /*
+   * 取值 + 标注来源日期。
+   *
+   * 少数指标平台只按日出（`OPS_DAILY_ONLY_SUMMARY_KEYS`），接口会在
+   * `supplementedFrom` 里说明这一行来自哪一天。此时数值后面必须带日期 ——
+   * 页头写着「近 30 天」而卡片显示某一天的响应率、却不注明，是把两个口径
+   * 混成一句话，比不显示更容易误判。
+   */
   const metric = (key: OpsSummaryMetricKey, format: (value: number) => string): string => {
-    const value = opsSummaryMetric(data.dimensions.summary, key)
-    return value === null ? OPS_MODULE_PENDING : format(value)
+    const group = data.dimensions.summary
+    const value = opsSummaryMetric(group, key)
+    if (value === null) return OPS_MODULE_PENDING
+    const text = format(value)
+    const from = group.supplementedFrom
+    if (from === null || from === undefined) return text
+    if (!(group.supplementedKeys ?? []).includes(key)) return text
+    return `${text} · ${from.to.slice(5)}`
   }
 
   /*

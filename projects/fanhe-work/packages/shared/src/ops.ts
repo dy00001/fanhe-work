@@ -221,6 +221,24 @@ export type OpsDimensionGroup = {
   type: OpsDimensionType
   window: OpsDateRange | null
   rows: readonly OpsDimensionRow[]
+  /**
+   * 组里有行来自另一份快照时的那个窗口，`null` 表示全部同源。
+   *
+   * 存在的理由：少数指标平台只按日出（见 `OPS_DAILY_ONLY_SUMMARY_KEYS`），查
+   * 「近 30 天」时选中那份快照里根本没有它们。要么让它们在区间视图里永远缺，
+   * 要么从最近一份单日快照补进来 —— 选后者，但**必须留下来源窗口**，否则界面
+   * 会把「某一天的值」当成「这段区间的值」显示，两者在经营上不是一回事。
+   *
+   * 界面看到非 null 时要在数值旁注明日期，不能只显示数字。
+   */
+  supplementedFrom?: OpsDateRange | null
+  /**
+   * 上面那个窗口补进来的键。只有这些键需要标注，其余行仍属于 `window`。
+   *
+   * 分到键这一级而不是整组标记：同一次响应里，「支付金额」来自区间快照、
+   * 「三分钟响应」来自单日快照是正常的，整组打标会让人以为所有数字都只有一天。
+   */
+  supplementedKeys?: readonly string[]
 }
 
 /**
@@ -281,7 +299,12 @@ export const OPS_SUMMARY_METRICS = [
     unit: 'percent',
     module: 'service',
     source: 'period',
-    pending: true,
+    /*
+     * 2026-10-30 起已接入（采集侧 `csp/api/core/monitor/overview/layer.json` 的
+     * `base_avg` 行）。它**只有单日口径**：平台按 dateType=1d 返回，没有 30 天值。
+     * 见 OPS_DAILY_ONLY_SUMMARY_KEYS。
+     */
+    pending: false,
   },
   {
     key: 'rateUnrepliedCnt',
@@ -318,6 +341,20 @@ export const OPS_SUMMARY_METRICS = [
 ] as const satisfies readonly OpsSummaryMetricSpec[]
 
 export type OpsSummaryMetricKey = (typeof OPS_SUMMARY_METRICS)[number]['key']
+
+/**
+ * 只有单日口径的 summary 指标。查询区间不是单日时，它们从最近一份单日快照补齐。
+ *
+ * 为什么需要这份名单，而不是「缺什么补什么」：
+ *
+ *   - 有些键缺失是因为采集没跑（真缺），补齐它们会让「昨天下线了」变成「显示
+ *     上周的数字」，故障被藏起来；
+ *   - 有些键是平台压根没有区间口径（三分钟响应率按 `dateType=1d` 返回），不补
+ *     就永远只有单日视图能看到，等于没接入。
+ *
+ * 名单只放后者。加进来之前先确认：平台确实没有区间口径，不是我们没采。
+ */
+export const OPS_DAILY_ONLY_SUMMARY_KEYS: readonly OpsSummaryMetricKey[] = ['csThreeMinRate']
 
 /**
  * 从 summary 组里取一项。

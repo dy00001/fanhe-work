@@ -34,26 +34,25 @@ export type OpsPendingItem = {
 
 /** 服务体验页。 */
 export const OPS_PENDING_SERVICE: readonly OpsPendingItem[] = [
-  {
-    name: '三分钟人工响应率',
-    field: 'csThreeMinRate',
-    backend: '千牛 › 客服绩效 › 响应',
-    batch: 'B',
-    blockedBy: '',
-  },
+  /*
+   * 三分钟响应率（csThreeMinRate）2026-10-30 已接入，不再列在这里：数据来自
+   * `csp/api/core/monitor/overview/layer.json` 的 base_avg 行，已入库并在
+   * 入口卡上显示。下面两项同一个接口也一并返回了（avgReplyDur1d / cstUv1d），
+   * 但契约里还没有对应键、页面上也没有卡位，所以先标出来免得被当成没采到。
+   */
   {
     name: '旺旺人工平均响应时长',
     field: 'csFirstRespSec',
     backend: '千牛 › 客服绩效 › 响应',
     batch: 'B',
-    blockedBy: '',
+    blockedBy: '数据已随三分钟响应率入库，缺契约键与页面卡位',
   },
   {
     name: '咨询数量',
     field: 'consultCnt',
     backend: '千牛 › 客服绩效 › 咨询量',
     batch: 'B',
-    blockedBy: '',
+    blockedBy: '数据已随三分钟响应率入库，缺契约键与页面卡位',
   },
   {
     name: '评价待商家回复',

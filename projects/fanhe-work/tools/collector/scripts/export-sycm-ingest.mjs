@@ -182,6 +182,8 @@ function text(cell, limit) {
 const CMD = {
   homeOverview: 1,
   itemList: 9,
+  /* 服务洞察的序号接在四条维度探测（50~53）之后。见 collect-via-plugin.mjs 的 API_CMDS。 */
+  serviceLayer: 54,
 }
 
 /**
@@ -429,6 +431,49 @@ function buildPayload(account) {
     }
   }
 
+  /*
+   * 7. 服务洞察（客服绩效）。三分钟响应率只有这一个来源。
+   *
+   * 接口按 `groupType` 返回三行：`base_avg` 是本店当日实际值，`avg` 与 `exc` 是
+   * 同行同层平均与优秀。**只取 base_avg**，取错行不会报错，只会把同行的
+   * 响应率当成自己的显示出来。
+   *
+   * 判据（2026-10-29 实测）：base_avg 的 cstUv1d=1、replyUv1d=1，与同一天
+   * reception-list 只有 1 条接待明细一致；overview/list 默认那层的 value 也是 1，
+   * 且它给的环比 -50% 与「本期 1、上期 2」吻合。而 avg 行那天是 20 人咨询、
+   * 响应率 0.9903 —— 与本店实际完全不是一回事。
+   *
+   * 比率按 0~1 存（`formatPercent` 会乘 100），不做百分数换算。
+   */
+  const svcFile = readCommand(dir, CMD.serviceLayer)
+  if (svcFile === null) {
+    notes.push('缺 service-layer 探测，summary 少 csThreeMinRate 一项')
+  } else {
+    const rows = svcFile.json?.data
+    if (!Array.isArray(rows)) {
+      notes.push('service-layer 响应里没有 data 数组')
+    } else {
+      const self = rows.find((row) => row?.groupType === 'base_avg')
+      if (self === undefined) {
+        /* 三行都不在、或者只有 avg/exc，说明接口语义变了。此时宁可缺这一项，
+           也不能退回取 avg —— 那是别人的数。 */
+        notes.push('service-layer 里没有 base_avg 行，不取 avg/exc')
+      } else {
+        const rate = num(self.manReplyRate3Min)
+        if (rate === null) {
+          notes.push('service-layer 的 base_avg 行没有 manReplyRate3Min')
+        } else {
+          dimensions.push({
+            type: 'summary',
+            key: 'csThreeMinRate',
+            label: 'csThreeMinRate',
+            metrics: { value: rate },
+          })
+        }
+      }
+    }
+  }
+
   return {
     payload: {
       contractVersion: 1,
@@ -489,7 +534,9 @@ for (const account of accounts) {
   if (notes.length > 0) {
     for (const note of notes) console.log(`    · ${note}`)
   }
-  if (payload.daily.length === 0 || summaryRows < 13) missingCore = true
+  /* 满配 14 项：home-overview 的 13 项 + 服务洞察的 csThreeMinRate。
+     少一项就要人看一眼 —— ingest 按类型清行，上报几项就把同窗口清到几项。 */
+  if (payload.daily.length === 0 || summaryRows < 14) missingCore = true
   produced.push(payload)
 }
 
@@ -515,7 +562,7 @@ if (TO_STDOUT) {
   console.log(`\n已写入 ${path.relative(REPO, dir)}/ 共 ${produced.length} 份`)
 }
 
-console.log(`\n提示：summary 少于 13 项时不要开自动上报。ingest 按类型清行，`)
+console.log(`\n提示：summary 少于 14 项时不要开自动上报。ingest 按类型清行，`)
 console.log(`      上报了几项就把同窗口的 summary 清到几项，缺的那几项会被删掉。`)
 
 process.exit(missingCore ? 2 : 0)
