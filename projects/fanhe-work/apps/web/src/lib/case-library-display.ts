@@ -3,6 +3,7 @@ import {
   type CaseFolder,
   type CaseLibrarySnapshot,
   type CasePlacement,
+  type CaseUpload,
 } from '@fanhe/shared'
 
 // 只取类型：这是一条会被类型擦除吞掉的导入。**不能有运行期的相对导入** ——
@@ -96,6 +97,25 @@ export function buildCaseIndex(categories: readonly CaseCategory[]): CaseIndex {
     })
   }
   return index
+}
+
+/**
+ * 上传图在索引里的那一行。
+ *
+ * **地址是接口路径，不是静态资源。** 它要带令牌才能取（见
+ * `use-case-upload-images.ts`），所以这里给的是「路径」，由那一层换成 object URL；
+ * 在那之前 `<img>` 用它只会得到 401 —— 因此展示层必须保证：上传图的条目在渲染前
+ * 一定被 `useCaseUploadImages` 换过地址。`CaseImageGrid` 拿到的永远是换好的那份。
+ *
+ * 单独导出是为了让测试能断言「路径长什么样」，而不必把整个 view 建起来。
+ */
+export function caseUploadEntry(upload: CaseUpload, label: string): CaseIndexEntry {
+  return {
+    src: `/api/cases/uploads/${encodeURIComponent(upload.itemId)}/full`,
+    thumb: `/api/cases/uploads/${encodeURIComponent(upload.itemId)}/thumb`,
+    alt: label,
+    categoryId: upload.categoryId,
+  }
 }
 
 /** 移动菜单里的一项：某个品类下的一个文件夹，以及它现在有多少张图。 */
@@ -197,17 +217,47 @@ export function buildCaseLibraryView(
     placementOf.set(placement.itemId, placement.folderId)
   }
 
-  /** 本品类自有的 itemId，按声明顺序，封面在前。 */
+  /**
+   * 上传图在索引里的位置。
+   *
+   * 索引是由静态清单建的（`buildCaseIndex`），里面没有上传图；这里按快照补一份。
+   * **补在展示层而不是让调用方拼索引**，是因为「漏掉上传图」的表现是「传完了但看不见」——
+   * 一个必须由每个调用点都记得做的事，迟早会漏一个。
+   *
+   * 编号用「本品类的第几张」，与静态图的 `案例 3` 同一种说法；别的品类传进来的图
+   * 只写「上传图片」，因为这里拿不到它原来那个品类的名字。
+   */
+  const uploadEntries = new Map<string, CaseIndexEntry>()
+  let uploadPosition = 0
+  for (const upload of snapshot.uploads) {
+    if (upload.categoryId !== category.id) {
+      uploadEntries.set(upload.itemId, caseUploadEntry(upload, '上传图片'))
+      continue
+    }
+    uploadPosition += 1
+    uploadEntries.set(
+      upload.itemId,
+      caseUploadEntry(upload, `${category.name}上传 ${uploadPosition}`),
+    )
+  }
+  const entryOf = (itemId: string): CaseIndexEntry | undefined =>
+    index.get(itemId) ?? uploadEntries.get(itemId)
+
+  /** 本品类自有的 itemId，按声明顺序，封面在前、上传图在后。 */
   const nativeIds: string[] = []
   if (category.cover !== null) nativeIds.push(caseCoverItemId(category.id))
   for (const slot of category.cases) {
     if (slot.cover === null || slot.thumb === null) continue
     nativeIds.push(slot.id)
   }
+  // 上传图接在静态图后面：新传的那张出现在自己熟悉的那批图之后，而不是插在中间。
+  for (const upload of snapshot.uploads) {
+    if (upload.categoryId === category.id) nativeIds.push(upload.itemId)
+  }
 
   const items: CaseAlbumItem[] = []
   for (const itemId of nativeIds) {
-    const entry = index.get(itemId)
+    const entry = entryOf(itemId)
     if (entry === undefined) continue
     const folderId = placementOf.get(itemId)
     if (folderId === undefined || folderId === null) {
@@ -232,13 +282,22 @@ export function buildCaseLibraryView(
     const folder = folderById.get(placement.folderId)
     if (folder === undefined) continue
     if (folder.categoryId !== category.id) continue
-    const entry = index.get(placement.itemId)
+    const entry = entryOf(placement.itemId)
     if (entry === undefined) continue
     foreign.push(toItem(placement.itemId, entry, folder.id))
   }
-  // 排序键：全局清单里的位置。归属表的返回顺序由数据库决定，不排的话同一批外来图在两
-  // 次刷新之间可能换位置，看着像「每次进来顺序都不一样」。
-  foreign.sort((left, right) => orderOf(index, left.id) - orderOf(index, right.id))
+  // 排序键：全局清单里的位置，上传图排在清单之后、按上传顺序。归属表的返回顺序由
+  // 数据库决定，不排的话同一批外来图在两次刷新之间可能换位置，看着像「每次进来顺序
+  // 都不一样」。**上传图必须有这一档**：它们不在静态索引里，只按索引排会全部并列，
+  // 而并列的实际顺序取决于数据库这次怎么返回。
+  const uploadOrder = new Map(snapshot.uploads.map((upload, position) => [upload.itemId, position]))
+  const sortKey = (itemId: string): number => {
+    const staticOrder = orderOf(index, itemId)
+    if (staticOrder !== Number.MAX_SAFE_INTEGER) return staticOrder
+    const uploadPosition = uploadOrder.get(itemId)
+    return uploadPosition === undefined ? Number.MAX_SAFE_INTEGER : 100_000 + uploadPosition
+  }
+  foreign.sort((left, right) => sortKey(left.id) - sortKey(right.id))
 
   const all = [...items, ...foreign]
   const groups: CaseFolderGroup[] = folders.map((folder) => ({

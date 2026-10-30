@@ -156,9 +156,15 @@ model User {
   eventLogs       EventLog[] @relation("EventLogActor")
 
   /// 案例库：文件夹、图片归属、修订号。三者都是「按账号各存一份」。
+  ///
+  /// **这里的「账号」是库的归属账号，不是发起请求的人。** 案例库全账号共用一份，路由层
+  /// 把所有请求都解析到主账号名下（`apps/api/src/case-library/scope.ts`），所以这几张表
+  /// 里永远只有主账号那一份数据 —— 别的用户既能读到，也能改、能删。
   caseFolders      CaseFolder[]
   casePlacements   CaseItemPlacement[]
   caseLibraryState CaseLibraryState?
+  /// 自己上传的案例图片（字节本体在这里，见 `CaseUpload`）。
+  caseUploads      CaseUpload[]
 
   @@index([roleId])
   @@index([status])
@@ -735,6 +741,65 @@ model CaseLibraryState {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("case_library_states")
+}
+
+/// 用户自己上传的一张案例图。**字节直接存在库里**（`data` / `thumb` 两个 bytea）。
+///
+/// 为什么不写磁盘或对象存储：api 跑在容器里、compose 上没有给它挂卷，写进容器就是
+/// 一次性数据（`--force-recreate` 一次全丢）；挂宿主机目录则要逐机配路径，而这个
+/// 工作区本来就随盘符搬家。存库是唯一「换台机器拉下代码、跑一次迁移就完整」的方案。
+/// 代价是数据库会变大：一张 1200px webp 约 150KB，按 300 张/品类封顶，单账号到顶
+/// 几十 MB，Postgres 的 TOAST 能把这些行放到行外，不影响小字段的查询。
+///
+/// **itemId 是主键的一部分，不是自增序号。** 它同时被归属表引用、被前端当 key、被
+/// 取图接口当路径参数 —— 三者必须是同一个字符串，而它一旦生成就不再变（跨品类移动
+/// 也不改），所以前缀记的是「上传时所在品类」，不是「现在归谁」。
+///
+/// **`deletedAt` 只做软删。** 另一台设备可能正拿着这个 itemId 在发移动请求；硬删会让
+/// 它收到一个分不清「被删了」与「从没存在」的 404。真正的字节清理留给以后的清理任务。
+model CaseUpload {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  /// 形如 `wardrobe-u<32 位十六进制>`。列宽与 `CASE_LIBRARY_LIMITS.ITEM_ID_MAX` 一致。
+  itemId String @map("item_id") @db.VarChar(64)
+
+  /// 上传时所在的品类。跨品类移动之后不变。
+  categoryId String @map("category_id") @db.VarChar(64)
+
+  /// 原图像素尺寸。客户端用来留占位，服务端只做范围校验（不重新编码图片）。
+  width  Int
+  height Int
+
+  /// 字节数。取图时用作 `content-length`，也便于排查「这张图怎么这么大」。
+  byteSize Int @map("byte_size")
+
+  /// 缩略图的字节数，同上。
+  thumbByteSize Int @map("thumb_byte_size")
+
+  /// 原图的 MIME。当前只会是 `image/webp` 或 `image/jpeg`，留成列是为了将来换格式
+  /// 不必改表。
+  mime String @db.VarChar(32)
+
+  /// 原图字节。客户端的压缩目标是 1600px 长边、webp q80。
+  data Bytes
+
+  /// 缩略图字节。320px 宽，网格用它。
+  thumb Bytes
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 同一账号内 itemId 唯一。**不能只靠应用层判重**：上传是并发的，两台设备同时传
+  /// 到同一个 id 的概率极低（id 里有 32 位随机），但这条约束顺便保证了 `placement`
+  /// 指向的一定是唯一一行。
+  @@unique([userId, itemId])
+  /// 快照按品类取、按创建时间排，这条索引覆盖它。
+  @@index([userId, categoryId, deletedAt, createdAt])
+  @@map("case_uploads")
 }
 
 // ---------------------------------------------------------------------------

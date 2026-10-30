@@ -1,4 +1,4 @@
-import type { CaseLibrarySnapshot } from '@fanhe/shared'
+import type { CaseLibrarySnapshot, CreateCaseUploadItem } from '@fanhe/shared'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError } from './api'
@@ -6,10 +6,12 @@ import {
   caseSaveExit,
   createCaseFolder,
   deleteCaseFolder,
+  deleteCaseUpload,
   describeCaseSaveError,
   loadCaseLibrary,
   moveCaseItems,
   renameCaseFolder,
+  uploadCaseImage,
 } from './case-library'
 import { applyMoveToSnapshot } from './case-library-display'
 
@@ -51,6 +53,15 @@ export type CaseLibraryHandle = {
   renameFolder: (id: string, name: string) => Promise<boolean>
   deleteFolder: (id: string) => Promise<boolean>
   moveItems: (itemIds: readonly string[], folderId: string | null) => Promise<boolean>
+  /**
+   * 上传一张已经压好的图。`folderId` 是「当前筛选的文件夹」，新图直接落进去。
+   *
+   * 失败时**不抛异常**，只把原因写进 `message` —— 调用方是一个循环（一次选五张），
+   * 抛出去会中断整批，而其中一张因为格式不对失败时，另外四张完全应该继续传。
+   */
+  uploadOne: (item: CreateCaseUploadItem, folderId: string | null) => Promise<boolean>
+  /** 删除一张自己上传的图。静态清单里的图删不掉（服务端 404）。 */
+  deleteUpload: (itemId: string) => Promise<boolean>
 }
 
 /**
@@ -216,6 +227,27 @@ export function useCaseLibrary(categoryId: string, enabled: boolean): CaseLibrar
     setMessage(null)
   }, [])
 
+  /**
+   * 上传一张。
+   *
+   * 不复用 `runWrite` 的乐观预演：新图的 itemId 由服务端生成（含随机后缀），本地猜
+   * 不出来；而「猜一个再换掉」会在网络慢时露出一张最后又消失的图。这里等响应回来
+   * 就够快 —— 一张 200KB 的图在局域网里是几十毫秒。
+   *
+   * 但它仍要经过 `busyRef` 的计数：上传期间若有轮询回来，那份快照里还没有这张新图，
+   * 覆盖上去会让刚传好的图闪一下不见。
+   */
+  const uploadOne = useCallback(
+    (item: CreateCaseUploadItem, folderId: string | null) =>
+      runWrite(() => uploadCaseImage({ categoryId, folderId, items: [item] })),
+    [categoryId, runWrite],
+  )
+
+  const deleteUpload = useCallback(
+    (itemId: string) => runWrite(() => deleteCaseUpload(itemId)),
+    [runWrite],
+  )
+
   const refresh = useCallback(() => {
     setReloadToken((value) => value + 1)
   }, [])
@@ -231,5 +263,7 @@ export function useCaseLibrary(categoryId: string, enabled: boolean): CaseLibrar
     renameFolder,
     deleteFolder,
     moveItems,
+    uploadOne,
+    deleteUpload,
   }
 }

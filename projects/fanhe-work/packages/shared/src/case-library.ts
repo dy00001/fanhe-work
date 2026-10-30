@@ -6,10 +6,15 @@
  * 的传输形状。图片地址不进来 —— 它们属于 web 的静态资源，服务端没有理由知道
  * `/cases/album/cabinet-1.webp` 这种路径。
  *
- * **图片本身不入库，只有「图片被放进哪个文件夹」入库。** 这是一条刻意的最小化表示：
- * 图片来自随前端分发的静态清单（`apps/web/src/lib/case-catalog.ts`），库里再存一遍
+ * **随前端分发的图片不入库，只有「图片被放进哪个文件夹」入库。** 这是一条刻意的最小化
+ * 表示：图片来自随前端分发的静态清单（`apps/web/src/lib/case-catalog.ts`），库里再存一遍
  * 就等于同一件事有两个真相，而新加一张图还要先跑一次数据迁移。库里只记录覆盖关系，
  * 没有行的图片就是「未归档」，界面按静态清单补齐即可。
+ *
+ * **用户自己上传的图片是例外，它必须入库。** 2026-10-29 加的「上传图片」不能走静态
+ * 清单：那张图不在任何一次构建里，也不该为了它重发一次版。于是库里多一张 `case_uploads`
+ * 存字节本体，快照里多一段 `uploads` 描述它们。两者在展示层被抹平成同一种东西 ——
+ * 界面上的「一张图」不区分来源，只有 `itemId` 不同。
  *
  * **快照带一个 revision。** 它是「这个账号的案例库被改过多少次」的单调计数，用来回答
  * 一个很便宜的问题：本机手上的这份还是不是最新的。多设备同步全靠它判断要不要重绘，
@@ -75,6 +80,38 @@ export const CASE_LIBRARY_LIMITS = {
   FOLDERS_PER_CATEGORY_MAX: 30,
   ITEM_ID_MAX: 64,
   BATCH_MAX: 200,
+  /**
+   * 一个品类最多能上传多少张。
+   *
+   * 300 是「一张 1200px 的 webp 约 150KB」乘出来的量级：满额约 45MB 字节存在库里，
+   * 单账号到顶也就一个手机相册的量。设上限不是防恶意（这层只要求登录），而是防
+   * 「拖一整个文件夹进来」这种手滑 —— 那时候界面上应该给出一个明确的界，而不是
+   * 让一次请求把库撑大几百兆。
+   */
+  UPLOADS_PER_CATEGORY_MAX: 300,
+  /**
+   * 一次最多选几张。
+   *
+   * 与 `UPLOAD_BATCH_MAX` 是同一个数：选多少就一次传多少，不做队列。10 张在弱网下
+   * 大约十几秒，界面有进度可看；再多就该让用户分两批，而不是挂着一个转圈三分钟。
+   */
+  UPLOAD_BATCH_MAX: 10,
+  /**
+   * 单张原图的字节上限（**编码后**的字节，不是手机原图）。
+   *
+   * 客户端在上传前已经把它压到 `UPLOAD_EDGE_MAX` 宽，正常落在 100–400KB。2.5MB 是给
+   * 「一张细节极多的全屋实景」留的余量（约 6 倍），同时也是一道拒绝闸门：超过它的
+   * 多半是没走压缩（比如直接选了 HEIC 原图），让它悄悄入库只会让以后的同步越来越慢。
+   */
+  UPLOAD_BYTES_MAX: 2.5 * 1024 * 1024,
+  /** 缩略图上限。320px 的 webp 通常 10KB 上下，512KB 已经松得离谱。 */
+  UPLOAD_THUMB_BYTES_MAX: 512 * 1024,
+  /**
+   * 原图最长边的上限。**这是压缩目标，不是校验条件** —— 服务端不重新编码（那要引入
+   * 一个图像库），只按字节数把关；这个值由客户端使用，两边写同一个常量，避免出现
+   * 「前端按 1000px 压、文档里写 1600px」这种对不上的说明。
+   */
+  UPLOAD_EDGE_MAX: 1600,
 } as const
 
 /** 一个自定义文件夹。 */
@@ -113,6 +150,14 @@ export type CaseLibrarySnapshot = {
   revision: number
   folders: readonly CaseFolder[]
   placements: readonly CasePlacement[]
+  /**
+   * 自己上传的图片。**只有描述，没有字节** —— 字节要走取图接口单独拿。
+   *
+   * 放进快照而不是另开一条列表接口：展示层需要「这个品类有哪些图」这件事一次拿全，
+   * 否则每打开一个品类都要多一次往返，而两次响应之间还可能出现「归属里有一张图、
+   * 清单里没有」的错位。它每行只有四个短字段，几十行不过几 KB。
+   */
+  uploads: readonly CaseUpload[]
 }
 
 export type CaseLibraryResponse = {
@@ -206,4 +251,82 @@ export const CASE_COVER_SUFFIX = 'cover'
 
 export function caseCoverItemId(categoryId: string): string {
   return `${categoryId}-${CASE_COVER_SUFFIX}`
+}
+
+/**
+ * 一张**自己上传**的图片。
+ *
+ * 与静态清单里的那一行是同一个东西的两个来源：界面拿到的都是「一个 itemId + 一张图」，
+ * 区别只在字节从哪来（静态资源 / 取图接口）以及能不能删（静态图删不掉）。
+ *
+ * `width` / `height` 是原图的像素尺寸。**前端必须拿到它**：网格是 `object-cover` 的
+ * 固定比例格子，没有尺寸就画不出占位，加载完还会跳一下版。服务端不重新编码图片，
+ * 所以这两个值由上传方声明，只做范围校验。
+ */
+export type CaseUpload = {
+  /** 形如 `wardrobe-u9f2c…`（32 位小写十六进制）。前缀仍是品类，见 {@link isCaseUploadItemId}。 */
+  itemId: string
+  /** 上传时所在的品类。跨品类移动之后它也不变 —— 它是「这张图来自哪」，不是「现在归谁」。 */
+  categoryId: string
+  width: number
+  height: number
+  createdAt: string
+}
+
+/**
+ * 上传图片的 itemId 记号。
+ *
+ * 中间那个 `u` 是为了让「上传的」和「清单里的」在同一个命名空间里不打架：静态图是
+ * `<品类>-<数字>`（`cabinet-3`）或 `<品类>-cover`，上传图是 `<品类>-u<32 位十六进制>`。
+ * 服务端只靠这条约定就能回答「这个 id 该去 `case_uploads` 里找」。
+ */
+const CASE_UPLOAD_MARK = 'u'
+const CASE_UPLOAD_TOKEN_PATTERN = /^[0-9a-f]{32}$/
+
+/** 拼一个上传图片的 itemId。`token` 是去掉连字符的 UUID。 */
+export function caseUploadItemId(categoryId: string, token: string): string {
+  return `${categoryId}-${CASE_UPLOAD_MARK}${token}`
+}
+
+/**
+ * 判断一个 itemId 是不是上传图片。
+ *
+ * **要求前缀是合法品类**，不能只匹配尾巴：`foo-u<32hex>` 这种只可能来自脏数据或改过的
+ * 请求，把它们当成上传图会让服务端去查一张不存在的行、再回一个 404，而真正的事实是
+ * 「这个 id 根本不合法」。
+ */
+export function isCaseUploadItemId(itemId: string): boolean {
+  const match = /^(.*)-u([0-9a-f]{32})$/.exec(itemId)
+  if (match === null) return false
+  const categoryId = match[1] ?? ''
+  const token = match[2] ?? ''
+  return isCaseCategoryId(categoryId) && CASE_UPLOAD_TOKEN_PATTERN.test(token)
+}
+
+/**
+ * 一次上传的一张图。
+ *
+ * `data` / `thumb` 是 **base64（不带 `data:` 前缀）**。用 JSON 而不是 multipart：这个
+ * 仓库没有引入 multer 之类的依赖，为一次上传新增一个解析器不划算；而 base64 的代价
+ * （体积 +33%）在「客户端已经压到 100–300KB」这个前提下完全可以接受。
+ */
+export type CreateCaseUploadItem = {
+  data: string
+  thumb: string
+  width: number
+  height: number
+}
+
+/**
+ * 上传请求。
+ *
+ * `folderId` 不为 null 时，新图直接放进那个文件夹 —— 用户是在「某个文件夹」的筛选下
+ * 点的上传，那就该落在那个文件夹里，而不是传完还要再选一遍移过去。**它必须属于
+ * `categoryId` 这个品类**：与跨品类移动不同，上传时没有「这张图原来在哪」可言，
+ * 允许落到别的品类只会让新图凭空出现在一个用户没打开的图集里。
+ */
+export type CreateCaseUploadsRequest = {
+  categoryId: string
+  folderId: string | null
+  items: readonly CreateCaseUploadItem[]
 }

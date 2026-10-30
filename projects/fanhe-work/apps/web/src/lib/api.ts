@@ -2,6 +2,7 @@ import type {
   ApiErrorResponse,
   CaseLibraryResponse,
   CreateCaseFolderRequest,
+  CreateCaseUploadsRequest,
   CreateEventRequest,
   CreateLaunchProfileRequest,
   CreateManagedUserRequest,
@@ -1001,6 +1002,64 @@ export function moveCaseItemsRequest(
     body: input,
     accessToken,
   })
+}
+
+/**
+ * 上传一张（或一批）图片。
+ *
+ * 请求体是 JSON + base64，不是 multipart：**这个接口的响应仍然是整份快照**，与其它
+ * 四条写接口保持一致，因此它必须走同一个 `request()`，而那里面按 JSON 序列化。
+ * 为一次上传单独写一套 multipart 解析不值当（见共享包 `CreateCaseUploadItem` 的注释）。
+ */
+export function createCaseUploadsRequest(
+  accessToken: string,
+  input: CreateCaseUploadsRequest,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>('/api/cases/uploads', {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+export function deleteCaseUploadRequest(
+  accessToken: string,
+  itemId: string,
+): Promise<CaseLibraryResponse> {
+  return request<CaseLibraryResponse>(`/api/cases/uploads/${encodeURIComponent(itemId)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+/**
+ * 取一张上传图的字节。
+ *
+ * **不能返回 URL 让 `<img>` 直接用** —— 取图接口要 Bearer 令牌，而 `<img>` 不带请求头。
+ * 这里把它拉成 `Blob`，调用方（`use-case-upload-images`）转成 object URL。
+ *
+ * 用的仍是同一个 `API_BASE_URL`：桌面端的壳会把这个前缀反代到本机 api，写成绝对地址
+ * 会让它绕开反代、直连一个可能不存在的端口。
+ */
+export async function caseUploadImageRequest(
+  accessToken: string,
+  itemId: string,
+  variant: 'thumb' | 'full',
+): Promise<Blob> {
+  const path = `/api/cases/uploads/${encodeURIComponent(itemId)}/${variant}`
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'image/*' },
+    })
+  } catch {
+    throw new ApiError(0, 'network_error', '无法连接服务器，请确认后端已启动', null)
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, 'unknown_error', describeHttpFailure(response.status), null)
+  }
+  return response.blob()
 }
 
 // ---------------------------------------------------------------------------

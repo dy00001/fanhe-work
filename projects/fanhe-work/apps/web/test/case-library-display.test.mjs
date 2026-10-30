@@ -44,7 +44,7 @@ function folder(id, categoryId, name) {
   }
 }
 
-const EMPTY = { revision: 1, folders: [], placements: [] }
+const EMPTY = { revision: 1, folders: [], placements: [], uploads: [] }
 
 test('未归档包含全部图片，封面排第一', () => {
   const category = categoryOf('cabinet')
@@ -73,6 +73,8 @@ test('归属关系按文件夹分组，只算本品类的文件夹', () => {
       // 被挪进了衣柜的文件夹 —— 对这个品类来说就是「移走了」。
       { itemId: 'cabinet-4', folderId: 'f3' },
     ],
+
+    uploads: [],
   }
   const view = buildCaseLibraryView(category, snapshot, INDEX)
 
@@ -101,6 +103,8 @@ test('跨品类移动：在目标品类的文件夹里出现，带自己的地�
     revision: 6,
     folders: [folder('fc', 'cabinet', '主卧灰玻'), folder('fw', 'wardrobe', '长衣区')],
     placements: [{ itemId: 'cabinet-1', folderId: 'fw' }],
+
+    uploads: [],
   }
 
   const wardrobeView = buildCaseLibraryView(categoryOf('wardrobe'), snapshot, INDEX)
@@ -134,6 +138,8 @@ test('外来图排在本品类自有图之后，顺序稳定', () => {
       { itemId: 'cabinet-3', folderId: 'fw' },
       { itemId: 'cabinet-2', folderId: 'fw' },
     ],
+
+    uploads: [],
   }
   const view = buildCaseLibraryView(categoryOf('wardrobe'), snapshot, INDEX)
   const group = view.folders.find((item) => item.folder.id === 'fw')
@@ -155,6 +161,7 @@ test('指向已不存在的文件夹的归属，按未归档处理', () => {
       revision: 3,
       folders: [],
       placements: [{ itemId: 'wine-cabinet-1', folderId: 'gone' }],
+      uploads: [],
     },
     INDEX,
   )
@@ -170,6 +177,8 @@ test('筛选：三个分支与「文件夹被删后退回全部」', () => {
     revision: 4,
     folders: [folder('f1', 'cabinet', '主卧灰玻')],
     placements: [{ itemId: 'cabinet-1', folderId: 'f1' }],
+
+    uploads: [],
   }
   const view = buildCaseLibraryView(category, snapshot, INDEX)
 
@@ -205,6 +214,8 @@ test('乐观移动：移入覆盖旧归属，移出删掉归属行', () => {
       { itemId: 'b', folderId: 'f1' },
       { itemId: 'c', folderId: 'f2' },
     ],
+
+    uploads: [],
   }
 
   const moved = applyMoveToSnapshot(snapshot, ['a', 'b'], 'f2')
@@ -237,6 +248,8 @@ test('移动菜单：按品类分组、只列有文件夹的品类、张数含�
       { itemId: 'cabinet-2', folderId: 'fw' },
       { itemId: 'wardrobe-1', folderId: 'fc' },
     ],
+
+    uploads: [],
   }
 
   const groups = groupFoldersByCategory(snapshot, CASE_CATEGORIES)
@@ -253,4 +266,110 @@ test('移动菜单：按品类分组、只列有文件夹的品类、张数含�
   )
   // 没有文件夹的品类不出现：13 个品类全列出来会是一长串空标题。
   assert.equal(groups.length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// 上传图片
+// ---------------------------------------------------------------------------
+//
+// 上传图与静态图的差别只在「字节从哪来」。展示层必须把它们抹平成同一种东西，否则
+// 会出现一类很难解释的现象：图传上去了，但它不在未归档里、也移不进文件夹、跨品类
+// 移动时更是干脆不显示。下面几条把这三件事各自钉住。
+
+const UPLOAD_ID = 'cabinet-u0123456789abcdef0123456789abcdef'
+
+function upload(itemId, categoryId) {
+  return {
+    itemId,
+    categoryId,
+    width: 1600,
+    height: 1200,
+    createdAt: '2026-10-29T08:00:00.000Z',
+  }
+}
+
+test('上传图是本品类的原生图：出现在全部与未归档里，排在静态图之后', () => {
+  const category = categoryOf('cabinet')
+  const view = buildCaseLibraryView(
+    category,
+    { revision: 9, folders: [], placements: [], uploads: [upload(UPLOAD_ID, 'cabinet')] },
+    INDEX,
+  )
+
+  const item = view.all.find((entry) => entry.id === UPLOAD_ID)
+  assert.ok(item !== undefined, '上传图没有进入视图')
+  // 地址是接口路径 —— 带令牌的那一层会把它换成 object URL。
+  assert.equal(item.thumb, `/api/cases/uploads/${UPLOAD_ID}/thumb`)
+  assert.equal(item.src, `/api/cases/uploads/${UPLOAD_ID}/full`)
+  // 未归档与「全部」都要有它。
+  assert.ok(view.unassigned.some((entry) => entry.id === UPLOAD_ID))
+  // 排在静态图之后：新传的那张出现在熟悉的那批图后面，而不是插在中间。
+  assert.equal(view.all.at(-1).id, UPLOAD_ID)
+})
+
+test('上传图可以放进文件夹，也可以被挪到别的品类（源品类不再显示）', () => {
+  const snapshot = {
+    revision: 10,
+    folders: [folder('f1', 'cabinet', '主卧'), folder('fw', 'wardrobe', '长衣区')],
+    placements: [
+      { itemId: UPLOAD_ID, folderId: 'f1' },
+      { itemId: 'cabinet-u11111111111111111111111111111111', folderId: 'fw' },
+    ],
+    uploads: [
+      upload(UPLOAD_ID, 'cabinet'),
+      upload('cabinet-u11111111111111111111111111111111', 'cabinet'),
+    ],
+  }
+
+  const cabinet = buildCaseLibraryView(categoryOf('cabinet'), snapshot, INDEX)
+  const group = cabinet.folders.find((entry) => entry.folder.id === 'f1')
+  assert.deepEqual(
+    group.items.map((item) => item.id),
+    [UPLOAD_ID],
+  )
+  // 挪去衣柜的那张：橱柜这边既不在文件夹里，也不在未归档里。
+  assert.equal(
+    cabinet.all.some((item) => item.id === 'cabinet-u11111111111111111111111111111111'),
+    false,
+  )
+
+  const wardrobe = buildCaseLibraryView(categoryOf('wardrobe'), snapshot, INDEX)
+  const foreign = wardrobe.folders.find((entry) => entry.folder.id === 'fw')
+  assert.deepEqual(
+    foreign.items.map((item) => item.id),
+    ['cabinet-u11111111111111111111111111111111'],
+  )
+})
+
+test('别的品类传进来的上传图在本品类也画得出来', () => {
+  // 这一条是「跨品类移动后看不见」那个 bug 的钉子：外来图的地址只能从索引取，
+  // 而上传图不在静态索引里。
+  const snapshot = {
+    revision: 11,
+    folders: [folder('fw', 'wardrobe', '长衣区')],
+    placements: [{ itemId: UPLOAD_ID, folderId: 'fw' }],
+    uploads: [upload(UPLOAD_ID, 'cabinet')],
+  }
+  const wardrobe = buildCaseLibraryView(categoryOf('wardrobe'), snapshot, INDEX)
+  const group = wardrobe.folders.find((entry) => entry.folder.id === 'fw')
+  assert.equal(group.items.length, 1)
+  assert.equal(group.items[0].thumb, `/api/cases/uploads/${UPLOAD_ID}/thumb`)
+})
+
+test('上传图的 alt 用序号而不是文件名', () => {
+  const view = buildCaseLibraryView(
+    categoryOf('cabinet'),
+    {
+      revision: 12,
+      folders: [],
+      placements: [],
+      uploads: [
+        upload(UPLOAD_ID, 'cabinet'),
+        upload('cabinet-u22222222222222222222222222222222', 'cabinet'),
+      ],
+    },
+    INDEX,
+  )
+  const first = view.all.find((item) => item.id === UPLOAD_ID)
+  assert.equal(first.alt, '橱柜上传 1')
 })

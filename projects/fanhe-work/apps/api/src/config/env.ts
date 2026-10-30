@@ -192,4 +192,23 @@ export const env = {
       return value === undefined || value.trim() === '' ? null : value
     },
   },
+
+  /**
+   * 案例库的归属账号（用户名）。
+   *
+   * 案例库是全账号共用一份的素材库，正常情况下归属「持 owner 角色、最早创建的账号」，
+   * 由 `case-library/scope.ts` 解析。这个配置项用来**改指到别的账号**，唯一真实的
+   * 使用者是集成测试：测试必须有一个只放测试数据的一次性账号，否则它会往真实素材库里
+   * 塞文件夹、还会挪动 `cabinet-1` 这类真实图片的归属。
+   *
+   * 用 getter 的理由与 `jwt.secret`、上面那个 token 相同：本文件在模块加载期求值，
+   * 直接读会让每个 import 了 env 的脚本都被迫提供这一项。而且测试是在跑起来之后才建
+   * 那个账号、再设这个变量，求值时机必须晚于模块加载。
+   */
+  caseLibrary: {
+    get ownerUsername(): string | null {
+      const value = process.env.FANHE_CASE_LIBRARY_ACCOUNT
+      return value === undefined || value.trim() === '' ? null : value.trim()
+    },
+  },
 } as const

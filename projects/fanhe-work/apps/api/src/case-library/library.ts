@@ -1,13 +1,19 @@
+import { randomUUID } from 'node:crypto'
+
 import {
   CASE_LIBRARY_LIMITS,
   caseItemIdBelongsTo,
+  caseUploadItemId,
   isCaseCategoryId,
+  isCaseUploadItemId,
   isValidCaseFolderName,
   normalizeCaseFolderName,
   type CaseFolder,
   type CaseLibrarySnapshot,
   type CasePlacement,
+  type CaseUpload,
   type CreateCaseFolderRequest,
+  type CreateCaseUploadsRequest,
   type MoveCaseItemsRequest,
 } from '@fanhe/shared'
 
@@ -26,12 +32,14 @@ import type { Prisma } from '../generated/prisma/client.js'
  * 什么样」。多设备并发时自己推算会算错，而算错的表现是界面显示的归属与库里不一致、
  * 刷新一次就好——属于最难复现的一类问题。快照最大十几 KB，这点带宽换掉一整类 bug。
  *
- * **不给它加权限点，只要求登录。** 这里有数据的每一条都按 `userId` 隔离，任何账号都
- * 只能读写自己的案例库，因此 `personal.case.read/write` 这样的权限点区分不出任何东西：
- * 它唯一的效果是让某个角色能看到首页案例区却整理不了自己的文件夹。真要区分「谁能整理」
- * 时再加，那时它才是一条有意义的规则。
+ * **不给它加权限点，只要求登录。** 案例库是**全账号共用一份**的素材库：所有函数收到的
+ * `userId` 都是路由层解析出来的「库归属账号」（`case-library/scope.ts`），不是发起请求的
+ * 那个人。因此每个登录用户看到的都是同一批图与同一批文件夹，也都能整理、能删。既然没有
+ * 「别人的库」这种东西，`personal.case.read/write` 这样的权限点就区分不出任何东西：它
+ * 唯一的效果是让某个角色能看到首页案例区却整理不了案例库。真要区分「谁能整理」时再加，
+ * 那时它才是一条有意义的规则。
  *
- * **不写审计。** 与纪要、启动配置同一条判断：影响范围不超出本人。
+ * **不写审计。** 与纪要、启动配置同一条判断：影响范围不超出这个账号。
  */
 
 /**
@@ -49,6 +57,8 @@ export type CaseLibraryFailureReason =
   | 'duplicate_name'
   | 'folder_limit'
   | 'folder_unavailable'
+  | 'invalid_image'
+  | 'upload_limit'
 
 export type CaseLibraryResult<T> =
   { ok: true; data: T } | { ok: false; reason: CaseLibraryFailureReason }
@@ -65,7 +75,7 @@ function fail(reason: CaseLibraryFailureReason): CaseLibraryResult<never> {
  */
 type CaseLibraryClient = Pick<
   Prisma.TransactionClient,
-  'caseLibraryState' | 'caseFolder' | 'caseItemPlacement'
+  'caseLibraryState' | 'caseFolder' | 'caseItemPlacement' | 'caseUpload'
 >
 
 const FOLDER_SELECT = {
@@ -108,7 +118,7 @@ async function readSnapshot(
   client: CaseLibraryClient,
   userId: string,
 ): Promise<CaseLibrarySnapshot> {
-  const [state, folders, placements] = await Promise.all([
+  const [state, folders, placements, uploads] = await Promise.all([
     client.caseLibraryState.findUnique({ where: { userId }, select: { revision: true } }),
     client.caseFolder.findMany({
       where: { userId, deletedAt: null },
@@ -118,6 +128,19 @@ async function readSnapshot(
     client.caseItemPlacement.findMany({
       where: { userId, folderId: { not: null } },
       select: { itemId: true, folderId: true },
+    }),
+    // **不取字节。** 一次快照动辄几十张上传图，把 bytea 一起拖回来会让一个十几 KB
+    // 的响应变成几 MB，而界面此刻只需要知道「有哪些图、多大」。字节走取图接口。
+    client.caseUpload.findMany({
+      where: { userId, deletedAt: null },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        itemId: true,
+        categoryId: true,
+        width: true,
+        height: true,
+        createdAt: true,
+      },
     }),
   ])
 
@@ -132,6 +155,13 @@ async function readSnapshot(
     revision: state?.revision ?? 0,
     folders: folders.map(toFolder),
     placements: placementList,
+    uploads: uploads.map((row): CaseUpload => ({
+      itemId: row.itemId,
+      categoryId: row.categoryId,
+      width: row.width,
+      height: row.height,
+      createdAt: row.createdAt.toISOString(),
+    })),
   }
 }
 
@@ -350,6 +380,252 @@ export async function moveItems(
       where: { userId, itemId: { in: itemIds } },
       data: { folderId, categoryId: placementCategoryId },
     })
+  })
+  return { ok: true, data: snapshot }
+}
+
+// ---------------------------------------------------------------------------
+// 上传图片
+// ---------------------------------------------------------------------------
+//
+// 与上面五个函数的分工：它们改的是「哪张图在哪个文件夹」，这里多管一件「图从哪来」。
+// 上传之后的所有动作（移动、删除文件夹、跨品类整理）**走的是完全相同的路径** ——
+// 界面上的图片只有 `itemId`，来源差异被抹平在展示层（见 `case-library-display.ts`）。
+
+/**
+ * 允许的图片类型与其文件头。
+ *
+ * **按魔数判类型，不看客户端声明的 mime。** 请求体里那个字段来自浏览器，改一行
+ * devtools 就能让它说自己是 png；而这个值最终会被写进 `content-type` 回给 `<img>`。
+ * 用文件头判等于把「这张图到底是什么」交给字节本身，客户端说的只作为提示。
+ */
+const IMAGE_SIGNATURES: readonly { mime: string; test: (bytes: Buffer) => boolean }[] = [
+  {
+    mime: 'image/webp',
+    test: (bytes) =>
+      bytes.length > 12 &&
+      bytes.toString('ascii', 0, 4) === 'RIFF' &&
+      bytes.toString('ascii', 8, 12) === 'WEBP',
+  },
+  {
+    mime: 'image/jpeg',
+    test: (bytes) =>
+      bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
+  },
+  {
+    mime: 'image/png',
+    test: (bytes) =>
+      bytes.length > 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47,
+  },
+]
+
+function sniffMime(bytes: Buffer): string | null {
+  for (const signature of IMAGE_SIGNATURES) {
+    if (signature.test(bytes)) return signature.mime
+  }
+  return null
+}
+
+/**
+ * base64 → Buffer。
+ *
+ * 先按长度估算解码后的大小再 `Buffer.from`：一个形状合法但内容巨大的字符串（比如
+ * 有人直接传了几十 MB 的 base64）在解码那一刻就会占满内存，而它的长度本身已经说明
+ * 它超限了。估算是 `长度 × 3 / 4`（上界，忽略 padding 差异），够用。
+ *
+ * `Buffer.from(str, 'base64')` 对非法输入**不抛错**，它会尽量解码并丢掉不认识的字符 ——
+ * 所以先用正则过一遍，否则「随手一个字符串」会被解成一堆垃圾字节，然后在魔数判断那里
+ * 得到一个含义正确的 400，只是中间多绕一圈。
+ */
+function decodeBase64(value: string, maxBytes: number): Buffer | null {
+  if (value.length === 0) return null
+  if (Math.floor((value.length * 3) / 4) > maxBytes) return null
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes.length === 0 || bytes.length > maxBytes) return null
+  return bytes
+}
+
+/**
+ * 生成 itemId。
+ *
+ * 用 UUID 去掉连字符做后缀，而不是自增序号或时间戳：**两台设备同时上传不能撞 id**，
+ * 而撞了的后果不是报错 —— 后写的那张会顶掉先写的（主键冲突时 `createMany` 跳过），
+ * 用户看到的是「我传了两张，只多了一张」。
+ */
+function newUploadItemId(categoryId: string): string {
+  return caseUploadItemId(categoryId, randomUUID().replace(/-/g, ''))
+}
+
+/**
+ * 上传一批图片。
+ *
+ * **字节与归属在同一个事务里。** 分开写的话，一旦归属写入失败，库里就留下一批没人
+ * 引用的字节 —— 它们不在任何品类下显示，却永远占着空间，而且没有任何界面能删掉它们。
+ *
+ * 张数上限按品类计、在写入前查一次。查与写之间有竞态窗口（同时传最后两张时可能都过），
+ * 代价是超出上限一两张，与新建文件夹的重名判断是同一笔账：为罕见情形加锁不划算。
+ */
+export async function createUploads(
+  userId: string,
+  input: CreateCaseUploadsRequest,
+): Promise<CaseLibraryResult<CaseLibrarySnapshot>> {
+  const category = validateCategory(input.categoryId)
+  if (!category.ok) return category
+
+  const items = input.items
+  if (items.length === 0 || items.length > CASE_LIBRARY_LIMITS.UPLOAD_BATCH_MAX) {
+    return fail('invalid_items')
+  }
+
+  const decoded: {
+    itemId: string
+    mime: string
+    width: number
+    height: number
+    data: Buffer
+    thumb: Buffer
+  }[] = []
+  for (const item of items) {
+    const data = decodeBase64(item.data, CASE_LIBRARY_LIMITS.UPLOAD_BYTES_MAX)
+    const thumb = decodeBase64(item.thumb, CASE_LIBRARY_LIMITS.UPLOAD_THUMB_BYTES_MAX)
+    if (data === null || thumb === null) return fail('invalid_image')
+    const mime = sniffMime(data)
+    const thumbMime = sniffMime(thumb)
+    // 缩略图与原图必须都是图片。两处都判，是因为它们各走各的解码路径，只判一个
+    // 会让「缩略图是别的字节」这种情形带着一个错误的 content-type 存进库。
+    if (mime === null || thumbMime === null) return fail('invalid_image')
+    if (!Number.isInteger(item.width) || !Number.isInteger(item.height))
+      return fail('invalid_image')
+    if (item.width <= 0 || item.height <= 0) return fail('invalid_image')
+    if (item.width > 10000 || item.height > 10000) return fail('invalid_image')
+    decoded.push({
+      itemId: newUploadItemId(category.data),
+      mime,
+      width: item.width,
+      height: item.height,
+      data,
+      thumb,
+    })
+  }
+
+  const existing = await prisma.caseUpload.count({
+    where: { userId, categoryId: category.data, deletedAt: null },
+  })
+  if (existing + decoded.length > CASE_LIBRARY_LIMITS.UPLOADS_PER_CATEGORY_MAX) {
+    return fail('upload_limit')
+  }
+
+  /**
+   * 目标文件夹。**必须与 `categoryId` 同品类**（见 `CreateCaseUploadsRequest` 的注释）。
+   * 与移动不同，这里没有「这张图原来在哪」可讲，允许跨品类只会让新图出现在用户没打开
+   * 的那个图集里 —— 那看起来就像图丢了。
+   */
+  const folderId = input.folderId
+  if (folderId !== null) {
+    const folder = await prisma.caseFolder.findFirst({
+      where: { id: folderId, userId, deletedAt: null },
+      select: { categoryId: true },
+    })
+    if (folder === null || folder.categoryId !== category.data) return fail('folder_unavailable')
+  }
+
+  const snapshot = await withRevision(userId, async (tx) => {
+    await tx.caseUpload.createMany({
+      data: decoded.map((item) => ({
+        userId,
+        itemId: item.itemId,
+        categoryId: category.data,
+        width: item.width,
+        height: item.height,
+        byteSize: item.data.length,
+        thumbByteSize: item.thumb.length,
+        mime: item.mime,
+        data: new Uint8Array(item.data),
+        thumb: new Uint8Array(item.thumb),
+      })),
+    })
+    if (folderId !== null) {
+      await tx.caseItemPlacement.createMany({
+        data: decoded.map((item) => ({
+          userId,
+          itemId: item.itemId,
+          categoryId: category.data,
+          folderId,
+        })),
+        skipDuplicates: true,
+      })
+    }
+  })
+  return { ok: true, data: snapshot }
+}
+
+/** 取图接口要的那一份。`variant` 只有两档：网格用的缩略图、放大用的原图。 */
+export type CaseUploadImage = {
+  bytes: Buffer
+  mime: string
+  /** 缩略图与原图可能不同格式（客户端按需选 webp / jpeg），因此 MIME 跟着变体走。 */
+  version: string
+}
+
+/**
+ * 读一张上传图的字节。
+ *
+ * **按 `userId` 过滤**，与其它函数同一条规则：换个 itemId 也读不到别人的图。返回
+ * `null` 由路由层翻译成 404 —— 「不存在」与「不是你的」在这一层不区分，区分了等于
+ * 告诉对方「这个 id 是存在的」。
+ */
+export async function readUploadImage(
+  userId: string,
+  itemId: string,
+  variant: 'thumb' | 'full',
+): Promise<CaseUploadImage | null> {
+  if (!isCaseUploadItemId(itemId)) return null
+  const row = await prisma.caseUpload.findFirst({
+    where: { userId, itemId, deletedAt: null },
+    select: { data: true, thumb: true, mime: true, createdAt: true },
+  })
+  if (row === null) return null
+  const bytes = Buffer.from(variant === 'thumb' ? row.thumb : row.data)
+  return {
+    bytes,
+    mime: row.mime,
+    // 字节永不变（删了就是删了，改图等于重新上传一张），所以版本号用创建时间即可：
+    // 它只参与缓存键，不参与任何语义判断。
+    version: row.createdAt.getTime().toString(36),
+  }
+}
+
+/**
+ * 删除一张上传图。
+ *
+ * **软删。** 另一台设备可能正拿着这个 itemId 在发移动请求；硬删会让它收到一个分不清
+ * 「被删了」与「从没存在」的 404。软删之后那张图不再出现在任何快照里，字节留着由以后
+ * 的清理任务处置 —— 这与文件夹的删除是同一条取舍。
+ *
+ * 归属行跟着物理删除（不是置空）：图片已经不在了，留一条指向它的归属只会让统计张数
+ * 时多算一张。
+ *
+ * **只能删自己上传的。** 静态清单里的图（`cabinet-3`）根本没有这一行，进来就是 404。
+ */
+export async function deleteUpload(
+  userId: string,
+  itemId: string,
+): Promise<CaseLibraryResult<CaseLibrarySnapshot>> {
+  if (!isCaseUploadItemId(itemId)) return fail('not_found')
+  const row = await prisma.caseUpload.findFirst({
+    where: { userId, itemId, deletedAt: null },
+    select: { id: true },
+  })
+  if (row === null) return fail('not_found')
+
+  const snapshot = await withRevision(userId, async (tx) => {
+    await tx.caseItemPlacement.deleteMany({ where: { userId, itemId } })
+    await tx.caseUpload.update({ where: { id: row.id }, data: { deletedAt: new Date() } })
   })
   return { ok: true, data: snapshot }
 }

@@ -1,14 +1,18 @@
 import type {
   CaseLibrarySnapshot,
   CreateCaseFolderRequest,
+  CreateCaseUploadsRequest,
   MoveCaseItemsRequest,
 } from '@fanhe/shared'
 
 import { ApiError } from './api'
 import {
   caseLibraryRequest,
+  caseUploadImageRequest,
   createCaseFolderRequest,
+  createCaseUploadsRequest,
   deleteCaseFolderRequest,
+  deleteCaseUploadRequest,
   moveCaseItemsRequest,
   renameCaseFolderRequest,
 } from './api'
@@ -48,6 +52,36 @@ export function deleteCaseFolder(id: string): Promise<CaseLibrarySnapshot> {
 
 export function moveCaseItems(input: MoveCaseItemsRequest): Promise<CaseLibrarySnapshot> {
   return withAccessToken(async (token) => (await moveCaseItemsRequest(token, input)).library)
+}
+
+/**
+ * 上传一张图。
+ *
+ * **一次一张。** 接口本身支持一批（`CreateCaseUploadsRequest.items`），但界面按单张发：
+ * 进度因此是「第 3 张 / 共 5 张」而不是一个不知进度的整体，而且某一张失败时前面几张
+ * 已经落地 —— 整批提交的话，最后一张有问题会把前面几张一起回滚，用户得重传全部。
+ */
+export function uploadCaseImage(input: CreateCaseUploadsRequest): Promise<CaseLibrarySnapshot> {
+  return withAccessToken(async (token) => (await createCaseUploadsRequest(token, input)).library)
+}
+
+export function deleteCaseUpload(itemId: string): Promise<CaseLibrarySnapshot> {
+  return withAccessToken(async (token) => (await deleteCaseUploadRequest(token, itemId)).library)
+}
+
+/**
+ * 取一张上传图的 object URL。
+ *
+ * **返回 object URL 而不是地址**，因为取图接口要令牌。生命周期由调用方管：这个函数
+ * 每次都会新建一个，而 `URL.createObjectURL` 出来的地址不 revoke 就不会释放（它把
+ * 整张图钉在内存里）。缓存在 `use-case-upload-images.ts` 里统一持有，页面卸载时一起
+ * revoke。
+ */
+export function loadCaseUploadImage(itemId: string, variant: 'thumb' | 'full'): Promise<string> {
+  return withAccessToken(async (token) => {
+    const blob = await caseUploadImageRequest(token, itemId, variant)
+    return URL.createObjectURL(blob)
+  })
 }
 
 /**
