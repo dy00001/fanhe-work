@@ -104,8 +104,13 @@ export function isCollectRunStale(
 export const OPS_PLATFORMS = ['taobao', 'tmall'] as const
 export type OpsPlatform = (typeof OPS_PLATFORMS)[number]
 
-/** 指标单位。展示层据此决定加哪种前缀与小数位，组件里不判断。 */
-export const OPS_METRIC_UNITS = ['fen', 'count', 'percent', 'minute'] as const
+/**
+ * 指标单位。展示层据此决定加哪种前缀与小数位，组件里不判断。
+ *
+ * `second` 与 `minute` 分开而不是全用 min：客服平均响应时长的实测值是 23.38 秒，
+ * 折成分钟是 0.39 分 —— 单位换成分钟会让一个「正常」的数看起来像「异常的小数」。
+ */
+export const OPS_METRIC_UNITS = ['fen', 'count', 'percent', 'minute', 'second'] as const
 export type OpsMetricUnit = (typeof OPS_METRIC_UNITS)[number]
 
 /**
@@ -307,6 +312,39 @@ export const OPS_SUMMARY_METRICS = [
     pending: false,
   },
   {
+    key: 'csAvgReplySec',
+    label: '平均响应时长',
+    unit: 'second',
+    module: 'service',
+    source: 'period',
+    /*
+     * 与 csThreeMinRate 同一个接口的同一行（`base_avg.avgReplyDur1d`，单位秒）。
+     * 同样只有单日口径，见 OPS_DAILY_ONLY_SUMMARY_KEYS。
+     */
+    pending: false,
+  },
+  {
+    key: 'csConsultUv',
+    label: '咨询人数',
+    unit: 'count',
+    module: 'service',
+    source: 'period',
+    /* `base_avg.cstUv1d`。去重人数，跨天不可相加，所以同样走单日补齐。 */
+    pending: false,
+  },
+  {
+    key: 'csReplyUv',
+    label: '接待人数',
+    unit: 'count',
+    module: 'service',
+    source: 'period',
+    /*
+     * `base_avg.replyUv1d`。与咨询人数分开是因为差值本身有意义：咨询了但没被接待
+     * 的那部分，正是响应率的分子缺口。
+     */
+    pending: false,
+  },
+  {
     key: 'rateUnrepliedCnt',
     label: '待回复',
     unit: 'count',
@@ -354,7 +392,12 @@ export type OpsSummaryMetricKey = (typeof OPS_SUMMARY_METRICS)[number]['key']
  *
  * 名单只放后者。加进来之前先确认：平台确实没有区间口径，不是我们没采。
  */
-export const OPS_DAILY_ONLY_SUMMARY_KEYS: readonly OpsSummaryMetricKey[] = ['csThreeMinRate']
+export const OPS_DAILY_ONLY_SUMMARY_KEYS: readonly OpsSummaryMetricKey[] = [
+  'csThreeMinRate',
+  'csAvgReplySec',
+  'csConsultUv',
+  'csReplyUv',
+]
 
 /**
  * 从 summary 组里取一项。

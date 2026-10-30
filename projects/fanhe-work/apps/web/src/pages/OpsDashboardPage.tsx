@@ -23,6 +23,7 @@ import { OpsMultiLineChart } from '../components/ops/OpsMultiLineChart'
 import { OpsPendingPanel } from '../components/ops/OpsPendingPanel'
 import { OpsRankList } from '../components/ops/OpsRankList'
 import { OpsSection } from '../components/ops/OpsSection'
+import { OpsServiceMetrics } from '../components/ops/OpsServiceMetrics'
 import { OpsShopBindingPanel } from '../components/ops/OpsShopBindingPanel'
 import { OpsShopStrip } from '../components/ops/OpsShopStrip'
 import { OpsSummaryGrid } from '../components/ops/OpsSummaryGrid'
@@ -359,11 +360,14 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
           ) : null}
 
           {view === 'service' ? (
-            <OpsPendingPanel
-              title="服务体验"
-              intro="客服绩效与评价数据都在千牛后台，登录态已有，缺的是页面路径与接口录制。以下六项尚未接入。"
-              items={OPS_PENDING_SERVICE}
-            />
+            <div className="flex flex-col gap-3">
+              <OpsServiceMetrics group={data.dimensions.summary} />
+              <OpsPendingPanel
+                title="服务体验 · 缺口"
+                intro="响应与接待已经接入（见上方四格）。评价与问大家还缺页面路径与接口录制，服务保障状态随 E 批一起跑。"
+                items={OPS_PENDING_SERVICE}
+              />
+            </div>
           ) : null}
 
           {view === 'ads' ? (

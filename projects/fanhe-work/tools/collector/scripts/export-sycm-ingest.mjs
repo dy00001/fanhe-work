@@ -206,6 +206,22 @@ const SUMMARY_MAP = [
   ['payOldByrCnt', 'payOldByrCnt', false],
 ]
 
+/**
+ * 客服洞察 `layer.json` 的 `base_avg` 行 → summary 键。
+ *
+ * 键名必须与 `packages/shared/src/ops.ts` 的 `OPS_SUMMARY_METRICS` 逐字一致：
+ * 拼错不会报错，只会让界面一直显示「待接入」。四项都是单日口径，已列进
+ * `OPS_DAILY_ONLY_SUMMARY_KEYS`。
+ *
+ * 响应时长是**秒**（实测 23.380952），不是分钟 —— 契约里 unit 也写成 `second`。
+ */
+const SERVICE_LAYER_FIELDS = [
+  ['csThreeMinRate', 'manReplyRate3Min'],
+  ['csAvgReplySec', 'avgReplyDur1d'],
+  ['csConsultUv', 'cstUv1d'],
+  ['csReplyUv', 'replyUv1d'],
+]
+
 /* ── 单店转换 ─────────────────────────────────────────────────────────── */
 
 function buildPayload(account) {
@@ -447,7 +463,7 @@ function buildPayload(account) {
    */
   const svcFile = readCommand(dir, CMD.serviceLayer)
   if (svcFile === null) {
-    notes.push('缺 service-layer 探测，summary 少 csThreeMinRate 一项')
+    notes.push('缺 service-layer 探测，summary 少 4 项客服指标')
   } else {
     const rows = svcFile.json?.data
     if (!Array.isArray(rows)) {
@@ -455,20 +471,19 @@ function buildPayload(account) {
     } else {
       const self = rows.find((row) => row?.groupType === 'base_avg')
       if (self === undefined) {
-        /* 三行都不在、或者只有 avg/exc，说明接口语义变了。此时宁可缺这一项，
+        /* 三行都不在、或者只有 avg/exc，说明接口语义变了。此时宁可缺这几项，
            也不能退回取 avg —— 那是别人的数。 */
         notes.push('service-layer 里没有 base_avg 行，不取 avg/exc')
       } else {
-        const rate = num(self.manReplyRate3Min)
-        if (rate === null) {
-          notes.push('service-layer 的 base_avg 行没有 manReplyRate3Min')
-        } else {
-          dimensions.push({
-            type: 'summary',
-            key: 'csThreeMinRate',
-            label: 'csThreeMinRate',
-            metrics: { value: rate },
-          })
+        /* 一行 base_avg 里同时带着四个本店指标，逐项取。缺哪项就只缺哪项，
+           不因为一个字段没了就整块放弃 —— 响应率在、响应时长不在是可能的。 */
+        for (const [key, field] of SERVICE_LAYER_FIELDS) {
+          const value = num(self[field])
+          if (value === null) {
+            notes.push(`service-layer 的 base_avg 行没有 ${field}`)
+            continue
+          }
+          dimensions.push({ type: 'summary', key, label: key, metrics: { value } })
         }
       }
     }
@@ -534,9 +549,9 @@ for (const account of accounts) {
   if (notes.length > 0) {
     for (const note of notes) console.log(`    · ${note}`)
   }
-  /* 满配 14 项：home-overview 的 13 项 + 服务洞察的 csThreeMinRate。
+  /* 满配 17 项：home-overview 的 13 项 + 服务洞察 4 项（响应率、响应时长、咨询、接待）。
      少一项就要人看一眼 —— ingest 按类型清行，上报几项就把同窗口清到几项。 */
-  if (payload.daily.length === 0 || summaryRows < 14) missingCore = true
+  if (payload.daily.length === 0 || summaryRows < 17) missingCore = true
   produced.push(payload)
 }
 
@@ -562,7 +577,7 @@ if (TO_STDOUT) {
   console.log(`\n已写入 ${path.relative(REPO, dir)}/ 共 ${produced.length} 份`)
 }
 
-console.log(`\n提示：summary 少于 14 项时不要开自动上报。ingest 按类型清行，`)
+console.log(`\n提示：summary 少于 17 项时不要开自动上报。ingest 按类型清行，`)
 console.log(`      上报了几项就把同窗口的 summary 清到几项，缺的那几项会被删掉。`)
 
 process.exit(missingCore ? 2 : 0)

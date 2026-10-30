@@ -35,25 +35,11 @@ export type OpsPendingItem = {
 /** 服务体验页。 */
 export const OPS_PENDING_SERVICE: readonly OpsPendingItem[] = [
   /*
-   * 三分钟响应率（csThreeMinRate）2026-10-30 已接入，不再列在这里：数据来自
-   * `csp/api/core/monitor/overview/layer.json` 的 base_avg 行，已入库并在
-   * 入口卡上显示。下面两项同一个接口也一并返回了（avgReplyDur1d / cstUv1d），
-   * 但契约里还没有对应键、页面上也没有卡位，所以先标出来免得被当成没采到。
+   * 2026-10-30：客服洞察 `csp/api/core/monitor/overview/layer.json` 的 base_avg
+   * 行四项（响应率 / 响应时长 / 咨询人数 / 接待人数）已接入，从清单里移除了。
+   * 判断「接入没接入」看 summary 里有没有那一行，不看这里的清单 —— 清单只解释
+   * 「为什么还没有」，数据通了就该删掉，否则会出现「数字已经显示、清单还在说没接」。
    */
-  {
-    name: '旺旺人工平均响应时长',
-    field: 'csFirstRespSec',
-    backend: '千牛 › 客服绩效 › 响应',
-    batch: 'B',
-    blockedBy: '数据已随三分钟响应率入库，缺契约键与页面卡位',
-  },
-  {
-    name: '咨询数量',
-    field: 'consultCnt',
-    backend: '千牛 › 客服绩效 › 咨询量',
-    batch: 'B',
-    blockedBy: '数据已随三分钟响应率入库，缺契约键与页面卡位',
-  },
   {
     name: '评价待商家回复',
     field: 'rateUnrepliedCnt',
@@ -177,6 +163,11 @@ export const OPS_READY_SUMMARY: readonly { view: string; metrics: string; note: 
     metrics: '渠道结构、地域、搜索词、内容来源、跳失率、停留时长',
     note: '整段口径，不随区间变',
   },
+  {
+    view: '服务',
+    metrics: '三分钟响应率、平均响应时长、咨询人数、接待人数',
+    note: '单日口径，区间视图里带数据日期',
+  },
   { view: '推广', metrics: '活动报名是否成功（8 个活动）', note: '已采到，尚未单独成块' },
 ]
 
@@ -188,9 +179,9 @@ export const OPS_BATCH_TABLE: readonly {
 }[] = [
   {
     batch: 'B',
-    scope: '客服绩效三项、评价、问大家',
+    scope: '客服绩效四项（已接入）、评价、问大家',
     state: 'next',
-    note: '千牛登录态已有，改日期参数即可重跑',
+    note: '客服响应与接待已入库；剩评价待回复与问大家待回答',
   },
   {
     batch: 'C',

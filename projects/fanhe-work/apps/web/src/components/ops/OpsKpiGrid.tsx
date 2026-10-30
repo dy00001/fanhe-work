@@ -34,6 +34,7 @@ function kpiValue(item: OpsKpi): string {
     case 'percent':
       return formatPercent(item.value)
     case 'minute':
+    case 'second':
       return formatDuration(item.value)
   }
 }

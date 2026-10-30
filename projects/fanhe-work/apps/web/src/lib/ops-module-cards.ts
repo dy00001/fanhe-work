@@ -20,7 +20,7 @@ import {
 
 // 相对导入写全 `.ts`：本模块要能在 Node 的 `--experimental-strip-types` 下被单测
 // 直接加载，而 Node ESM 不会自动补扩展名（既有先例见 `launch-detect.ts`）。
-import { formatCount, formatFen, formatPercent } from './ops-display.ts'
+import { formatCount, formatDuration, formatFen, formatPercent } from './ops-display.ts'
 
 /** 未接入的占位文案。全项目只有这一处定义。 */
 export const OPS_MODULE_PENDING = '待接入'
@@ -105,6 +105,11 @@ export function buildOpsModuleCards(
         { label: '跳失率', value: metric('bounceRate', (value) => formatPercent(value, 1)) },
       ],
     },
+    /*
+     * 服务卡的第二格用「平均响应时长」而不是「待回复」。待回复（`rateUnrepliedCnt`）
+     * 还没接进来，卡片上只会常年显示「待接入」；响应时长与响应率同源同批入库，
+     * 两个数字放在一起才是可读的一组（响应得快不快、快多少秒）。
+     */
     {
       code: NAV_CODES.OPS_SERVICE,
       label: '服务体验',
@@ -114,7 +119,7 @@ export function buildOpsModuleCards(
           label: '三分钟响应',
           value: metric('csThreeMinRate', (value) => formatPercent(value, 1)),
         },
-        { label: '待回复', value: metric('rateUnrepliedCnt', formatCount) },
+        { label: '平均响应', value: metric('csAvgReplySec', (value) => formatDuration(value)) },
       ],
     },
     {

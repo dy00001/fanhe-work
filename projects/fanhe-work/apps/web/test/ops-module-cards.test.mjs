@@ -87,7 +87,7 @@ test('没有任何补充数据时，六个位置都是「待接入」', () => {
 
   assert.equal(valueOf(cards, NAV_CODES.OPS_ITEMS, '商品基础分'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '三分钟响应'), OPS_MODULE_PENDING)
-  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '待回复'), OPS_MODULE_PENDING)
+  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '平均响应'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '推广花费'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容来源访客'), OPS_MODULE_PENDING)
@@ -99,6 +99,7 @@ test('summary 里给了值就按单位格式化成真值', () => {
     makeData({
       summary: [
         summaryRow('csThreeMinRate', 0.862),
+        summaryRow('csAvgReplySec', 23.380952),
         summaryRow('kwCost', 1234500),
         summaryRow('kwCtr', 0.0312),
         summaryRow('itemBaseScore', 78),
@@ -112,6 +113,7 @@ test('summary 里给了值就按单位格式化成真值', () => {
   )
 
   assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '三分钟响应'), '86.2%')
+  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '平均响应'), '23.4 秒')
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '推广花费'), '¥1.2万')
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), '3.1%')
   assert.equal(valueOf(cards, NAV_CODES.OPS_ITEMS, '商品基础分'), '78')
@@ -123,13 +125,13 @@ test('summary 里给了值就按单位格式化成真值', () => {
 test('值为 0 显示 0，不能回落成「待接入」', () => {
   const cards = buildOpsModuleCards(
     makeData({
-      summary: [summaryRow('rateUnrepliedCnt', 0), summaryRow('csThreeMinRate', 0)],
+      summary: [summaryRow('csAvgReplySec', 0), summaryRow('csThreeMinRate', 0)],
     }),
     [],
     null,
   )
 
-  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '待回复'), '0')
+  assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '平均响应'), '0.0 秒')
   assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '三分钟响应'), '0.0%')
 })
 

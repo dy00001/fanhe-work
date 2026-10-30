@@ -141,6 +141,48 @@ describe('运营看板读模型', { skip: databaseUrl === null ? '数据库不�
           dimLabel: 'visitors',
           metrics: { value: 3_890, cycleCrc: 1.9 },
         },
+        /*
+         * 客服指标只有单日口径（平台按 dateType=1d 返回）。造一份落在窗口内的单日
+         * 快照，用来验「区间视图从单日快照补齐」。日期放在窗口中间而不是窗口末一天，
+         * 是为了区分「取最近一份」与「取窗口末日」两种实现 —— 后者在数据缺一天时
+         * 会静默取到更早的值。
+         */
+        {
+          shopId: shop.id,
+          dimType: 'summary',
+          statFrom: asDate('2026-10-15'),
+          statTo: asDate('2026-10-15'),
+          dimKey: 'csThreeMinRate',
+          dimLabel: 'csThreeMinRate',
+          metrics: { value: 1 },
+        },
+        {
+          shopId: shop.id,
+          dimType: 'summary',
+          statFrom: asDate('2026-10-15'),
+          statTo: asDate('2026-10-15'),
+          dimKey: 'csAvgReplySec',
+          dimLabel: 'csAvgReplySec',
+          metrics: { value: 23.380952 },
+        },
+        {
+          shopId: shop.id,
+          dimType: 'summary',
+          statFrom: asDate('2026-10-15'),
+          statTo: asDate('2026-10-15'),
+          dimKey: 'csConsultUv',
+          dimLabel: 'csConsultUv',
+          metrics: { value: 1 },
+        },
+        {
+          shopId: shop.id,
+          dimType: 'summary',
+          statFrom: asDate('2026-10-15'),
+          statTo: asDate('2026-10-15'),
+          dimKey: 'csReplyUv',
+          dimLabel: 'csReplyUv',
+          metrics: { value: 1 },
+        },
       ],
     })
   })
@@ -169,6 +211,42 @@ describe('运营看板读模型', { skip: databaseUrl === null ? '数据库不�
     assert.ok(payAmount !== undefined)
     assert.notEqual(payAmount.value, null)
     assert.equal(payAmount.masked, false)
+  })
+
+  /*
+   * 客服四项只有单日口径，区间快照里永远没有它们。没有这条补齐路径，界面在
+   * 「近 30 天」下永远是「待接入」，而单日视图却有数 —— 看起来像采集坏了。
+   *
+   * 同时守两件事：补齐的行必须留下 `supplementedFrom`（界面据此标日期），
+   * 且不能把原窗口的行挤掉（一次响应里两种口径并存是正常的）。
+   */
+  test('区间快照缺客服指标时，从窗口内最近一份单日快照补齐并标日期', async () => {
+    const data = await loadOpsDashboard({
+      shopCode: SHOP_CODE,
+      range: RANGE_SAME,
+      viewer: { permissions: [...ALL_PERMISSIONS] },
+    })
+    assert.ok(data !== null)
+
+    const summary = data.dimensions.summary
+    const byKey = new Map(summary.rows.map((row) => [row.key, row.metrics.value]))
+
+    assert.equal(byKey.get('csThreeMinRate'), 1)
+    assert.equal(byKey.get('csAvgReplySec'), 23.380952)
+    assert.equal(byKey.get('csConsultUv'), 1)
+    assert.equal(byKey.get('csReplyUv'), 1)
+
+    assert.deepEqual(summary.supplementedFrom, { from: '2026-10-15', to: '2026-10-15' })
+    assert.deepEqual([...(summary.supplementedKeys ?? [])].sort(), [
+      'csAvgReplySec',
+      'csConsultUv',
+      'csReplyUv',
+      'csThreeMinRate',
+    ])
+
+    // 原窗口的行不能被补进来的行挤掉：两种口径在同一份响应里并存是正常状态。
+    assert.equal(byKey.get('payAmount'), 9_990_000)
+    assert.equal(byKey.get('visitors'), 3_890)
   })
 
   test('无金额权限：金额字段消失、masked 记名、KPI 为 null 而不是 0', async () => {
