@@ -182,6 +182,8 @@ function text(cell, limit) {
 const CMD = {
   homeOverview: 1,
   itemList: 9,
+  /* 内容运营三项的来源。见 collect-via-plugin.mjs 的 SHOP_CMDS，序号 16。 */
+  videoList: 16,
   /* 服务洞察的序号接在四条维度探测（50~53）之后。见 collect-via-plugin.mjs 的 API_CMDS。 */
   serviceLayer: 54,
   /* 千牛两条接在六条裸探测（50~55）之后，见 collect-via-plugin.mjs 的 QIANNIU_CMDS。 */
@@ -297,8 +299,86 @@ function appendQianniu({ dir, slot, notes, dimensions }) {
   }
 }
 
-/* ── 单店转换 ─────────────────────────────────────────────────────────── */
+/** 视频分析回包的两种形状：插件包装后是 `{recordCount, data: []}`，
+ *  部分旧版本会包一层 `{code, data: {recordCount, data: []}}`。都要认。 */
+function videoRows(json) {
+  if (Array.isArray(json?.data)) return json.data
+  if (Array.isArray(json?.data?.data)) return json.data.data
+  return []
+}
 
+function videoRecordCount(json) {
+  const value = json?.recordCount ?? json?.data?.recordCount
+  return Number(value ?? Number.NaN)
+}
+
+/**
+ * 内容运营三项 → summary。取自**生意参谋 › 内容 › 视频分析**
+ * （`/cc/video/detail/list.json`，第 16 条命令）。
+ *
+ * 三条判断，每一条都对应一个「数字看着正常但其实是错的」的坑：
+ *
+ *   1. **整页截断就不写。** `recordCount` 是全量内容条数，`data` 只有一页。
+ *      两者不等时合计必然偏小，而且从数字上完全看不出来（页面上就是一个正常的数）。
+ *      宁可这一栏空着并留一条 note，也不要给一个偏小的数。这一页实测有到过
+ *      1441 条，默认 limit 只回一页。
+ *
+ *   2. **行内字段是 `{value}` 而不是裸数字。** 平台对空值回 `{}`，取 `.value`
+ *      才是数字；直接对对象做加法会得到 `"[object Object]"` 拼接或 NaN。
+ *
+ *   3. **三列都是「人数」，按内容条数相加会重复计数。** 行内只在这一条内容内
+ *      去重，同一个买家看了两条视频会在两行里各算一次。所以契约里写的是
+ *      「按内容条数合计」，看板文案不能标成「全店 XX 人数」。
+ */
+function appendVideoContent({ dir, notes, dimensions }) {
+  const file = readCommand(dir, CMD.videoList)
+  if (file === null) {
+    notes.push(`缺视频分析（第 ${CMD.videoList} 号文件），内容运营三项为空`)
+    return
+  }
+
+  const rows = videoRows(file.json)
+  const total = videoRecordCount(file.json)
+  if (rows.length === 0) {
+    /* 空不等于是 0：当天还没出数、或这段日期本来没有内容。两种情况都写 0 会更糟，
+       因为看板上分不出「真没有内容」和「没采到」。 */
+    notes.push(`视频分析回包里没有内容行（recordCount=${Number.isNaN(total) ? '缺失' : total}），内容运营三项为空`)
+    return
+  }
+  if (Number.isFinite(total) && total > rows.length) {
+    notes.push(
+      `视频分析共 ${total} 条内容，只回了 ${rows.length} 条（分页截断），` +
+        `合计会偏小，内容运营三项不入库`,
+    )
+    return
+  }
+
+  const wanted = [
+    ['contentExposeUv', 'itemExposeUv', '内容曝光人数'],
+    ['contentClkUv', 'itemClkUv', '内容点击人数'],
+    ['contentPlayUv', 'validPlayUv', '有效播放人数'],
+  ]
+
+  for (const [key, code, label] of wanted) {
+    let sum = 0
+    let seen = false
+    for (const row of rows) {
+      const cell = row?.[code]
+      const value = typeof cell === 'number' ? cell : cell?.value
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        sum += value
+        seen = true
+      }
+    }
+    if (!seen) {
+      notes.push(`视频分析 ${rows.length} 条内容里都没有 ${code}，${label}为空`)
+      continue
+    }
+    dimensions.push({ type: 'summary', key, label: key, metrics: { value: Math.round(sum) } })
+  }
+}
+
+/* ── 单店转换 ─────────────────────────────────────────────────────────── */
 function buildPayload(account) {
   const dir = resolveShopDir(SOURCE_ROOT, account)
   if (dir === null) {
@@ -567,6 +647,9 @@ function buildPayload(account) {
   /* 8. 千牛的待办计数。排在最后：它读的是第 56/57 号文件，与上面各段互不影响，
         失败只留 note，不会让逐日或 17 项核心指标跟着断。 */
   appendQianniu({ dir, slot, notes, dimensions })
+
+  /* 9. 内容运营三项。读第 16 号文件，与千牛互不影响。 */
+  appendVideoContent({ dir, notes, dimensions })
 
   return {
     payload: {

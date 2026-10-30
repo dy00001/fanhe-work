@@ -390,13 +390,44 @@ export const OPS_SUMMARY_METRICS = [
     source: 'period',
     pending: true,
   },
+  /*
+   * 内容运营三项：取自**生意参谋 › 内容 › 视频分析**（`/cc/video/detail/list.json`，
+   * 采集器第 16 条命令），不是光合平台。
+   *
+   * 光合（`guanghe.taobao.com`）是独立站点，插件只放行生意参谋域，要接得单独开一条
+   * 链路；而生意参谋这一页本来就有曝光 / 点击 / 播放三列，也一直在日增里采。之前
+   * 这一栏空着不是因为缺数据，是因为没人把这条命令接到契约上 —— 别为了「光合」两
+   * 个字去啃一个更难的来源。
+   *
+   * **口径：按内容条数合计，不是全店去重人数。** 回包是一条内容一行，行内的「人数」
+   * 只在这条内容内去重；跨条相加时同一个人会被重复计算（看了两条视频算两次）。所以
+   * 看板文案必须写明「按内容条数合计」，不能标成「全店 XX 人数」。
+   *
+   * `contentActUv`（内容活动人数）不在其中：视频分析没有活动口径，它只存在于光合。
+   */
   {
-    key: 'contentViewUv',
-    label: '内容查看',
+    key: 'contentExposeUv',
+    label: '内容曝光',
     unit: 'count',
     module: 'content',
     source: 'period',
-    pending: true,
+    pending: false,
+  },
+  {
+    key: 'contentClkUv',
+    label: '内容点击',
+    unit: 'count',
+    module: 'content',
+    source: 'period',
+    pending: false,
+  },
+  {
+    key: 'contentPlayUv',
+    label: '有效播放',
+    unit: 'count',
+    module: 'content',
+    source: 'period',
+    pending: false,
   },
 ] as const satisfies readonly OpsSummaryMetricSpec[]
 

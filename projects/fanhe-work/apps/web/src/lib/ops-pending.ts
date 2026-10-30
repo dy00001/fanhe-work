@@ -94,26 +94,21 @@ export const OPS_PENDING_ADS: readonly OpsPendingItem[] = [
 
 /** 内容运营页。 */
 export const OPS_PENDING_CONTENT: readonly OpsPendingItem[] = [
-  {
-    name: '内容查看人数',
-    field: 'contentViewUv',
-    backend: '光合平台 › 内容中心 › 数据',
-    batch: 'D',
-    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
-  },
-  {
-    name: '内容商品点击人数',
-    field: 'contentItemClickUv',
-    backend: '光合平台 › 内容中心 › 数据',
-    batch: 'D',
-    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
-  },
+  /*
+   * 2026-10-30：原来这里三项（内容查看 / 内容商品点击 / 内容活动）都挂着「光合平台」。
+   * 前两项已经从**生意参谋 › 内容 › 视频分析**接入（`contentExposeUv` / `contentClkUv` /
+   * `contentPlayUv`），口径是「按内容条数合计」，与光合那套不是同一套数，所以没沿用
+   * 原来的键名 —— 两个口径共用同一个键，迟早会有人拿它对不上账。
+   *
+   * 只剩「内容活动人数」确实只有光合有（视频分析里没有活动口径）。要接它得给插件
+   * 放开 `guanghe.taobao.com` 并在那个站点登录一次，暂时不做。
+   */
   {
     name: '内容活动人数',
     field: 'contentActUv',
     backend: '光合平台 › 内容中心 › 活动',
     batch: 'D',
-    blockedBy: '取数插件只放行生意参谋域，光合后台需另开一条取数链路',
+    blockedBy: '生意参谋视频分析没有活动口径；光合是独立站点，插件未放行',
   },
 ]
 
@@ -195,9 +190,11 @@ export const OPS_BATCH_TABLE: readonly {
   },
   {
     batch: 'D',
-    scope: '万相台三项、光合三项',
+    scope: '万相台三项、光合内容活动人数',
     state: 'blocked',
-    note: '万相台登录态已通（10-30 复核），但本店近一周无投放、余额接口异常；光合需另开取数链路',
+    note:
+      '万相台登录态已通（10-30 复核），但本店近一周无投放、余额接口异常；' +
+      '光合只剩「内容活动人数」一项，需另开取数链路。内容曝光 / 点击 / 播放已改从生意参谋视频分析接入',
   },
   { batch: 'E', scope: '服务保障状态', state: 'next', note: '单字段，随 B 批一起跑' },
   { batch: 'F', scope: '分店 2 至 5 全量', state: 'blocked', note: '需 4 套店铺授权' },

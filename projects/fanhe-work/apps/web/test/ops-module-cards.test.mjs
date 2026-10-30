@@ -90,8 +90,8 @@ test('没有任何补充数据时，六个位置都是「待接入」', () => {
   assert.equal(valueOf(cards, NAV_CODES.OPS_SERVICE, '平均响应'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '推广花费'), OPS_MODULE_PENDING)
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), OPS_MODULE_PENDING)
-  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容来源访客'), OPS_MODULE_PENDING)
-  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容查看'), OPS_MODULE_PENDING)
+  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容曝光'), OPS_MODULE_PENDING)
+  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容点击'), OPS_MODULE_PENDING)
 })
 
 test('summary 里给了值就按单位格式化成真值', () => {
@@ -103,7 +103,7 @@ test('summary 里给了值就按单位格式化成真值', () => {
         summaryRow('kwCost', 1234500),
         summaryRow('kwCtr', 0.0312),
         summaryRow('itemBaseScore', 78),
-        summaryRow('contentViewUv', 4321),
+        summaryRow('contentExposeUv', 4321),
         summaryRow('flowRecommendUv', 15000),
         summaryRow('bounceRate', 0.334),
       ],
@@ -117,7 +117,7 @@ test('summary 里给了值就按单位格式化成真值', () => {
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '推广花费'), '¥1.2万')
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), '3.1%')
   assert.equal(valueOf(cards, NAV_CODES.OPS_ITEMS, '商品基础分'), '78')
-  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容查看'), '4,321')
+  assert.equal(valueOf(cards, NAV_CODES.OPS_CONTENT, '内容曝光'), '4,321')
   assert.equal(valueOf(cards, NAV_CODES.OPS_FLOW, '推荐访客'), '15,000')
   assert.equal(valueOf(cards, NAV_CODES.OPS_FLOW, '跳失率'), '33.4%')
 })
@@ -145,21 +145,29 @@ test('值不是有限数时按缺失处理，不显示 NaN', () => {
   assert.equal(valueOf(cards, NAV_CODES.OPS_ADS, '点击率'), OPS_MODULE_PENDING)
 })
 
-test('内容来源访客：空集合显示待接入，有行则求和', () => {
+test('内容运营三格：没数据时待接入，有值则按人数格式显示', () => {
   const empty = buildOpsModuleCards(makeData(), [], null)
-  assert.equal(valueOf(empty, NAV_CODES.OPS_CONTENT, '内容来源访客'), OPS_MODULE_PENDING)
+  assert.equal(valueOf(empty, NAV_CODES.OPS_CONTENT, '内容曝光'), OPS_MODULE_PENDING)
+  assert.equal(valueOf(empty, NAV_CODES.OPS_CONTENT, '内容点击'), OPS_MODULE_PENDING)
 
+  /*
+   * 10-29 实测值：4 条内容，曝光 11+4+2+2、点击 4+2+1+2、有效播放 1。
+   * 这几个数是**按内容条数相加**得来的，同一个人看了两条会算两次 —— 断言只看数字，
+   * 口径写在契约注释与卡片 desc 里。
+   */
   const filled = buildOpsModuleCards(
     makeData({
-      content: [
-        { key: 'live', label: '直播', metrics: { visitors: 1200 } },
-        { key: 'video', label: '短视频', metrics: { visitors: 800 } },
+      summary: [
+        summaryRow('contentExposeUv', 19),
+        summaryRow('contentClkUv', 9),
+        summaryRow('contentPlayUv', 1),
       ],
     }),
     [],
     null,
   )
-  assert.equal(valueOf(filled, NAV_CODES.OPS_CONTENT, '内容来源访客'), '2,000')
+  assert.equal(valueOf(filled, NAV_CODES.OPS_CONTENT, '内容曝光'), '19')
+  assert.equal(valueOf(filled, NAV_CODES.OPS_CONTENT, '内容点击'), '9')
 })
 
 test('有成交链接：只数支付金额大于 0 的行', () => {

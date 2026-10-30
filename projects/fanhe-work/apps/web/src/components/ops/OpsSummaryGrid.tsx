@@ -12,8 +12,25 @@ import { OpsSection } from './OpsSection'
  *
  * 所以这一块有自己的标题说明，并写明窗口。这不是排版讲究，是口径的物理隔离。
  */
-export function OpsSummaryGrid(props: { group: OpsDimensionGroup; title?: string }) {
-  const rows = props.group.rows.filter((row) => OPS_SUMMARY_META[row.key] !== undefined)
+export function OpsSummaryGrid(props: {
+  group: OpsDimensionGroup
+  title?: string
+  /**
+   * 只显示这几项。不传就显示所有在 `OPS_SUMMARY_META` 里登记过的键 —— 流量页用的
+   * 是这个默认行为。内容页要单独摆三项，所以得能筛，否则会把流量那一堆一起带出来。
+   */
+  keys?: readonly string[]
+  /**
+   * 覆盖标题下那行说明。默认写的是「整段快照，不随页面区间变」，这对跳失率那类
+   * 指标是对的；但内容三项是区间累计（`source: 'period'`），照抄那句话就成了
+   * 反着说 —— 所以调用方要能把说明换掉。
+   */
+  note?: string
+}) {
+  const wanted = props.keys === undefined ? null : new Set(props.keys)
+  const rows = props.group.rows.filter(
+    (row) => OPS_SUMMARY_META[row.key] !== undefined && (wanted === null || wanted.has(row.key)),
+  )
   const windowLabel =
     props.group.window === null
       ? '无数据'
@@ -22,7 +39,7 @@ export function OpsSummaryGrid(props: { group: OpsDimensionGroup; title?: string
   return (
     <OpsSection
       title={props.title ?? '结构指标'}
-      note={`${windowLabel} · 整段快照，不随页面区间变`}
+      note={props.note ?? `${windowLabel} · 整段快照，不随页面区间变`}
     >
       {rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground-weak">还没有结构指标</p>

@@ -383,6 +383,26 @@ export const OPS_SUMMARY_META: Record<
   payOldByrCnt: { label: '老买家', unit: 'count', hint: '此前已在本店成交过的买家' },
   flowRecommendUv: { label: '推荐渠道访客', unit: 'count', hint: '手淘推荐位的访客' },
   flowSearchUv: { label: '搜索渠道访客', unit: 'count', hint: '手淘搜索的访客' },
+  /*
+   * 内容三项取自生意参谋 › 内容 › 视频分析（不是光合平台）。
+   * 三项都是「按内容条数合计」：行内只在这一条内容里去重，跨内容相加时同一个
+   * 买家会被重复计算，所以 hint 里必须写明，不能让人当成全店去重人数。
+   */
+  contentExposeUv: {
+    label: '内容曝光',
+    unit: 'count',
+    hint: '视频分析 › 曝光人数；按内容条数合计，同一人看了多条会重复计',
+  },
+  contentClkUv: {
+    label: '内容点击',
+    unit: 'count',
+    hint: '视频分析 › 点击人数；按内容条数合计，同一人点了多条会重复计',
+  },
+  contentPlayUv: {
+    label: '有效播放',
+    unit: 'count',
+    hint: '视频分析 › 有效播放人数；按内容条数合计，未去重',
+  },
 }
 
 /** 按摘要键格式化。未知键返回 null，调用方据此跳过。 */

@@ -358,7 +358,7 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
                   group={data.dimensions.content}
                   valueKey="visitors"
                   valueLabel="访客"
-                  unavailable="内容数据在光合平台，与生意参谋跨域，取数插件读不到。库里留存的是 30 天基线，不代表当日。"
+                  unavailable="生意参谋没有「内容来源访客」这个口径，内容数据在「内容运营」页（视频分析的曝光 / 点击 / 有效播放）。"
                 />
               </div>
             </div>
@@ -384,11 +384,19 @@ export function OpsDashboardPage({ item }: { item: NavItem }) {
           ) : null}
 
           {view === 'content' ? (
-            <OpsPendingPanel
-              title="内容运营"
-              intro="光合平台是独立后台，且已知内容板块接口抓到但不渲染数据面板。以下三项尚未接入。"
-              items={OPS_PENDING_CONTENT}
-            />
+            <div className="flex flex-col gap-3">
+              <OpsSummaryGrid
+                group={data.dimensions.summary}
+                title="内容表现"
+                keys={['contentExposeUv', 'contentClkUv', 'contentPlayUv']}
+                note="区间累计 · 取自生意参谋 › 内容 › 视频分析，按内容条数合计（同一人看多条会重复计）"
+              />
+              <OpsPendingPanel
+                title="内容运营 · 缺口"
+                intro="曝光 / 点击 / 有效播放已接（见上方三格），来源是生意参谋的视频分析，不是光合。光合只在「内容活动人数」这一项上还有独立口径，尚未接入。"
+                items={OPS_PENDING_CONTENT}
+              />
+            </div>
           ) : null}
 
           <OpsFooter collectedAt={data.flags.lastCollectedAt} />

@@ -64,18 +64,10 @@ export function buildOpsModuleCards(
   }
 
   /*
-   * 内容来源访客是唯一按「有没有行」判断的一项：它取自 content 维度，不在 summary
-   * 里。reduce 的初值是 0，所以必须先判空，否则「没采到」会被显示成「访客为零」。
+   * 内容卡不再有「内容来源访客」这一格。它原本取自 content 维度，但采集侧从来没有
+   * 产生过这个维度（导出 payload 里 content 组数恒为 0），所以那一格永远显示「待接入」。
+   * 2026-10-30 换成视频分析的三个真数据，见下方。
    */
-  const contentVisitors = (): string => {
-    const rows = data.dimensions.content.rows
-    if (rows.length === 0) return OPS_MODULE_PENDING
-    const sum = rows.reduce((acc, row) => {
-      const value = row.metrics.visitors
-      return acc + (typeof value === 'number' ? value : 0)
-    }, 0)
-    return formatCount(sum)
-  }
 
   return [
     {
@@ -142,10 +134,10 @@ export function buildOpsModuleCards(
     {
       code: NAV_CODES.OPS_CONTENT,
       label: '内容运营',
-      desc: '内容曝光到商品点击的转化链路',
+      desc: '曝光 → 点击 → 播放，按内容条数合计（未去重）',
       numbers: [
-        { label: '内容来源访客', value: contentVisitors() },
-        { label: '内容查看', value: metric('contentViewUv', formatCount) },
+        { label: '内容曝光', value: metric('contentExposeUv', formatCount) },
+        { label: '内容点击', value: metric('contentClkUv', formatCount) },
       ],
     },
   ]

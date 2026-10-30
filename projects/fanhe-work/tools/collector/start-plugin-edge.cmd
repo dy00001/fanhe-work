@@ -1,26 +1,33 @@
 @echo off
+chcp 65001 >nul
 setlocal
 rem ===========================================================================
-rem  start-plugin-edge.cmd - collector browser WITH the bridge extension loaded
+rem  start-plugin-edge.cmd — 采集 / 调试浏览器（固定调试端口 + 每店独立 profile）
 rem
-rem  Why this exists
-rem    The plugin chain (2026-10-26) reads shop data through the taobao-cli
-rem    bridge extension, so the extension must live inside the same browser
-rem    that holds the shop login. On this machine neither Chrome 155 (profile
-rem    "Default") nor the daily Edge profile had the bridge installed, and
-rem    Chrome no longer honours --load-extension. Edge still does, so this
-rem    entry loads extension\unpacked from runtime\sycm-cli directly.
+rem  为什么要这个入口
+rem    生意参谋、千牛这些后台页，数据接口全藏在页面发出的 XHR 里，页面源码里
+rem    看不到。要知道某个页面调了哪个接口，得能观察它发出的请求 —— 那要求浏览器
+rem    带着调试端口跑。而浏览器必须活在一次自动化调用之外（调用一返回，它起的
+rem    进程就会被收掉），所以「启动」这一步只能由人双击。
 rem
-rem    A browser started from an automation call dies as soon as that call
-rem    returns, and a login needs a window that outlives the call. That is why
-rem    the login step must be a human double-click on THIS file.
+rem  🔴 为什么不再用 --load-extension
+rem    实测（Edge 156，2026-10-30，三组对照）：
+rem      profile + 调试端口             → 进程存活，端口通
+rem      profile + 调试端口 + 扩展加载  → 进程存活，**端口根本不监听**（netstat 无影子）
+rem      fanhe-main + 调试端口          → 进程存活，端口通
+rem    带扩展加载时调试端口绑不上，CDP 永远连不过来，症状是「浏览器明明开着，
+rem    却说连不上 9222」。所以插件改成在 profile 里手动装一次（本脚本会打开
+rem    扩展管理页），不要再从命令行加载。
 rem
-rem  Usage
-rem    start-plugin-edge.cmd            (default shop: fanhe-main, port 9222)
-rem    start-plugin-edge.cmd s2         (port 9223)
+rem  用法
+rem      start-plugin-edge.cmd            默认 fanhe-main，端口 9222
+rem      start-plugin-edge.cmd s2         端口 9223
 rem
-rem  After it opens: log in to sycm.taobao.com in that window, keep it open,
-rem  then run scripts\run-plugin-daily.ps1 (or ask the agent to collect).
+rem  打开后做两件事，各做一次，之后不用再做
+rem      1. 在弹出的生意参谋页面登录
+rem         cookie 会留在这个 profile 里，以后启动就是登录态
+rem      2. 只有还想用这个浏览器采集时才需要：扩展页 → 打开「开发人员模式」
+rem         → 加载解压缩的扩展 → 选下面打印的 plugin 路径
 rem ===========================================================================
 
 set "SHOP=%~1"
@@ -50,30 +57,29 @@ if not exist "%EDGE%" (
   exit /b 1
 )
 
-rem One profile per shop. Sharing a profile silently swaps accounts: the bridge
-rem still sees a logged-in page, only the shop behind it has changed.
+rem 一店一份 profile。共用 profile 会静默串店：桥照样看到「已登录」，只是背后的
+rem 店铺换了，数据顶着别人的名字入库，全程不报错。
 set "PROFILE=%ROOT%\.browser-profile\%SHOP%"
 if not exist "%PROFILE%" mkdir "%PROFILE%"
 
-rem Workspace root is four levels up from tools\collector.
+rem 工作区根在 tools\collector 往上四层。
 set "EXT=%ROOT%\..\..\..\..\runtime\sycm-cli\extension\unpacked"
-if not exist "%EXT%\manifest.json" (
-  echo Bridge extension not found at:
-  echo   %EXT%
-  echo Copy runtime\sycm-cli from the delivery package first.
-  pause
-  exit /b 1
-)
 
 echo shop    : %SHOP%
-echo profile : %PROFILE%
 echo port    : %PORT%
+echo profile : %PROFILE%
 echo plugin  : %EXT%
+if not exist "%EXT%\manifest.json" echo           ^(插件文件不在，采集前需先解压 runtime\sycm-cli^)
+echo.
+echo 浏览器打开后：
+echo   1. 登录生意参谋（只需一次）
+echo   2. 要采集的话，到扩展页加载上面那个 plugin 路径（也只需一次）
+echo.
+echo 这个窗口可以关掉，浏览器会继续开着。
 echo.
 
-start "" "%EDGE%" --remote-debugging-port=%PORT% --user-data-dir="%PROFILE%" --load-extension="%EXT%" --no-first-run --no-default-browser-check --new-window "https://sycm.taobao.com/portal/home.htm"
+start "" "%EDGE%" --remote-debugging-port=%PORT% --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --new-window "https://sycm.taobao.com/portal/home.htm" "edge://extensions"
 
-echo Edge started. Log in to sycm.taobao.com in that window and keep it open.
-echo Then run:  scripts\run-plugin-daily.ps1 -Date <yyyy-MM-dd>
-echo.
+timeout /t 4 >nul
+echo 已启动。验证端口：powershell -c "irm http://127.0.0.1:%PORT%/json/version"
 pause
