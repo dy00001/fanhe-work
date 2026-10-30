@@ -18,10 +18,11 @@ import {
   normalizeCaseFolderName,
 } from '../dist/index.js'
 
-test('品类 id 清单固定为十三个，顺序即界面顺序', () => {
-  assert.equal(CASE_CATEGORY_IDS.length, 13)
+test('品类 id 清单固定为十四个，顺序即界面顺序', () => {
+  assert.equal(CASE_CATEGORY_IDS.length, 14)
   assert.deepEqual(CASE_CATEGORY_IDS.slice(0, 3), ['cabinet', 'wardrobe', 'bookcase'])
-  assert.equal(CASE_CATEGORY_IDS.at(-1), 'aluminum-wood-cabinet')
+  // 尾部三个一起钉：新品类只能追加在末尾，「铝木柜」这些既有品类的相对位置不动。
+  assert.deepEqual(CASE_CATEGORY_IDS.slice(-2), ['aluminum-wood-cabinet', 'special-craft'])
 })
 
 test('isCaseCategoryId 只认清单里的值', () => {

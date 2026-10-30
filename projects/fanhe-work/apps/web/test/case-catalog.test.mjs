@@ -3,13 +3,14 @@
  *
  * 与其它前端测试同款：Node 内置测试器直接测源码，启用类型擦除即可。
  *
- * 这里钉六组不变量：
- *   1. 十三个品类一个不少、顺序固定；
- *   2. `id` 唯一、非空、英文小写加连字符；
+ * 这里钉七组不变量：
+ *   1. 十四个品类一个不少、顺序固定；
+ *   2. `id` 唯一、非空、英文小写加连字符，且与共享包的白名单逐项一致；
  *   3. 每个非空 `cover` 指向的文件真实存在于 `public/cases/`，非空，且确实是 WebP；
  *   4. 封面文件名与品类 `id` 一一对应；
  *   5. 每个案例位的图同样真实存在、是 WebP，且 `id` / `categoryId` / 文件名三者对得上；
- *   6. 磁盘上没有「清单里不存在」的孤儿图 —— 反向检查，第 5 条查不出来。
+ *   6. 磁盘上没有「清单里不存在」的孤儿图 —— 反向检查，第 5 条查不出来；
+ *   7. 允许某一格只有封面（靠上传填充），但必须是显式登记过的那一格。
  *
  * 界面本身（按钮开合、图集翻页、裁切效果）不在这里，它要靠浏览器跑起来才判定得了。
  *
@@ -29,11 +30,13 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { CASE_CATEGORY_IDS } from '@fanhe/shared'
+
 import { CASE_CATEGORIES } from '../src/lib/case-catalog.ts'
 
 /**
- * 原型里的九个主力品类加 2026-10-29 追加的四个空间品类，顺序即界面顺序。
- * 改动这一行等于改产品口径，必须是有意的。
+ * 原型里的九个主力品类、2026-10-29 追加的四个空间品类、以及 2026-10-30 追加的
+ * 「特殊工艺」，顺序即界面顺序。改动这一行等于改产品口径，必须是有意的。
  */
 const EXPECTED_NAMES = [
   '橱柜',
@@ -49,7 +52,18 @@ const EXPECTED_NAMES = [
   '阳台柜',
   '浴室柜',
   '铝木柜',
+  '特殊工艺',
 ]
+
+/**
+ * 当前刻意没有静态案例的品类。
+ *
+ * 这**不是给配置漏配开的免罪符**，是钉住一个产品状态：特殊工艺这一格先只有封面，
+ * 内部图片由用户在图集窗口里自己上传（落在 `case_uploads`，与这份静态清单无关）。
+ * 因此它必须同时满足「cases 为空」与「封面存在」—— 后者由封面断言管，这里再卡一次
+ * 「空得有理」。哪天它有了静态案例，这条会红，提醒把这个 id 从集合里删掉。
+ */
+const UPLOAD_ONLY_CATEGORY_IDS = new Set(['special-craft'])
 
 /**
  * `id` 用英文是为了将来进 URL 与接口参数时不必再转一层拼音。
@@ -91,10 +105,20 @@ function assertImageFile(src) {
   assert.equal(head.subarray(8, 12).toString('latin1'), 'WEBP', `${abs} 不是 WebP`)
 }
 
-test('十三个品类齐全且顺序固定', () => {
+test('十四个品类齐全且顺序固定', () => {
   assert.deepEqual(
     CASE_CATEGORIES.map((category) => category.name),
     EXPECTED_NAMES,
+  )
+})
+
+test('前端清单与共享包的品类 id 白名单逐项一致', () => {
+  // 服务端拿 `CASE_CATEGORY_IDS` 挡非法品类，前端拿 `CASE_CATEGORIES` 画界面。只在
+  // 一边加品类，表现是「首页有这张卡、点进去上传被 400 拒掉」，而两边的测试各自
+  // 都是绿的。这条把两份清单钉在一起。
+  assert.deepEqual(
+    CASE_CATEGORIES.map((category) => category.id),
+    [...CASE_CATEGORY_IDS],
   )
 })
 
@@ -129,10 +153,33 @@ test('封面文件名与品类 id 一一对应', () => {
   }
 })
 
-test('每个品类都有案例，且案例图真实存在', () => {
-  // 与上一轮的断言方向相反：那时钉的是「cases 必须为空」，现在是「必须不空」。
-  // 案例库落库之后，这条会换成校验 CaseSlot 的字段完整性，方向不变。
+test('每个品类都有案例，或明确标注为「靠上传填充」', () => {
+  // 与上一轮的断言方向相反：那时钉的是「cases 必须为空」，后来是「必须不空」。
+  // 现在多一档：允许某一格先只有封面，但必须是**显式登记过**的那一格（见
+  // `UPLOAD_ONLY_CATEGORY_IDS`）。不登记就留空会红，登记了却偷偷配了静态案例也会红。
+  //
+  // **例外集合本身要先查。** 里面某个 id 拼错时，豁免对那一格静默失效，报出来的错是
+  // 「特殊工艺 没有案例」—— 看起来像清单漏配，实际是这行拼错了。把这项前置，诊断信息
+  // 才落在真因上。
+  for (const id of UPLOAD_ONLY_CATEGORY_IDS) {
+    assert.ok(
+      CASE_CATEGORIES.some((category) => category.id === id),
+      `例外集合里的 ${id} 不在品类清单里`,
+    )
+  }
+
   for (const category of CASE_CATEGORIES) {
+    if (UPLOAD_ONLY_CATEGORY_IDS.has(category.id)) {
+      assert.equal(
+        category.cases.length,
+        0,
+        `${category.name} 已标注为靠上传填充，却又配了静态案例，请把它从例外集合里删掉`,
+      )
+      // 空品类在界面上会连占位图都没有。有封面才谈得上「点进去自己传」，
+      // 否则用户看到的是两层空白。
+      assert.notEqual(category.cover, null, `${category.name} 没有封面，用户进来会看到两层空白`)
+      continue
+    }
     assert.ok(category.cases.length > 0, `${category.name} 没有案例`)
     for (const slot of category.cases) {
       assert.ok(slot.id.startsWith(`${category.id}-`), `${slot.id} 的 id 前缀与品类不符`)

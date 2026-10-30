@@ -25,7 +25,9 @@
  * 品类 id 的唯一事实来源。
  *
  * 顺序即界面顺序，前九个是主力品类，后四个（榻榻米、阳台柜、浴室柜、铝木柜）是
- * 2026-10-29 扩进来的「其它空间」。顺序写在这里而不是由前端排：前端那份
+ * 2026-10-29 扩进来的「其它空间」。第十四个 `special-craft`（特殊工艺）是 2026-10-30
+ * 追加的：它没有随前端分发的案例图，图片全靠用户上传，但**品类 id 必须在这里**，否则
+ * 上传接口会以「品类不合法」拒掉那张图。顺序写在这里而不是由前端排：前端那份
  * `CASE_CATEGORIES` 要按它来排，两边顺序不一致的表现是「弹窗里第一个是橱柜、
  * 首页第一个是衣柜」，而这种偏差没人会在评审时注意到。
  *
@@ -46,6 +48,7 @@ export const CASE_CATEGORY_IDS = [
   'balcony-cabinet',
   'bathroom-cabinet',
   'aluminum-wood-cabinet',
+  'special-craft',
 ] as const
 
 export type CaseCategoryId = (typeof CASE_CATEGORY_IDS)[number]

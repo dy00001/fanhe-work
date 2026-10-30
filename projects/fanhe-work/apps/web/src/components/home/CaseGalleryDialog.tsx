@@ -45,7 +45,9 @@ export function CaseGalleryDialogContent({
         {/* `pr-8` 给右上角的关闭按钮让位。 */}
         <DialogTitle className="pr-8 text-left">全部品类</DialogTitle>
         <DialogDescription className="text-left">
-          共 13 个品类，按品类查看已交付方案。
+          {/* 数字从数据里取，不写字面量：上次加品类时这行仍是「共 13 个」，
+              弹窗里却已经铺了十四张卡。这类文案没有测试会红，只能靠不写死。 */}
+          共 {CASE_CATEGORIES.length} 个品类，按品类查看已交付方案。
         </DialogDescription>
       </DialogHeader>
 
