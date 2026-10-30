@@ -98,9 +98,11 @@ if ($exportCode -eq 2) {
 $payloadDir = Join-Path $ROOT ("data\payload\" + $Date)
 Write-Host ""
 Write-Host ("payload dir: " + $payloadDir)
-Write-Host "Import with:"
+# 导入器一次只吃一个契约文件（`readFileSync` 直接读，传目录会 EISDIR）。
+# 这里必须打印到文件，别打印目录 —— 照目录跑会得到一个看不懂的错。
+Write-Host "Import with (one file per shop):"
 Write-Host ("  cd " + (Split-Path -Parent (Split-Path -Parent $ROOT)))
-Write-Host ("  pnpm db:ops-import " + $payloadDir)
+Write-Host ("  pnpm db:ops-import " + (Join-Path $payloadDir "<shop>.json"))
 Write-Host ""
 Write-Host "Verify in the dashboard: /ops/trade?p=1d&shop=<code>"
 
