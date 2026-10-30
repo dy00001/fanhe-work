@@ -309,7 +309,12 @@ export function CaseLibraryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          'relative flex flex-col gap-0 p-0',
+          // **不要在这里加 `relative`。** 基类里的定位是 `fixed`，而 tailwind-merge 把
+          // `relative` 与 `fixed` 视为同一组，后者胜出会把弹窗拽回文档流，再叠上基类残留的
+          // `translate-[-50%,-50%]`，面板就被推到视口之外，只剩一层遮罩（2026-10-30 的真实故障）。
+          // 拖拽遮罩与放大层用的 `absolute inset-0` 不需要 `relative` 祖先：`fixed` 本身就是
+          // positioned，已经能当包含块。
+          'flex flex-col gap-0 p-0',
           // 平时高度跟着内容走：一个品类只有五六张图时，弹窗就该是紧凑的，不该留一大片
           // 空白。但**打开放大层时必须撑满** —— 放大层是 `absolute inset-0` 贴在弹窗上的，
           // 弹窗矮，放大层就只有那么高，图片被压成一小块（之前的故障反过来：图片溢出被裁）。
