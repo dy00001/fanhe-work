@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { CASE_CATEGORIES, type CaseCategory } from '../../lib/case-catalog'
+import { CASE_IMMERSIVE_DIALOG_STYLE } from '../../lib/case-immersive-style'
 import {
   buildCaseIndex,
   buildCaseLibraryView,
@@ -44,7 +45,8 @@ import { CaseLightbox } from './CaseLightbox'
  * 三层结构，每层职责单一：
  *   - 筛选条（{@link CaseFolderBar}）：我在看哪一组。它同时是文件夹的增删改入口。
  *   - 网格（{@link CaseImageGrid}）：这一组里有哪些图。浏览态点开放大，选择态点击勾选。
- *   - 放大层（{@link CaseLightbox}）：看清一张。点图片或空白处退回网格。
+ *   - 放大层（{@link CaseLightbox}）：看清一张。滚轮缩放、拖动平移，点图片进全屏，
+ *     点空白处退回网格。
  *
  * **数据来自服务端，且每次写操作都整份替换。** `useCaseLibrary` 负责拉取、轮询、乐观
  * 更新与回滚，这一层只管把 view 画出来。多设备同步因此不需要在这里写任何代码 ——
@@ -73,6 +75,15 @@ export function CaseLibraryDialog({
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [lightboxId, setLightboxId] = useState<string | null>(null)
+  /**
+   * 放大层是不是处在全屏。
+   *
+   * 这个布尔值住在父层，而不是放大层自己身上，因为**要撑满的是弹窗**：放大层是
+   * `absolute inset-0` 贴着 `DialogContent` 的，弹窗多高它就多高。让放大层自己去
+   * `fixed inset-0` 行不通 —— 弹窗带 `translate-[-50%]` 的 transform，会把它当成
+   * 包含块，`fixed` 反而被缩回弹窗那么大。
+   */
+  const [immersive, setImmersive] = useState(false)
   /**
    * 上传进度。`null` 表示没有在传。**进度按张数而不是字节**：一张图从上传播到入库
    * 是几十毫秒，用户看到的是「第 2 张 / 共 5 张」这种能数的东西，字节数反而让人去
@@ -305,7 +316,19 @@ export function CaseLibraryDialog({
   const notice = library.message ?? uploadNotice
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // 关窗时顺手把放大层与全屏一起收掉。留在内存里的话，下次点开同一个品类会
+        // 直接落在放大层上（用户按的是缩略图），而全屏状态挂在 `DialogContent` 的
+        // 内联样式上，留着会让下一次打开就是一个满屏弹窗。
+        if (!next) {
+          setLightboxId(null)
+          setImmersive(false)
+        }
+        onOpenChange(next)
+      }}
+    >
       <DialogContent
         className={cn(
           // **不要在这里加 `relative`。** 基类里的定位是 `fixed`，而 tailwind-merge 把
@@ -321,6 +344,9 @@ export function CaseLibraryDialog({
           // 宽度按「四列缩略图」反推，只受视口限制。
           'sm:max-w-[min(1120px,94vw)]',
         )}
+        // 全屏时把弹窗撑满视口，放大层自然跟着变大。见 `CASE_IMMERSIVE_DIALOG_STYLE`
+        // —— 注意里面那条 `translate: none`，少了它整块面板会被基类的位移推到视口外面。
+        style={immersive ? CASE_IMMERSIVE_DIALOG_STYLE : undefined}
         onDragEnter={(event) => {
           // 只认文件拖拽：从浏览器里拖一段文字或一个链接进来，不该弹出「正在上传」。
           if (!event.dataTransfer.types.includes('Files')) return
@@ -646,7 +672,14 @@ export function CaseLibraryDialog({
           <CaseLightbox
             items={shown}
             index={lightboxIndex}
-            onClose={() => setLightboxId(null)}
+            immersive={immersive}
+            onImmersiveChange={setImmersive}
+            onClose={() => {
+              // 先收回弹窗尺寸再关放大层：反过来的话，会先看到放大层消失、弹窗还是满屏
+              // 的一帧，再缩回原尺寸 —— 一次关闭闪两下。
+              setImmersive(false)
+              setLightboxId(null)
+            }}
             onStep={(delta) => {
               const next = (lightboxIndex + delta + shown.length) % shown.length
               const item = shown[next]
