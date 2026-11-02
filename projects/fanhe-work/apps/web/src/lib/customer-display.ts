@@ -478,8 +478,9 @@ export function poolRoleLabel(role: 'designer' | 'sales'): string {
  * 分三档而不是直接显示百分数：复核的人要做的是「这条要不要看一眼」，「72%」
  * 回答不了这个问题，而「需人工判断」可以。具体数字仍然显示，但只作为副文本。
  *
- * 60 是规则引擎的「陈旧证据」上限，70 是「差距明显」的下限。两个阈值都来自
- * `customer-pool.ts` 的常量，改规则时要一起看。
+ * **这里不再有「陈旧证据上限 60」**：那个封顶已从引擎移除（它让排序正好反过来 ——
+ * 真实 92 分的强结论被压到 60，和平局混在一起）。数据新旧改由 `confidenceHint`
+ * 单独标注，阈值只剩「差距明显」这一层含义。
  */
 export function confidenceLevel(confidence: number): 'high' | 'medium' | 'low' {
   if (confidence >= 70) return 'high'
@@ -492,4 +493,66 @@ export function confidenceLabel(confidence: number): string {
   if (level === 'high') return '可以直接采用'
   if (level === 'medium') return '建议看一眼'
   return '需人工判断'
+}
+
+/** `confidenceHint` 只关心依据码，不关心文案与分值，所以收窄成这个形状。 */
+type ReasonCodeLike = { code: string }
+
+export type PoolConfidenceHint = {
+  /**
+   * `none` 是独立的一档，不是「比 low 更低」。
+   *
+   * 平局时引擎确实给了方向（按阶段先验），但它**没有算出来的把握**。把这种情况
+   * 并入 low，界面就会显示「0%，需人工判断」——读起来像「引擎有一点点把握」，
+   * 而事实是「引擎没结论」。这两种状态给复核的人的心理预期完全不同。
+   */
+  tone: 'high' | 'medium' | 'low' | 'none'
+  /** 主标签。 */
+  label: string
+  /** 是否在标签旁显示百分数。0 分不显示：写成「0%」会被当成一个测量结果。 */
+  showScore: boolean
+  /** 需要额外解释时的一句话，否则为 null。 */
+  note: string | null
+}
+
+/**
+ * 公共池建议的置信度提示。
+ *
+ * 把三件事分开说清楚，不再用一个数字背两层含义：
+ *   - 证据有多一致 → `tone` / `label` / `showScore`
+ *   - 证据有多旧   → `stale` 依据码（引擎不再因此压分）
+ *   - 判决口径     → `note`
+ */
+export function confidenceHint(
+  confidence: number,
+  reasons: readonly ReasonCodeLike[],
+): PoolConfidenceHint {
+  const stale = reasons.some((reason) => reason.code === 'stale')
+
+  if (confidence <= 0) {
+    return {
+      tone: 'none',
+      label: '证据不足',
+      showScore: false,
+      note: stale
+        ? '两侧证据互相抵消，按当前阶段给了方向；群聊也已超过 90 天没有新消息，请人工指派'
+        : '两侧证据互相抵消，按当前阶段给了方向，请人工指派',
+    }
+  }
+
+  if (stale) {
+    return {
+      tone: confidenceLevel(confidence),
+      label: `${confidenceLabel(confidence)}（数据较旧）`,
+      showScore: true,
+      note: '群聊最近 90 天没有新消息，结论来自较早的对话，可能已经不再适用',
+    }
+  }
+
+  return {
+    tone: confidenceLevel(confidence),
+    label: confidenceLabel(confidence),
+    showScore: true,
+    note: null,
+  }
 }

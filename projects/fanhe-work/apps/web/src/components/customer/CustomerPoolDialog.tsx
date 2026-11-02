@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError } from '../../lib/api'
 import {
-  confidenceLabel,
+  confidenceHint,
   formatDateTime,
   poolRoleLabel,
   stageLabel,
@@ -259,6 +259,16 @@ function PoolRow(props: {
   const { item, adjusting } = props
   const suggestion = item.suggestion
 
+  /*
+   * 这里刻意不写 `suggestion === null ? null : ...`。
+   *
+   * 那样写的话，下方 JSX 里 `suggestion === null ? A : (<>...</>)` 的三元虽然收窄了
+   * `suggestion`，却不会连带收窄 `hint`，于是每一处引用都要 `hint!` 或可选链，
+   * 而真正「没有建议」的情况根本走不到那些分支。给一个用不到的缺省值更干净 ——
+   * 它唯一的作用是让类型变成非空。
+   */
+  const hint = confidenceHint(suggestion?.confidence ?? 0, suggestion?.reasons ?? [])
+
   return (
     <li className="rounded-xl border border-border p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -283,11 +293,11 @@ function PoolRow(props: {
         <>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge variant="secondary" className="text-[10px]">
-              建议归 {poolRoleLabel(suggestion.role)}
+              {hint.tone === 'none' ? '倾向' : '建议'}归 {poolRoleLabel(suggestion.role)}
               {suggestion.suggestedUserName === null ? '' : ` · ${suggestion.suggestedUserName}`}
             </Badge>
             <span className="text-xs text-muted-foreground">
-              置信度 {suggestion.confidence}%（{confidenceLabel(suggestion.confidence)}）
+              {hint.showScore ? `置信度 ${suggestion.confidence}%` : '置信度'}（{hint.label}）
             </span>
             {suggestion.status === 'pending' ? null : (
               <Badge variant="outline" className="text-[10px]">
@@ -295,6 +305,16 @@ function PoolRow(props: {
               </Badge>
             )}
           </div>
+
+          {/*
+            证据不足时把话说死：「倾向」而不是「建议」，并单独一行说明为什么。
+            没有这一行，0 分会被读成「引擎给了个很弱的判断」，而实际是「没判出来」。
+            用 muted 而不是另找警示色：`--m-*` 只在亮色主题里定义了一份，暗色下
+            那行会几乎看不见；这里靠位置（紧跟置信度）而不是颜色来突出。
+          */}
+          {hint.note === null ? null : (
+            <p className="mt-1 text-xs text-muted-foreground">{hint.note}</p>
+          )}
 
           {/*
             依据按分值降序展示。`weight` 为 0 的是「说明性依据」（缺原文、证据接近），

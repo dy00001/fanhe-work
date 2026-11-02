@@ -139,8 +139,14 @@ test('两边证据接近时按阶段收口，并留下 tie-break 依据', () => 
     verdict.reasons.some((item) => item.code === 'tie-break'),
     '平局必须留下 tie-break 依据，否则复核的人看不到为什么不按分数判',
   )
-  // 平局意味着格局为 0，置信度只由下限兜底，不能高。
-  assert.ok(verdict.confidence <= 60, `平局置信度不应高，实际 ${verdict.confidence}`)
+  /*
+   * 平局就是 0，如实显示 0。
+   *
+   * 这里曾断言 `<= 60`，而实现把 0 兜底抬到 20 —— 两个数字都能通过，等于这条用例
+   * 从没验过「平局到底给了多少」。钉成 0 才能拦住「又把它抬上去凑个好看的分」：
+   * 20 和 0 在界面上长得不像，但在判断上差的是「有两成把握」和「没有结论」。
+   */
+  assert.equal(verdict.confidence, 0)
 })
 
 test('读不到群文件时置信度封顶 45', () => {
@@ -159,7 +165,19 @@ test('读不到群文件时置信度封顶 45', () => {
   assert.ok(verdict.reasons.some((item) => item.code === 'no-transcript'))
 })
 
-test('最近 90 天没有新消息时置信度封顶 60', () => {
+test('最近 90 天没有新消息只加标记，不压分', () => {
+  /*
+   * 这条曾经断言 `<= 60`（旧行为：陈旧证据把置信度封在 60）。
+   *
+   * 封顶的后果在真实数据上看得见：53 条建议里有 13 条的真实证据强度是 92–100 分，
+   * 是全表最扎实的结论，却因为群聊停在两年前被压成 60，排在「平局硬填」上面不远。
+   * 排序因此和证据强度反向 —— 复核的人按顺序点，先处理的是最不确定的。
+   *
+   * 现在的口径：置信度只回答「两侧证据有多一致」，新旧由 `stale` 依据码单独标注。
+   *
+   * 推导：图纸 20 次 ×4 分 + 拆单 20 次 ×4 分 = 160，封顶 100；加 designing 先验 16
+   * 后仍封顶 100。销售侧定金 1 次 ×4 分 = 4。总分 104，差距 96 → 96/104 ≈ 92%。
+   */
   const verdict = classifyPoolCustomer(
     emptyEvidence({
       stage: 'designing',
@@ -169,8 +187,32 @@ test('最近 90 天没有新消息时置信度封顶 60', () => {
       salesHits: hits({ 定金: 1 }, { 定金: 0 }),
     }),
   )
-  assert.ok(verdict.confidence <= 60, `应封顶 60，实际 ${verdict.confidence}`)
-  assert.ok(verdict.reasons.some((item) => item.code === 'stale'))
+  assert.equal(verdict.confidence, 92, `陈旧不该压分（旧行为会得 60），实际 ${verdict.confidence}`)
+  assert.ok(
+    verdict.reasons.some((item) => item.code === 'stale'),
+    '标记必须还在',
+  )
+})
+
+test('零命中但有聊天记录时置信度是 0，不是「默认 20」', () => {
+  /*
+   * `EMPTY_CONFIDENCE = 20` 只属于「一条消息都没有」那条路径 —— 它表达的是
+   * 「新客户默认销售接待」这个流程事实的可信度。
+   *
+   * 一旦它也去给全表做下限，就会出现「有聊天记录、一个关键词都没命中」的客户
+   * 拿着 20 分进队列，看起来像「引擎查过了，有两成把握」，实际是「什么都没读到」。
+   */
+  const verdict = classifyPoolCustomer(
+    emptyEvidence({
+      stage: 'designing',
+      messageCount: 8,
+      recentMessageCount: 8,
+      salesHits: [],
+      designerHits: [],
+    }),
+  )
+  assert.equal(verdict.confidence, 0)
+  assert.equal(verdict.role, 'designer', '零命中时按阶段先验收口')
 })
 
 test('单字计数上限 20：刷屏不放大权重', () => {

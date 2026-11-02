@@ -138,7 +138,13 @@ export type PoolEvidence = {
 
 export type PoolVerdict = {
   role: CustomerRole
-  /** 0–100。两个分数接近时低，证据缺失时被上限压住。 */
+  /**
+   * 0–100，只表示「两侧证据的一致性」。
+   *
+   * 0 是一个正常值，不是一个待修的脏数据：平局与「有记录但零命中」都落在这里，
+   * 含义是「引擎按阶段先验给了个方向，但没有算出来的把握」。界面必须把它显示成
+   * 「证据不足」而不是「0%」。
+   */
   confidence: number
   salesScore: number
   designerScore: number
@@ -159,10 +165,14 @@ const RECENT_MULTIPLIER = 1
 const SCORE_CAP = 100
 /** 读不到群文件时置信度上限。低于 60 的条目界面会提示「需要人工判断」。 */
 const NO_TRANSCRIPT_CONFIDENCE_CAP = 45
-/** 完全没有证据时的默认置信度。 */
+/**
+ * 完全没有聊天记录时给的置信度。
+ *
+ * **只在「一条消息都没有」这一条路径上用**，不能拿去给全表做下限。它表达的是
+ * 「新客户默认销售接待」这个流程事实的可信度，不是「算不出来时凑个数」——
+ * 后者会把平局（真实 0 分）抬成 20，让「引擎没结论」看起来像「引擎有 20% 把握」。
+ */
 const EMPTY_CONFIDENCE = 20
-/** 最近窗口内没有新消息时的置信度上限。 */
-const STALE_CONFIDENCE_CAP = 60
 
 function clampScore(value: number): number {
   return Math.min(SCORE_CAP, Math.max(0, Math.round(value)))
@@ -214,11 +224,25 @@ function formatTop(top: { term: string; count: number }[]): string {
  *      才会落进来（例如 `quoted` 8 分档、两侧差 2 分）。写用例验证这条分支时，
  *      别拿 `designing`（16 分）去构造 —— 那样差距永远够大，用例会以为分支坏了。
  *   3. 否则按分数高的一方。
+ *
+ * **置信度与判决用的是两套分数，这不是笔误。**
+ *
+ * 判决要比「最终分数」（关键词 + 先验 + 金额），因为先验也是证据 —— 把它排除在
+ * 比对之外，「阶段说设计师、聊天说销售」的客户会永远按聊天判，先验等于白配。
+ *
+ * 置信度只回答「两侧**聊天证据**有多一致」，因此分母里不能有先验。混进去的后果
+ * 实测过：一位客户八条消息、一个关键词都没命中，阶段是 `designing`，先验 16 分
+ * 独占全部分数 → 差距 = 总量 → 置信度 99%。界面会把「什么都没读到」显示成
+ * 「可以直接采用」，这是最坏的一种错 —— 它比低分更容易骗过复核的人。
  */
 export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
   const sales = scoreTerms(evidence.salesHits, SALES_TERMS)
   const designer = scoreTerms(evidence.designerHits, DESIGNER_TERMS)
   const prior = STAGE_PRIOR[evidence.stage]
+
+  /** 纯关键词分，不含先验与合同额。置信度只用这一对数字算。 */
+  const keywordSales = sales.score
+  const keywordDesigner = designer.score
 
   let salesScore = sales.score
   let designerScore = designer.score
@@ -291,18 +315,17 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
 
   const total = salesScore + designerScore
   let role: CustomerRole
-  let margin: number
+  /** 判决是否由**关键词证据的差距**决定。走阶段先验收口时为 false。 */
+  let decidedByEvidence = false
 
   if (total === 0) {
     // 有记录但一个关键词都没命中（例如只发了图片与地址）。按阶段收口。
     role = prior.role
-    margin = 0
   } else {
     const diff = Math.abs(salesScore - designerScore)
     if (diff <= Math.max(4, total * 0.2)) {
       // 规则 2：证据互相抵消，交给阶段。
       role = prior.role
-      margin = 0
       reasons.push({
         code: 'tie-break',
         label: '两侧证据接近',
@@ -311,12 +334,25 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
       })
     } else {
       role = salesScore > designerScore ? 'sales' : 'designer'
-      margin = diff
+      decidedByEvidence = true
     }
   }
 
-  // 置信度 = 差距占证据总量的比例。没有差距时为 0，再由证据质量决定下限。
-  let confidence = total === 0 ? 0 : Math.round((margin / total) * 100)
+  /*
+   * 置信度只由**关键词证据**算，且只在「判决确实由证据决定」时才有值。
+   *
+   * 两种情况一律为 0，而不是给个好看的数：
+   *   - 走了阶段先验（平局 / 零命中 / 先验分独大）—— 证据没能决定，谈不上多一致；
+   *   - 关键词总分为 0 —— 什么都没读到，分母不存在。
+   *
+   * 它不回答「证据新不新」「读没读到原文」：那两件事各有依据码（`stale` /
+   * `no-transcript`），由界面单独标注。一个数字背两层含义时，两层都会失真。
+   */
+  const keywordTotal = keywordSales + keywordDesigner
+  let confidence = 0
+  if (decidedByEvidence && keywordTotal > 0) {
+    confidence = Math.round((Math.abs(keywordSales - keywordDesigner) / keywordTotal) * 100)
+  }
   if (!evidence.hasTranscript) {
     confidence = Math.min(confidence, NO_TRANSCRIPT_CONFIDENCE_CAP)
     reasons.push({
@@ -327,11 +363,16 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
     })
   } else if (evidence.recentMessageCount === 0) {
     /*
-     * 最近窗口内一条消息都没有：判定基于的是几个月前的对话，而客户可能早已换了
-     * 对接人。这类条目仍然给出结论，但置信度压到 60 以下，让复核的人知道
-     * 「这个结论来自旧证据」。
+     * 最近窗口内一条消息都没有：判定基于的是几个月前的对话。
+     *
+     * 这里**只加依据、不压分**。压分曾让排序正好反过来 —— 实测 53 条里有 13 条
+     * 的证据强度是 92–100 分，是全表最扎实的结论，却因为群聊停在两年前被压到 60，
+     * 排在「平局硬填」的上面不远，复核时和噪声分不开。
+     *
+     * 判据没变的是「结论来自旧对话」这件事，所以 `stale` 依据照留；变的是让
+     * 置信度只回答「证据有多一致」，把「证据有多旧」交给界面单独标注 —— 一个
+     * 数字背两层含义时，两层都会失真。
      */
-    confidence = Math.min(confidence, STALE_CONFIDENCE_CAP)
     reasons.push({
       code: 'stale',
       label: '最近 90 天没有新消息',
@@ -339,7 +380,7 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
       weight: 0,
     })
   }
-  confidence = Math.min(99, Math.max(EMPTY_CONFIDENCE, confidence))
+  confidence = Math.min(99, confidence)
 
   return { role, confidence, salesScore, designerScore, reasons }
 }

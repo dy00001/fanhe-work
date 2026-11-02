@@ -14,6 +14,7 @@ import { test } from 'node:test'
 import {
   activityCeiling,
   activityOf,
+  confidenceHint,
   donutArcs,
   fillStageBuckets,
   formatFen,
@@ -250,4 +251,51 @@ test('折线峰值：全零返回 -1，不能把第一格当成峰值', () => {
   assert.equal(peakHourIndex([{ count: 4 }, { count: 4 }]), 0)
   assert.equal(activityCeiling([{ count: 0 }]), 1)
   assert.equal(activityCeiling([{ count: 7 }, { count: 2 }]), 7)
+})
+
+test('置信度 0 分显示「证据不足」，不能写成 0%', () => {
+  /*
+   * 0 是引擎的正常输出（平局 / 一个词都没命中），不是一个待修的脏数据。
+   *
+   * 写成「置信度 0%（需人工判断）」会被读成「引擎有一点点把握」——百分数本身
+   * 就在暗示这是一个测量结果。所以 0 分时既不显示数字，也用独立档位 `none`，
+   * 让调用处能把「建议归」改成「倾向归」。
+   */
+  const hint = confidenceHint(0, [{ code: 'tie-break' }])
+  assert.equal(hint.tone, 'none')
+  assert.equal(hint.label, '证据不足')
+  assert.equal(hint.showScore, false)
+  assert.ok(hint.note !== null, '必须解释为什么没有结论')
+  assert.match(hint.note, /人工指派/)
+})
+
+test('陈旧证据只加提示，不把结论说成「可以直接采用」', () => {
+  /*
+   * 引擎已不再因陈旧压分（那会让 92 分的强结论掉到 60、排序反向）。
+   * 代价是这类条目会拿到高分，所以界面这一层必须把「数据较旧」说出来 ——
+   * 否则一位两年前的老客户会顶着「可以直接采用」出现在队列最前面。
+   */
+  const fresh = confidenceHint(92, [{ code: 'keyword-designer' }])
+  assert.equal(fresh.tone, 'high')
+  assert.equal(fresh.label, '可以直接采用')
+  assert.equal(fresh.note, null)
+
+  const stale = confidenceHint(92, [{ code: 'keyword-designer' }, { code: 'stale' }])
+  assert.equal(stale.tone, 'high', '分数不变，强度档位也不变')
+  assert.match(stale.label, /数据较旧/)
+  assert.ok(stale.note !== null, '必须说明结论来自旧对话')
+})
+
+test('证据不足且数据陈旧时，两条原因都要提到', () => {
+  const hint = confidenceHint(0, [{ code: 'tie-break' }, { code: 'stale' }])
+  assert.equal(hint.tone, 'none')
+  assert.match(hint.note, /人工指派/)
+  assert.match(hint.note, /90 天/)
+})
+
+test('正常档位不受新逻辑影响', () => {
+  assert.equal(confidenceHint(50, []).label, '建议看一眼')
+  assert.equal(confidenceHint(69, []).tone, 'medium')
+  assert.equal(confidenceHint(70, []).tone, 'high')
+  assert.equal(confidenceHint(30, []).showScore, true, '非 0 分仍要显示数字')
 })
