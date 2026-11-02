@@ -27,11 +27,12 @@ import { WorkbenchPage } from './pages/WorkbenchPage'
  * 放在这里而不是共享包：它是**路由结构**，属于前端；共享包那份清单回答的是
  * 「有哪些模块、谁看得见」，两者不该混在一起。
  *
- * `workbench` 下面有三段：`launch` 是 UI 改造后新加的 —— 首页占掉了 `/workbench`
+ * `workbench` 下面有四段：`launch` 是 UI 改造后新加的 —— 首页占掉了 `/workbench`
  * 本身，启动通道的完整面板需要自己的地址，否则「配置管理」就没有入口了。
+ * `quote`（报价查价）同理：首页那张卡是弹窗，整页形态要一个能直接发给同事的地址。
  */
 const MODULE_SUB_ROUTES: Partial<Record<NavCode, readonly string[]>> = {
-  [NAV_CODES.WORKBENCH]: ['launch', 'notes', 'events'],
+  [NAV_CODES.WORKBENCH]: ['launch', 'notes', 'events', 'quote'],
   // 本机设置（案例图片缓存目录）。挂在系统设置模块下，但它与账号权限无关 ——
   // 它的每一条都是「这台机器」的属性，因此不进导航清单，只占一个二级地址。
   [NAV_CODES.SYSTEM_SETTINGS]: ['preferences'],

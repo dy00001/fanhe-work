@@ -10,6 +10,7 @@ import { registerEventRoutes } from './routes/events.js'
 import { registerLaunchRoutes } from './routes/launch.js'
 import { registerNoteRoutes } from './routes/notes.js'
 import { registerOpsRoutes } from './routes/ops.js'
+import { registerQuoteRoutes } from './routes/quote.js'
 import { registerSetupRoutes } from './routes/setup.js'
 import { registerSystemUserRoutes } from './routes/system-users.js'
 import { registerVersionRoutes } from './version/manifest.js'
@@ -64,6 +65,9 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   // 客户信息平台。读档案、改档案、看金额、推进订单四个权限点分开，
   // 金额是字段级裁剪，理由见 routes/customers.ts 顶部。
   registerCustomerRoutes(app)
+  // 报价查价。读走 `personal.quote.read`，写不挂权限点（owner 直入 / 口令解锁），
+  // 判据与理由见 routes/quote.ts 顶部与 quote/access.ts 顶部。
+  registerQuoteRoutes(app)
   // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
   registerVersionRoutes(app)
 

@@ -11,9 +11,9 @@ import {
   LoaderCircle,
   Music,
   Plus,
+  ReceiptText,
   Rocket,
   Scissors,
-  Sparkles,
   UserRound,
   Video,
   type LucideIcon,
@@ -42,16 +42,26 @@ import { useLaunchProfiles } from '../../lib/use-launch-profiles'
 import { formatRelativeTime } from '../../lib/relative-time'
 
 import { LaunchProfileDialog, type LaunchFormValues } from '../launch/LaunchProfileDialog'
+import { QuotePanel } from '../quote/QuotePanel'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '../ui/dialog'
 
 /**
- * 六个 AI 模块单元卡（原型编号 10 的第二排与主卡右侧）。
+ * AI 模块单元卡里还是静态占位的那几张（原型编号 10 的第二排与主卡右侧）。
  *
- * 全部是静态占位：它们对应的是尚未开发的模块，因此每张卡右上角带「开发中」。
- * `hue` 决定图标底与悬停辉光的色相，取共享包已有的模块分色令牌 —— 颜色不在前端
- * 另写一套，否则暗色下会出现两套明度标准。
+ * 每张卡右上角带「开发中」。`hue` 决定图标底与悬停辉光的色相，取共享包已有的模块
+ * 分色令牌 —— 颜色不在前端另写一套，否则暗色下会出现两套明度标准。
+ *
+ * **原来排在第一的「无限画布」已经撤掉**，它那一格给了报价查价（{@link QuoteEntryCard}）。
+ * 格位一共六格，撤一张补一张，Bento 的矩形关系不变。
  */
 const AI_MODULES: readonly { title: string; desc: string; hue: string; Icon: LucideIcon }[] = [
-  { title: '无限画布', desc: '自由排布方案稿与素材', hue: 'var(--m-teal)', Icon: Sparkles },
   { title: '创建图像', desc: '文生图 / 图生图', hue: 'var(--m-blue)', Icon: ImageIcon },
   { title: '视频创作', desc: '脚本到成片的生成', hue: 'var(--m-purple)', Icon: Video },
   { title: '音乐创作', desc: '为方案配背景音', hue: 'var(--m-amber)', Icon: Music },
@@ -89,6 +99,9 @@ export function LaunchSection() {
   const { can } = useAuth()
   const canRead = can(PERMISSIONS.PERSONAL_LAUNCH_READ)
   const canWrite = can(PERMISSIONS.PERSONAL_LAUNCH_WRITE)
+  // 查价卡按读权限决定出不出现。没有权限时整格退回占位卡（见下方渲染处的注释）——
+  // 让它消失会在 Bento 上留一个洞，而「洞」看起来像页面坏了。
+  const canQuote = can(PERMISSIONS.PERSONAL_QUOTE_READ)
 
   // 列表 / 状态 / 增删改都走共享 hook，与工作台面板共用一份数据源（见 use-launch-profiles）。
   const {
@@ -119,6 +132,7 @@ export function LaunchSection() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<LaunchProfile | null>(null)
   const [focusPath, setFocusPath] = useState(false)
+  const [quoteOpen, setQuoteOpen] = useState(false)
 
   // 选中态 = 用户点过的那条，否则回落到列表第一条。用「派生」而不是「effect 里 setState」：
   // 这样既能在 profiles 初次到达时自动选中第一条，又不会在用户手动选过、或 profiles 重新
@@ -469,6 +483,73 @@ export function LaunchSection() {
             </p>
           )}
         </div>
+
+        {/* 第一排第三格：报价查价（原来这里是「无限画布」的占位卡）。
+
+            卡面类名与右下角那几张占位卡共用 `.mod-card`，图标底与悬停辉光同样按
+            `--hue` + `--wash` 走 —— 两套卡并排时材质必须一致，否则一眼能看出
+            「这张是新加的」。区别只有两处：**没有「开发中」角标**（它是能用的），
+            以及整张卡是个按钮（`text-left` 是必需的，`<button>` 默认居中）。
+
+            `Dialog` 是 Radix 的根，**不产出 DOM 节点**，因此它可以作为网格的子项
+            直接包住触发器，不会多出一层盒子把 Bento 的格子挤歪。
+
+            没有读权限时退回一张一模一样的「无限画布」占位卡：格子留着，人看到的是
+            「这功能还在做」，而不是「这里缺了一块」。 */}
+        {canQuote ? (
+          <Dialog open={quoteOpen} onOpenChange={setQuoteOpen}>
+            <DialogTrigger asChild>
+              <button
+                type="button"
+                style={{ '--hue': 'var(--m-teal)' } as React.CSSProperties}
+                className="mod-card w-full text-left"
+              >
+                <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
+                  <ReceiptText className="size-[18px]" />
+                </span>
+                <div className="mod-body w-full min-w-0">
+                  <h4 className="mb-0.5 text-lg leading-7 font-medium">报价查价</h4>
+                  <p className="text-sm leading-5 text-muted-foreground">
+                    五金与柜体单价，搜名字、型号或规格
+                  </p>
+                </div>
+              </button>
+            </DialogTrigger>
+
+            {/* 弹窗形状照 `CaseGalleryDialogContent` 那条验证过的路子：`p-0 gap-0` +
+                两段式 `grid-rows-[auto_minmax(0,1fr)]` —— 头部固定、内容在剩余空间里。
+
+                **不要在 `className` 里加 `relative` 或任何定位类。** `DialogContent`
+                的基类是 `fixed` + `translate-x/y-[-50%]`，tailwind-merge 会把同组的
+                定位类当成覆盖对象删掉 `fixed`，只剩一个平移量，窗口被推出视口
+                （2026-10-30 真实故障，门禁全绿）。判据：`test/case-library-dialog-layout.test.mjs`。 */}
+            <DialogContent className="max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 p-0 sm:max-w-[min(1180px,94vw)]">
+              <DialogHeader className="px-6 pt-6 pb-4">
+                {/* `pr-8` 给右上角的关闭按钮让位。 */}
+                <DialogTitle className="pr-8 text-left">报价查价</DialogTitle>
+                <DialogDescription className="text-left">
+                  台账里的官方单价。改了价会记一条审计，换图优先用人工上传的那张。
+                </DialogDescription>
+              </DialogHeader>
+              <div className="min-h-0 overflow-hidden px-6 pb-6">
+                <QuotePanel variant="dialog" onRequestClose={() => setQuoteOpen(false)} />
+              </div>
+            </DialogContent>
+          </Dialog>
+        ) : (
+          <div style={{ '--hue': 'var(--m-teal)' } as React.CSSProperties} className="mod-card">
+            <span className="absolute top-3 right-3 z-[1] rounded-full border border-border px-2 text-xs leading-[1.6] text-muted-foreground-weak">
+              开发中
+            </span>
+            <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
+              <ImageIcon className="size-[18px]" />
+            </span>
+            <div className="mod-body w-full min-w-0">
+              <h4 className="mb-0.5 text-lg leading-7 font-medium">报价查价</h4>
+              <p className="text-sm leading-5 text-muted-foreground">当前账号没有查看权限</p>
+            </div>
+          </div>
+        )}
 
         {AI_MODULES.map(({ title, desc, hue, Icon }) => (
           <div

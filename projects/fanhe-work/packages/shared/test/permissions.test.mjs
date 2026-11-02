@@ -25,20 +25,19 @@ import {
   matchesGrant,
 } from '../dist/index.js'
 
-const PERSONAL_READ = [
-  PERMISSIONS.PERSONAL_LAUNCH_READ,
-  PERMISSIONS.PERSONAL_NOTE_READ,
-  PERMISSIONS.PERSONAL_EVENT_READ,
-]
-
-const PERSONAL_ALL = [
-  PERMISSIONS.PERSONAL_LAUNCH_READ,
-  PERMISSIONS.PERSONAL_LAUNCH_WRITE,
-  PERMISSIONS.PERSONAL_NOTE_READ,
-  PERMISSIONS.PERSONAL_NOTE_WRITE,
-  PERMISSIONS.PERSONAL_EVENT_READ,
-  PERMISSIONS.PERSONAL_EVENT_WRITE,
-]
+/**
+ * `personal` 模块下的全部权限点与其中的读点。
+ *
+ * **从清单派生，不手写枚举。** 早先这两行是一份手抄的六个编码，加一个
+ * `personal.quote.read` 时它们就红了 —— 断言本身没错，但它拦住的是「新权限点没
+ * 登记进这份手抄表」，而不是「通配展开算错了」。也就是说它当时守的是维护动作、
+ * 不是行为；而真正该验的「`personal.*` 是否覆盖了模块下每一条」恰恰不需要枚举。
+ *
+ * 派生之后断言强度没有下降：左边 `expandGrants` 走的是通配匹配器，右边走的是
+ * 编码前缀，两条不同的路算同一件事，对不上就说明匹配器错了。
+ */
+const PERSONAL_ALL = ALL_PERMISSIONS.filter((code) => code.startsWith('personal.'))
+const PERSONAL_READ = PERSONAL_ALL.filter((code) => code.endsWith('.read'))
 
 const sorted = (codes) => [...codes].sort()
 
@@ -86,6 +85,25 @@ test('非末尾通配符只吃一段：`personal.*.read` 只给读权限，不�
 test('模式比编码短且无通配符时不命中', () => {
   assert.equal(matchesGrant('personal.note', PERMISSIONS.PERSONAL_NOTE_READ), false)
   assert.equal(matchesGrant('personal', PERMISSIONS.PERSONAL_NOTE_READ), false)
+})
+
+/**
+ * 报价查价**只有一个读点，没有写点**。
+ *
+ * 写路径的准入是「owner 角色 + 解锁令牌」，不走权限点 —— 因为 admin / designer /
+ * sales / member 四个角色都持 `personal.*`，任何 `personal.quote.write` 加上去都会
+ * 被通配**静默地**发给这四个角色，口令当场变成摆设，而且库里、日志里、界面上全都
+ * 看不出异常。
+ *
+ * 这条断言守的就是那个设计：哪天有人「顺手」补一个写点，这里立刻红。手写文档提醒
+ * 不住这种事 —— 加一个权限点在当时的上下文里看起来完全合理。
+ */
+test('报价查价只有读点，没有写点', () => {
+  assert.ok(PERSONAL_ALL.includes(PERMISSIONS.PERSONAL_QUOTE_READ))
+  assert.deepEqual(
+    ALL_PERMISSIONS.filter((code) => code.startsWith('personal.quote.')),
+    [PERMISSIONS.PERSONAL_QUOTE_READ],
+  )
 })
 
 test('模式比编码长时不命中', () => {

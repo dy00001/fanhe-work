@@ -39,6 +39,19 @@ export const PERMISSIONS = {
   PERSONAL_EVENT_READ: 'personal.event.read',
   PERSONAL_EVENT_WRITE: 'personal.event.write',
 
+  // ---- 报价查价。**只有一个读点，没有写点。** ----
+  //
+  // 查价是销售与设计的日常动作，1225 条台账本来就是给大家查的，因此读点随
+  // `personal.*` 发给所有业务角色。
+  //
+  // **写路径刻意不设权限点。** 需求是「只有超管能直接改价，其他人凭超管设的口令」，
+  // 而权限点表达不了口令这层。更要紧的是：admin / designer / sales / member 四个
+  // 角色都持有 `personal.*` 通配，加一个 `personal.quote.write` 会被它静默地一并
+  // 授予 —— 那时口令就是摆设，且没有任何报错：库里的授权行是对的、日志是干净的、
+  // 界面上也看不出谁能改。所以改价与改图的判据写在 `apps/api/src/quote/access.ts`
+  // 里，认的是**角色**（owner）与**解锁会话**，不认权限点。
+  PERSONAL_QUOTE_READ: 'personal.quote.read',
+
   // ---- 运营数据。三个权限点对应「能进页面 / 能看金额 / 能看采集健康」三件事。 ----
   //
   // 金额与页面准入拆成两个点，是这个模块唯一非做不可的设计：店铺 GMV、客单价属于
@@ -111,6 +124,7 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.PERSONAL_NOTE_WRITE]: '撰写、修改、删除工作纪要',
   [PERMISSIONS.PERSONAL_EVENT_READ]: '查看事件记录',
   [PERMISSIONS.PERSONAL_EVENT_WRITE]: '新增、勾选完成、删除事件记录',
+  [PERMISSIONS.PERSONAL_QUOTE_READ]: '查看报价查价（改价另需超管口令）',
 
   [PERMISSIONS.OPS_SHOP_READ]: '进入运营看板并查看非金额指标',
   [PERMISSIONS.OPS_FINANCE_READ]: '查看运营看板中的金额类指标',

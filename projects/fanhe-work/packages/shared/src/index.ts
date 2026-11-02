@@ -22,6 +22,7 @@ export * from './navigation.js'
 export * from './note.js'
 export * from './ops.js'
 export * from './permissions.js'
+export * from './quote.js'
 export * from './user-admin.js'
 export * from './version.js'
 

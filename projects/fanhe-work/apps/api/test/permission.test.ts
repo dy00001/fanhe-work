@@ -300,14 +300,20 @@ describe('权限守卫', { skip: reachable ? false : '数据库不可达，跳�
     assert.equal(body.user.id, userId)
     assert.equal(body.user.role, ROLE_CODES.VIEWER)
 
-    // viewer 的授权模式是 personal.*.read，展开后恰好是三个读权限。这条断言同时
+    // viewer 的授权模式是 personal.*.read，展开后恰好是这四个读权限。这条断言同时
     // 验证了通配符按「非末尾只匹配一段」解释，与 T1-02 修正后的规则一致。
+    //
+    // 这里**手写枚举、不派生**：它要回答的是「只读角色到底看得见哪几项」，是一份
+    // 需要人读的清单 —— 派生出来的版本读起来是「它等于它自己」，看不出 viewer 究竟
+    // 多了哪个模块的读权限。新增 personal 读点时这里会红一次，那正是提醒「有一个
+    // 模块刚刚对只读角色开放了」。
     assert.deepEqual(
       [...body.permissions].sort(),
       [
         PERMISSIONS.PERSONAL_EVENT_READ,
         PERMISSIONS.PERSONAL_LAUNCH_READ,
         PERMISSIONS.PERSONAL_NOTE_READ,
+        PERMISSIONS.PERSONAL_QUOTE_READ,
       ].sort(),
     )
   })

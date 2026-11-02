@@ -37,6 +37,16 @@ import type {
   NoteTagListResponse,
   PermissionCatalogResponse,
   PermissionCode,
+  QuoteAccessStateResponse,
+  QuoteImageMutationResponse,
+  QuoteItemResponse,
+  QuoteMetaResponse,
+  QuoteSearchResponse,
+  QuoteSource,
+  QuoteUnlockResponse,
+  SetQuoteItemStatusRequest,
+  UpdateQuoteItemRequest,
+  UploadQuoteImageRequest,
   RefreshResponse,
   RenameCaseFolderRequest,
   ReorderLaunchProfilesRequest,
@@ -121,6 +131,14 @@ type RequestOptions = {
   body?: unknown
   accessToken?: string | null
   /**
+   * 额外请求头。目前只有报价查价的写接口用它带 `x-quote-unlock`。
+   *
+   * **不做成「凭据」那样的第一类参数。** 解锁令牌是一把只在 30 分钟内有效的锁，
+   * 与登录令牌的失效条件完全不同；把它提成 `unlockToken?: string` 会让这一层
+   * 知道「解锁」这个概念，而它本该只负责拼地址。
+   */
+  extraHeaders?: Record<string, string>
+  /**
    * 中断信号。**只有版本清单那条请求会传**（见 `versionManifestRequest`）——
    * 它由界面上的一个动作触发（打开账号菜单），网络不通时那个 Promise 会永远挂着，
    * 而挂着的 Promise 在 React 里就是一个永不 settle 的状态机。
@@ -201,6 +219,9 @@ async function request<T>(path: string, options: RequestOptions): Promise<T> {
   }
   if (options.accessToken !== undefined && options.accessToken !== null) {
     headers.authorization = `Bearer ${options.accessToken}`
+  }
+  if (options.extraHeaders !== undefined) {
+    Object.assign(headers, options.extraHeaders)
   }
 
   // 请求体按需赋值，不在对象字面量里写 `body: undefined`。开启
@@ -1242,4 +1263,182 @@ export function assignableUsersRequest(accessToken: string): Promise<AssignableU
     method: 'GET',
     accessToken,
   })
+}
+
+// ---------------------------------------------------------------------------
+// 报价查价
+// ---------------------------------------------------------------------------
+//
+// 读接口与写接口的鉴权方式不同（读走 `personal.quote.read`，写走 owner 或口令解锁
+// 令牌），但这一层的职责不变：只拼地址、发请求、把失败拉平成 `ApiError`。
+//
+// **解锁令牌单独传，不并进 accessToken。** 它是「这把锁开了 30 分钟」的凭据，
+// 与登录令牌的生命周期、失效条件、存放位置（sessionStorage）都不同，混成一个参数
+// 会让「登录还在、解锁过期」这种最常见的情形无从表达。
+
+export type QuoteSearchQuery = {
+  q?: string | undefined
+  source?: QuoteSource | undefined
+  category?: string | undefined
+  limit?: number | undefined
+  offset?: number | undefined
+  includeArchived?: boolean | undefined
+}
+
+/**
+ * 列表搜索。空串条件一律不发送 —— 服务端的 querystring schema 是
+ * `additionalProperties: false`，多带一个它不认识的参数会直接 400。
+ */
+export function quoteSearchRequest(
+  accessToken: string,
+  query: QuoteSearchQuery = {},
+): Promise<QuoteSearchResponse> {
+  const search = new URLSearchParams()
+  if (query.q !== undefined && query.q !== '') search.set('q', query.q)
+  if (query.source !== undefined) search.set('source', query.source)
+  if (query.category !== undefined && query.category !== '') {
+    search.set('category', query.category)
+  }
+  if (query.limit !== undefined) search.set('limit', String(query.limit))
+  if (query.offset !== undefined) search.set('offset', String(query.offset))
+  if (query.includeArchived === true) search.set('includeArchived', 'true')
+  const suffix = search.toString()
+  return request<QuoteSearchResponse>(`/api/quote/search${suffix === '' ? '' : `?${suffix}`}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function quoteMetaRequest(accessToken: string): Promise<QuoteMetaResponse> {
+  return request<QuoteMetaResponse>('/api/quote/meta', { method: 'GET', accessToken })
+}
+
+export function quoteItemRequest(accessToken: string, code: string): Promise<QuoteItemResponse> {
+  return request<QuoteItemResponse>(`/api/quote/items/${encodeURIComponent(code)}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function quoteAccessStateRequest(accessToken: string): Promise<QuoteAccessStateResponse> {
+  return request<QuoteAccessStateResponse>('/api/quote/access-state', {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function quoteUnlockRequest(
+  accessToken: string,
+  password: string,
+): Promise<QuoteUnlockResponse> {
+  return request<QuoteUnlockResponse>('/api/quote/unlock', {
+    method: 'POST',
+    body: { password },
+    accessToken,
+  })
+}
+
+/** `mode` 决定 POST（首次设置）还是 PUT（轮换）。两条路径的失败语义不同，不合并。 */
+export function quoteSecretRequest(
+  accessToken: string,
+  password: string,
+  mode: 'create' | 'rotate',
+): Promise<{ ok: boolean; version: number }> {
+  return request<{ ok: boolean; version: number }>('/api/quote/access-secret', {
+    method: mode === 'create' ? 'POST' : 'PUT',
+    body: { password },
+    accessToken,
+  })
+}
+
+export function updateQuoteItemRequest(
+  accessToken: string,
+  code: string,
+  input: UpdateQuoteItemRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; item: unknown }> {
+  return request<{ version: string; item: unknown }>(
+    `/api/quote/items/${encodeURIComponent(code)}`,
+    {
+      method: 'PATCH',
+      body: input,
+      accessToken,
+      ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+    },
+  )
+}
+
+export function setQuoteItemStatusRequest(
+  accessToken: string,
+  code: string,
+  input: SetQuoteItemStatusRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; item: unknown }> {
+  return request<{ version: string; item: unknown }>(
+    `/api/quote/items/${encodeURIComponent(code)}/status`,
+    {
+      method: 'POST',
+      body: input,
+      accessToken,
+      ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+    },
+  )
+}
+
+export function uploadQuoteImageRequest(
+  accessToken: string,
+  code: string,
+  input: UploadQuoteImageRequest,
+  unlockToken: string | null,
+): Promise<QuoteImageMutationResponse> {
+  return request<QuoteImageMutationResponse>(`/api/quote/items/${encodeURIComponent(code)}/image`, {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+    // 单张图加上 base64 膨胀可能十几兆，默认 30 秒不够在旧机器上编码 + 上传。
+    timeoutMs: 60_000,
+  })
+}
+
+export function removeQuoteImageRequest(
+  accessToken: string,
+  code: string,
+  unlockToken: string | null,
+): Promise<{ version: string }> {
+  return request<{ version: string }>(`/api/quote/items/${encodeURIComponent(code)}/image`, {
+    method: 'DELETE',
+    accessToken,
+    ...(unlockToken === null ? {} : { headers: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/**
+ * 取图字节。
+ *
+ * **不能让 `<img src>` 直接用地址** —— 取图接口要 Bearer 令牌，而 `<img>` 不带
+ * 请求头。这里拉成 `Blob`，调用方转 object URL（与案例库那条同源）。
+ */
+export async function quoteImageRequest(
+  accessToken: string,
+  key: string,
+  variant: 'thumb' | 'full',
+  version: string | null,
+): Promise<Blob> {
+  const search = new URLSearchParams({ variant })
+  if (version !== null && version !== '') search.set('v', version)
+  const path = `/api/quote/images/${encodeURIComponent(key)}?${search.toString()}`
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'image/*' },
+    })
+  } catch {
+    throw new ApiError(0, 'network_error', '无法连接服务器，请确认后端已启动', null)
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, 'unknown_error', describeHttpFailure(response.status), null)
+  }
+  return response.blob()
 }

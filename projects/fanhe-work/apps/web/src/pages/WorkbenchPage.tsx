@@ -5,22 +5,29 @@ import { ModuleHeader } from '../components/ModuleHeader'
 import { EventsPanel } from '../components/events/EventsPanel'
 import { LaunchPanel } from '../components/launch/LaunchPanel'
 import { NotesPanel } from '../components/notes/NotesPanel'
+import { QuotePanel } from '../components/quote/QuotePanel'
 import { HomePage } from './HomePage'
 
 /**
- * `workbench` 这个模块下四个地址的分派。
+ * `workbench` 这个模块下五个地址的分派。
  *
- * UI 改造后首页换成了三段式（`HomePage`），而三个功能面板各自需要自己的地址 ——
+ * UI 改造后首页换成了三段式（`HomePage`），而功能面板各自需要自己的地址 ——
  * 它们的增删改查是完整的业务能力，不能因为首页换了形态就没有入口：
  *
  *   `/workbench`          三段式首页（原型编号 9 / 10 / 11）
  *   `/workbench/launch`   一键登录通道的完整面板（新增 / 编辑 / 排序 / 删除 / 启动）
  *   `/workbench/notes`    工作纪要面板
  *   `/workbench/events`   事件记录面板
+ *   `/workbench/quote`    报价查价的整页形态
  *
  * **`launch` 这一段是本次改造新增的。** 改造前 `/workbench` 本身就是启动通道面板，
  * 首页占了那个地址之后，不给它一个地址就等于把「配置管理」整个砍掉。三个子地址都
  * 保留是因为用户明确要求「替换为三段式，但保留子路由」。
+ *
+ * **`quote` 与首页那张卡是同一个组件**（`QuotePanel` 的 `variant`）：卡里是弹窗、
+ * 这里是整页。两套实现会让「搜不到时说什么」「改价后刷新哪一块」这些规则各写一遍，
+ * 然后在某次改动里漂开。整页形态的意义是**地址能发给别人** —— 报价这种要反复对账
+ * 的东西，靠「点首页那张卡」传不过去。
  *
  * **分派读地址而不是用一个状态。** 地址栏能表达「我在哪」意味着刷新不丢位置、地址
  * 可以直接发给别人 —— 这条理由与 `ModuleRoute` 那条「重定向而不是就地渲染，是为了
@@ -57,6 +64,19 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
       <div className="flex flex-col gap-4">
         <ModuleHeader item={item} />
         <EventsPanel />
+      </div>
+    )
+  }
+
+  if (normalized === `${base}/quote`) {
+    // `h-full` 是必需的：内容区（`main`）只是一个可滚动的块级容器，不是弹性列，
+    // 不写 `h-full` 的话这个 `flex-1` 无处可解、面板会缩成内容高，两栏各自滚动
+    // 变成整页滚动。`min-h-0` 与之配套 —— 弹性子项默认 `min-height: auto`，
+    // 不去掉就会被内容顶开，内部滚动条永远不出现。
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        <ModuleHeader item={item} />
+        <QuotePanel variant="page" />
       </div>
     )
   }

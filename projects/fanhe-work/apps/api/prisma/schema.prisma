@@ -1297,7 +1297,7 @@ model CustomerPoolSuggestion {
   suggestedUser   User?   @relation("PoolSuggestionAssignee", fields: [suggestedUserId], references: [id], onDelete: SetNull)
 
   /// 0–100 的置信度。整数，理由见 `customer-api.ts` 里 PoolSuggestionDto 的注释。
-  confidence Int @default(0)
+  confidence    Int @default(0)
   /// 两侧的原始得分。存下来是为了复核时能看出「差一点就反过来了」。
   salesScore    Int @default(0) @map("sales_score")
   designerScore Int @default(0) @map("designer_score")
@@ -1325,4 +1325,223 @@ model CustomerPoolSuggestion {
   @@index([status])
   @@index([role])
   @@map("customer_pool_suggestions")
+}
+
+// ---------------------------------------------------------------------------
+// 报价查价（销售查价 / 板式工艺 / 诺米·百隆五金）
+// ---------------------------------------------------------------------------
+//
+// 六张表，与账号、客户、运营零耦合。
+//
+// **为什么条目表的主键是业务键而不是 uuid。** 审计、图片绑定、在线改价三处都要
+// 跨「导入批次」引用同一行，而重新导入一次 uuid 会全变。业务键由「来源 + 分类 +
+// 名称 + 型号 + 规格」算出（见 `apps/api/src/quote/keys.ts`），导入器按它做幂等
+// upsert：同一份台账导十次，库里还是那 1225 行，只是 updatedAt 变新。
+//
+// **为什么图单独一张表、按 `image_key` 而不是 `item_code` 挂。** 150 张图绑了 499
+// 条条目：一条产品图常被同族的 15 个规格共用（拉篮按宽度分行，图是同一张）。按
+// item_code 挂等于把同一份字节存 15 份，而按族键挂只需要一行 —— 且「这个型号有
+// 没有自己的图」这件事由 `bind_type` 回答，不靠数行数。
+//
+// **为什么口令与会话分两张表。** 口令是「全公司一把锁」，会话是「某个人临时开了
+// 这把锁」。合成一张表达不了「改了口令要把所有已开的会话一起作废」—— 那条靠
+// `secret_version` 比对实现：轮换即 +1，旧令牌在服务端一律不认，不必逐行去删。
+
+/// 数据集版本。每次导入一条，`version` 是内容指纹。
+///
+/// **版本号跟台账走，不跟代码版本走。** 改一次价不需要重新构建镜像，前端也不必
+/// 重新发版 —— 它只拿这个号判断「手里的价格是不是还成立」。风险条目的判断依据
+/// 只有一个数字，这与运营看板那边「宁可空白不给旧值」是同一条取舍。
+model QuoteDataset {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 内容指纹：行数 + 业务键 + 单价的摘要。同一份台账重复导入得到同一个版本号，
+  /// 因此「版本变了」严格等价于「内容变了」，不会因为导入时间不同而误报。
+  version String @unique @db.VarChar(32)
+
+  itemCount     Int @map("item_count")
+  imageCount    Int @map("image_count")
+  addedCount    Int @default(0) @map("added_count")
+  changedCount  Int @default(0) @map("changed_count")
+  /// 本轮转 archived 的条数。它非零时值得在面板上说一句 —— 台账里删掉的行不会
+  /// 真的消失，只是不再出现在搜索里。
+  archivedCount Int @default(0) @map("archived_count")
+
+  /// 来源说明，例如 `销售查价系统改1.xlsx / 诺米拉篮价格表.xlsx`。导入器写入。
+  sourceNote String @default("") @map("source_note") @db.VarChar(300)
+
+  importedBy String?  @map("imported_by") @db.Uuid
+  importedAt DateTime @default(now()) @map("imported_at") @db.Timestamptz(3)
+
+  @@index([importedAt])
+  @@map("quote_datasets")
+}
+
+/// 一条报价。1225 行（销售 571 / 工艺 58 / 五金 596）。
+model QuoteItem {
+  /// 业务键。形如 `sale:免漆类（飞林柜）:E0级实木颗粒板（柜+门）标板::`。
+  /// 长度上限 64 是实测出来的：最长的五金行（产品名 + 主架型号 + 篮体型号）到 58。
+  code String @id @db.VarChar(64)
+
+  /// sale / craft / hardware。存字符串不存枚举，与 stage、dim_type 同一个理由：
+  /// 契约是唯一来源，加一个来源只改代码不写迁移。
+  source String @db.VarChar(16)
+
+  category String @db.VarChar(80)
+  name     String @db.VarChar(200)
+  /// 型号。柜体类 571 条没有型号，存空串而不是 null —— 空串在 SQL 里能直接
+  /// `LIKE`，null 不能，而搜索要同时匹配 name 与 model。
+  model    String @default("") @db.VarChar(120)
+  spec     String @default("") @db.VarChar(160)
+
+  /// 归一后的单位。销售表写 `㎡`、工艺表写 `平方`，归一只是为了让同一个系列
+  /// 能排在一起；展示仍以 `unit_raw` 为准。
+  unit    String @default("") @db.VarChar(24)
+  unitRaw String @default("") @map("unit_raw") @db.VarChar(24)
+
+  /// amount / per_meter / multiplier / rule / empty。决定这一格怎么显示、能不能
+  /// 参与计算。四种形态的判定顺序见 `packages/shared/src/quote.ts` 的
+  /// `parsePriceInput` —— 顺序错了会把「1.5 倍」读成 1.5 元。
+  priceKind String @map("price_kind") @db.VarChar(16)
+  /// 金额（分）。`rule` / `empty` 为 null —— 那是「不是金额」，不是「零元」。
+  priceFen  Int?   @map("price_fen")
+  /// 原文。倍率与规则文本只在这里。
+  priceText String @default("") @map("price_text") @db.VarChar(200)
+
+  note String @default("") @db.VarChar(400)
+
+  /// active / archived。台账里消失的行转 archived，**不物理删除**：历史报价要能
+  /// 回答「上个月这一条为什么查不到」，而硬删只能回答「没有这条」。
+  status String @default("active") @db.VarChar(16)
+
+  /// 指向 `quote_item_images.image_key`。没有图时为空。
+  imageKey String? @map("image_key") @db.VarChar(64)
+
+  /// 最后一次让它变化的数据集版本。排查「这条价是什么时候变的」时先看它。
+  datasetVersion String @map("dataset_version") @db.VarChar(32)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// 列表默认按「来源 + 分类」筛，这条索引覆盖它。
+  @@index([source, category])
+  /// 搜索只在 active 里找。
+  @@index([status, source])
+  @@index([imageKey])
+  @@map("quote_items")
+}
+
+/// 商品图。**字节直接存在库里**（`data` / `thumb` 两个 bytea），与案例上传同一条
+/// 判断：api 跑在容器里、compose 没给它挂卷，写进容器就是一次性数据。
+///
+/// 一张图一版历史。替换图不删旧行，只把旧行 `is_active` 置 false 并记
+/// `replaced_by` —— 客户拿着旧报价单来问「这张图是哪个型号」时，能查到当时的图。
+model QuoteItemImage {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 业务键。可以是某一条的 code（exact），也可以是产品族的键（family）。
+  imageKey String @map("image_key") @db.VarChar(64)
+
+  data  Bytes
+  /// 缩略图。表格行与详情页首屏用它，灯箱用原图。
+  thumb Bytes
+
+  mime        String @db.VarChar(32)
+  width       Int
+  height      Int
+  thumbWidth  Int    @map("thumb_width")
+  thumbHeight Int    @map("thumb_height")
+  byteSize    Int    @map("byte_size")
+
+  /// exact / family / manual。`family` 表示这张图是从同族首行继承来的 ——
+  /// 界面上的角标据此区分「这是它自己的图」与「这是同款系列的图」。
+  bindType String @map("bind_type") @db.VarChar(16)
+
+  /// 台账行号。进口商写入，回答「这张图当初从哪一行绑来」。
+  sourceRow Int? @map("source_row")
+
+  isActive   Boolean @default(true) @map("is_active")
+  replacedBy String? @map("replaced_by") @db.Uuid
+
+  uploadedBy String?  @map("uploaded_by") @db.Uuid
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(3)
+
+  /// 取图接口按 (imageKey, isActive) 找唯一一行。
+  @@index([imageKey, isActive])
+  @@map("quote_item_images")
+}
+
+/// 维护口令。**单行表**，只存哈希。
+///
+/// 失败计数与锁定时间也放在这一行：锁的是「这把锁」，不是「某个人」。按人锁需要
+/// 每人一行、还要回答「换台设备算不算同一个人」，而实际场景是店里几个人共用一台
+/// 电脑 —— 全局锁就够了，且它不会因为换个账号登录就被绕开。
+model QuoteAccessSecret {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// argon2id 哈希。与账号密码同一个算法，理由见 `apps/api/src/auth/password.ts`。
+  hash String @db.VarChar(255)
+  algo String @default("argon2id") @db.VarChar(16)
+
+  /// 轮换即 +1。所有 `secret_version` 与它不符的解锁会话立刻失效。
+  version Int @default(1)
+
+  failCount   Int       @default(0) @map("fail_count")
+  lockedUntil DateTime? @map("locked_until") @db.Timestamptz(3)
+
+  updatedBy String   @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("quote_access_secrets")
+}
+
+/// 一次解锁会话。**不存明文令牌**，只存它的 SHA-256。
+model QuoteUnlockSession {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userId    String @map("user_id") @db.Uuid
+  tokenHash String @unique @map("token_hash") @db.VarChar(64)
+
+  /// 签发时的口令版本。与当前版本不符即无效（改口令 = 全部作废）。
+  secretVersion Int @map("secret_version")
+
+  issuedAt  DateTime @default(now()) @map("issued_at") @db.Timestamptz(3)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  revoked   Boolean  @default(false)
+
+  /// 来源 IP。只用于事后追查「这次解锁是从哪台机器来的」。
+  ip String? @db.VarChar(45)
+
+  @@index([userId, expiresAt])
+  @@map("quote_unlock_sessions")
+}
+
+/// 改价 / 改图 / 停用的审计。**追加写，不可改不可删**，与 `audit_logs` 同一条规矩。
+///
+/// 不复用 `audit_logs`：那张表的 `target` 是账号与角色，查询时按 actor 走；这张表
+/// 按**条目**走（「这一条价格改过几次」），检索方向相反，混在一张表里会让两个方向
+/// 都变慢。
+model QuoteRevision {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  itemCode String @map("item_code") @db.VarChar(64)
+
+  /// price / status / image。
+  field String @db.VarChar(16)
+
+  oldValue String? @map("old_value") @db.VarChar(400)
+  newValue String? @map("new_value") @db.VarChar(400)
+
+  operatorId      String  @map("operator_id") @db.Uuid
+  /// 走口令解锁进来时记会话 id；owner 直入时为 null —— 这条差异本身就说明
+  /// 「这次改动有没有经过口令」。
+  unlockSessionId String? @map("unlock_session_id") @db.Uuid
+
+  reason String? @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([itemCode, createdAt])
+  @@index([createdAt])
+  @@map("quote_revisions")
 }

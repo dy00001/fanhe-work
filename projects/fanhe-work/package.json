@@ -1,6 +1,6 @@
 {
   "name": "fanhe-work",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.0",
@@ -24,6 +24,7 @@
     "db:ping": "pnpm --filter @fanhe/api db:ping",
     "db:create-owner": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:create-owner",
     "db:ops-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-import",
+    "db:quote-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:quote-import",
     "db:customer-import": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:customer-import",
     "db:customer-sync": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:customer-sync",
     "db:ops-shops": "pnpm --filter @fanhe/shared build && pnpm --filter @fanhe/api db:ops-shops",
