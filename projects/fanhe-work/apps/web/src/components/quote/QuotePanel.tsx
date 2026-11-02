@@ -10,13 +10,16 @@ import {
   type QuoteSource,
 } from '@fanhe/shared'
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
-  ImageOff,
+  Copy,
   ImagePlus,
   KeyRound,
   LoaderCircle,
+  MousePointerClick,
   Search,
+  SearchX,
   Trash2,
   X,
 } from 'lucide-react'
@@ -44,14 +47,15 @@ import {
   describePrice,
   describeStatus,
   formatYuan,
-  itemQualifier,
-  splitHighlight,
 } from '../../lib/quote-display'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { EmptyState, ErrorState, LoadingState } from '../StateView'
 
 import { PriceGateDialog } from './PriceGateDialog'
+import { QuoteFilters } from './QuoteFilters'
 import { QuoteLightbox } from './QuoteLightbox'
+import { QuoteResultTable } from './QuoteResultTable'
 
 /**
  * 报价查价面板。
@@ -186,10 +190,12 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
       .then((result) => {
         if (cancelled) return
         setListEntry({ key: listKey, rows: result.items, total: result.total, error: null })
-        // 选中态保持在当前行；那一行不在本页时清掉，避免右栏显示一条列表里没有的报价。
-        setSelectedCode((current) =>
-          current !== null && result.items.some((item) => item.code === current) ? current : null,
-        )
+        // 选中态：当前行还在本页就留着，否则落到第一行。
+        // 落到第一行是「打开即有内容」—— 右栏空着的时候，人不知道该点哪里。
+        setSelectedCode((current) => {
+          if (current !== null && result.items.some((item) => item.code === current)) return current
+          return result.items[0]?.code ?? null
+        })
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -261,6 +267,14 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
     setOffset(0)
   }
 
+  /** 空态里的「清空筛选」。三样一起清，包含关键词 —— 只清一半会得到「还是空的」。 */
+  function clearFilters(): void {
+    setKeyword('')
+    setSource(null)
+    setCategory('')
+    setOffset(0)
+  }
+
   const maxOffset = Math.max(0, Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE)
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -289,16 +303,22 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
         variant === 'dialog' ? 'h-[min(70vh,680px)]' : 'min-h-0 flex-1',
       ].join(' ')}
     >
-      {/* 顶部：搜索与筛选 */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+      {/* 工具栏：搜索 + 来源。造型对齐 `OpsToolbar` —— 一块卡片、`px-3 py-2`、
+          控件之间 `gap-2`，右侧留一个出口。 */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground-weak" />
           <Input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter 立即检索。250ms 防抖是给「边打边看」用的，
+              // 而按下回车的人已经想好了要看什么，不该再等那一下。
+              if (event.key === 'Enter') setDebounced(keyword.trim())
+            }}
             placeholder="搜产品名、型号或规格，例如「拉篮」「3177007」「爱格」"
             maxLength={QUOTE_LIMITS.QUERY_MAX}
-            className="pl-8"
+            className="h-8 pl-8"
             aria-label="搜索报价"
           />
           {keyword !== '' && (
@@ -313,7 +333,15 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
           )}
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+        <div
+          role="tablist"
+          aria-label="按来源筛选"
+          // `shrink-0` + `whitespace-nowrap`（在 `FilterChip` 里）一起用：不写的话
+          // 窄屏下这一组的宽度会被搜索框压掉，四个标签开始**逐字换行** ——
+          // 「销售查价」竖成四行、「诺米 / 百隆五金」竖成两列，看着像控件坏了。
+          // 宁可让这一组整体超出去横向滚动，也不要把一个字一个字摞起来。
+          className="inline-flex max-w-full shrink-0 items-center gap-0.5 overflow-x-auto rounded-lg border border-border p-0.5"
+        >
           <FilterChip active={source === null} onClick={() => applySource(null)}>
             全部
           </FilterChip>
@@ -324,11 +352,15 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
           ))}
         </div>
 
+        {/* 没有左栏时（`2xl` 以下），分类只能靠这个下拉 —— 同一件事不给两个入口。
+            断点用 `2xl` 而不是 `lg`：左栏那 212px 是从中间那张表身上割下来的，
+            1024–1400 这一段割完，表的六列只剩两列可见、单价要靠横向滚动才看得到，
+            而单价正是这张表存在的理由。宁可先收起左栏，把宽度还给结果。 */}
         <select
           value={category}
           onChange={(event) => applyCategory(event.target.value)}
           aria-label="按分类筛选"
-          className="h-9 max-w-[220px] rounded-lg border border-border bg-card px-2 text-sm"
+          className="h-8 max-w-[180px] rounded-lg border border-border bg-card px-2 text-xs 2xl:hidden"
         >
           <option value="">全部分类</option>
           {categories.map((item) => (
@@ -339,7 +371,13 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
         </select>
 
         {onRequestClose !== undefined && (
-          <Button type="button" variant="ghost" size="sm" onClick={onRequestClose}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={onRequestClose}
+          >
             关闭
           </Button>
         )}
@@ -347,7 +385,7 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
 
       {/* 数据集版本。**放在这里而不是页脚**：它回答的是「我看到的价格是哪一版」，
           而这个问题在开始查之前就该有答案。 */}
-      <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+      <p className="flex flex-wrap items-center gap-x-2 px-1 text-[11px] text-muted-foreground-weak">
         {meta === null ? (
           metaError === null ? (
             '正在读取台账版本…'
@@ -392,11 +430,21 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
         )}
       </p>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-        {/* 左：结果列表 */}
+      <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
+        {/* 左：来源 + 分类。`2xl` 以下收起，改编成工具栏里的下拉（见上方 `2xl:hidden`）。 */}
+        <QuoteFilters
+          meta={meta}
+          source={source}
+          category={category}
+          onSource={applySource}
+          onCategory={applyCategory}
+          className="hidden 2xl:flex 2xl:w-[212px]"
+        />
+
+        {/* 中：结果表 */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs text-muted-foreground">
-            <span>
+          <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground-weak">
+            <span aria-live="polite">
               {loading ? '正在检索…' : `命中 ${total} 条`}
               {total > 0 ? ` · 第 ${currentPage}/${pageCount} 页` : ''}
             </span>
@@ -408,7 +456,7 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
                 onClick={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))}
                 className="rounded p-1 hover:bg-accent disabled:opacity-40"
               >
-                <ChevronLeft className="size-4" />
+                <ChevronLeft className="size-3.5" />
               </button>
               <button
                 type="button"
@@ -417,44 +465,66 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
                 onClick={() => setOffset((value) => Math.min(maxOffset, value + PAGE_SIZE))}
                 className="rounded p-1 hover:bg-accent disabled:opacity-40"
               >
-                <ChevronRight className="size-4" />
+                <ChevronRight className="size-3.5" />
               </button>
             </div>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             {listError !== null ? (
-              <p className="p-6 text-sm text-destructive">{listError}</p>
-            ) : rows.length === 0 && !loading ? (
-              <p className="p-6 text-sm text-muted-foreground">
-                没有匹配的条目。换个说法试试 —— 台账里柜体类只有名称，没有型号。
-              </p>
+              <ErrorState
+                variant="plain"
+                className="py-12"
+                description={listError}
+                onRetry={() => setReloadToken((value) => value + 1)}
+              />
+            ) : loading ? (
+              <LoadingState variant="plain" className="py-12" label="正在检索报价" />
+            ) : rows.length === 0 ? (
+              <EmptyState
+                variant="plain"
+                className="py-12"
+                icon={SearchX}
+                title="没有匹配的条目"
+                description="台账里柜体类只有名称、没有型号 —— 换个说法，或者把筛选清掉再看看。"
+                action={
+                  <Button type="button" size="sm" variant="outline" onClick={clearFilters}>
+                    清空筛选
+                  </Button>
+                }
+              />
             ) : (
-              <ul className="divide-y divide-border-soft">
-                {rows.map((item) => (
-                  <QuoteRow
-                    key={item.code}
-                    item={item}
-                    keyword={debounced}
-                    selected={item.code === selectedCode}
-                    onSelect={() => setSelectedCode(item.code)}
-                    onOpenImage={() => openLightbox(item.imageKey, item.imageVersion)}
-                  />
-                ))}
-              </ul>
+              <QuoteResultTable
+                rows={rows}
+                selectedCode={selectedCode}
+                keyword={debounced}
+                onSelect={(code) => setSelectedCode(code)}
+                onOpenImage={(item) => openLightbox(item.imageKey, item.imageVersion)}
+              />
             )}
           </div>
         </div>
 
         {/* 右：详情与维护 */}
-        <div className="flex w-full shrink-0 flex-col gap-3 overflow-y-auto rounded-xl border border-border bg-card p-4 lg:w-[340px]">
-          {detailLoading && detail === null ? (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin" />
-              正在读取…
-            </p>
+        <div className="flex w-full shrink-0 flex-col gap-2.5 overflow-y-auto rounded-xl border border-border bg-card p-3 lg:w-[340px]">
+          {detailLoading ? (
+            <LoadingState variant="plain" className="py-10" label="正在读取报价详情" />
           ) : detail === null ? (
-            <p className="text-sm text-muted-foreground">从左边选一条，这里显示详情与维护入口。</p>
+            // 列表本身空着的时候，右栏不再摆一个同样分量的空态 —— 两个大空态并排会
+            // 让人以为是两处独立的故障。这里只留一句，视线回到左边的原因与出口。
+            rows.length === 0 ? (
+              <p className="py-8 text-center text-xs text-muted-foreground-weak">
+                列表为空，没有可选的条目。
+              </p>
+            ) : (
+              <EmptyState
+                variant="plain"
+                className="py-10"
+                icon={MousePointerClick}
+                title="选一条看详情"
+                description="这里显示选中那条的价格、商品图与维护入口。"
+              />
+            )
           ) : (
             /* `key` 让「换一条选中项」等于重新挂载：价格输入框、改动说明、提示语
                全部回到初值。写成在 effect 里重置会撞 `react-hooks/set-state-in-effect`，
@@ -497,6 +567,12 @@ export function QuotePanel({ variant = 'dialog', onRequestClose }: QuotePanelPro
   )
 }
 
+/**
+ * 来源分段里的一个按钮。
+ *
+ * 语义用 `role="tab"` + `aria-selected`，与 `OpsToolbar` 的区间切换一致 —— 只靠
+ * `bg-primary` 表达选中，读屏念出来是一排没有状态的按钮。
+ */
 function FilterChip({
   active,
   onClick,
@@ -509,157 +585,17 @@ function FilterChip({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={[
-        'rounded-md px-2 py-1 text-xs transition-colors',
-        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent',
+        'shrink-0 rounded-md px-2 py-0.5 text-xs whitespace-nowrap transition-colors',
+        active
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:text-foreground',
       ].join(' ')}
     >
       {children}
-    </button>
-  )
-}
-
-/** 结果行。缩略图单独可点（进灯箱），点行的其他位置是选中。 */
-function QuoteRow({
-  item,
-  keyword,
-  selected,
-  onSelect,
-  onOpenImage,
-}: {
-  item: QuoteItemDto
-  keyword: string
-  selected: boolean
-  onSelect: () => void
-  onOpenImage: () => void
-}) {
-  const price = describePrice(item)
-  const qualifier = itemQualifier(item)
-  const status = describeStatus(item.status)
-
-  return (
-    <li>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onSelect}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            onSelect()
-          }
-        }}
-        className={[
-          'flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors',
-          selected ? 'bg-accent' : 'hover:bg-accent/60',
-        ].join(' ')}
-      >
-        <Thumb item={item} onOpen={onOpenImage} />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <span className="truncate text-sm leading-5">
-              {splitHighlight(item.name, keyword).map((segment, index) =>
-                segment.hit ? (
-                  <mark
-                    key={index}
-                    className="rounded-sm bg-transparent font-semibold text-foreground underline decoration-1 underline-offset-2"
-                  >
-                    {segment.text}
-                  </mark>
-                ) : (
-                  <span key={index}>{segment.text}</span>
-                ),
-              )}
-            </span>
-            {status !== null && (
-              <span className="shrink-0 rounded-full border border-border px-1.5 text-[10px] leading-4 text-muted-foreground-weak">
-                {status}
-              </span>
-            )}
-          </span>
-          <span className="mt-0.5 block truncate text-xs leading-4 text-muted-foreground">
-            {item.category}
-            {qualifier === '' ? '' : ` · ${qualifier}`}
-          </span>
-        </span>
-        <span className="shrink-0 text-right">
-          <span
-            className={[
-              'block text-sm leading-5 tabular-nums',
-              price.tone === 'amount' ? 'font-medium text-foreground' : '',
-              price.tone === 'text' ? 'text-muted-foreground' : '',
-              price.tone === 'empty' ? 'text-[var(--m-amber)]' : '',
-            ].join(' ')}
-          >
-            {price.primary}
-            <span className="text-xs text-muted-foreground">{price.suffix}</span>
-          </span>
-        </span>
-      </div>
-    </li>
-  )
-}
-
-/**
- * 缩略图。
- *
- * 取字节要令牌，`<img>` 带不了请求头，所以先 fetch 成 Blob 再转 object URL。缓存键
- * 里带版本号，换图之后自动取到新的那张。
- *
- * 结果与「这一张的键」绑在一起（指纹），换行/换图时旧结果自动失效，不需要在 effect
- * 里先清一遍 —— 与 `lib/use-ops-dashboard.ts` 同一条做法。
- */
-function Thumb({ item, onOpen }: { item: QuoteItemDto; onOpen: () => void }) {
-  const key = item.imageKey === null ? '' : `${item.imageKey}\u001f${item.imageVersion ?? ''}`
-  const [loaded, setLoaded] = useState<{ key: string; url: string | null } | null>(null)
-
-  useEffect(() => {
-    let alive = true
-    const imageKey = item.imageKey
-    if (imageKey !== null) {
-      void loadQuoteImageUrl(imageKey, 'thumb', item.imageVersion).then((value) => {
-        if (alive) setLoaded({ key: `${imageKey}\u001f${item.imageVersion ?? ''}`, url: value })
-      })
-    }
-    return () => {
-      alive = false
-    }
-  }, [item.imageKey, item.imageVersion])
-
-  if (!item.hasImage) {
-    return (
-      <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-dashed border-border text-muted-foreground-weak">
-        <ImageOff className="size-4" />
-      </span>
-    )
-  }
-
-  const current = loaded !== null && loaded.key === key ? loaded : null
-  const url = current?.url ?? null
-  const failed = current !== null && current.url === null
-
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation()
-        onOpen()
-      }}
-      aria-label={`查看 ${item.name} 的大图`}
-      className="relative size-12 shrink-0 overflow-hidden rounded-lg border border-border bg-muted/40"
-    >
-      {url !== null ? (
-        <img src={url} alt="" draggable={false} className="size-full object-contain" />
-      ) : (
-        <span className="grid size-full place-items-center text-muted-foreground-weak">
-          {failed ? (
-            <ImageOff className="size-4" />
-          ) : (
-            <LoaderCircle className="size-4 animate-spin" />
-          )}
-        </span>
-      )}
     </button>
   )
 }
@@ -702,8 +638,18 @@ function QuoteDetail({
   const [draft, setDraft] = useState(() => initialPriceDraft(item))
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  /** 「已复制」的回落计时器。换条目时组件会重挂载，但计时器仍要在卸载时清掉。 */
+  const copyTimer = useRef<number | null>(null)
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+    },
+    [],
+  )
 
   const heroKey = item.imageKey === null ? null : `${item.imageKey}\u001f${item.imageVersion ?? ''}`
   const [hero, setHero] = useState<{ key: string; url: string | null } | null>(null)
@@ -722,6 +668,32 @@ function QuoteDetail({
   }, [heroKey, item.imageKey, item.imageVersion])
 
   const heroUrl = hero !== null && hero.key === heroKey ? hero.url : null
+
+  /**
+   * 复制一句可以直接粘进微信的报价。
+   *
+   * 格式与静态稿一致：`名称 ¥668/㎡（单价）`，名称与价格之间是一个全角空格（U+3000，
+   * 代码里用转义写，源码直接放会触发 `no-irregular-whitespace`）。之所以由页面拼而不是让人自己抄：
+   * 抄一次价格就多一次看错数字的机会，而这一行是要发给客户的。
+   *
+   * `navigator.clipboard` 需要安全上下文（https 或 localhost）。用局域网 IP 打开时
+   * 它是 undefined —— 那时退回「复制失败」的提示，而不是装作成功。
+   */
+  async function handleCopyQuote(): Promise<void> {
+    // 全角空格用转义写：源码里直接放 U+3000 会触发 `no-irregular-whitespace`。
+    const line = `${item.name}\u3000${price.primary}${price.suffix}`
+    const text = price.tone === 'empty' ? `${line}（待补价）` : `${line}（${price.caption}）`
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => {
+        setCopied(false)
+      }, 1400)
+    } catch {
+      setNotice({ kind: 'error', text: '复制失败：浏览器不允许写剪贴板，请手动选中文字' })
+    }
+  }
 
   async function handleSavePrice(): Promise<void> {
     setBusy(true)
@@ -808,14 +780,14 @@ function QuoteDetail({
 
       {/* 主图。点开是灯箱；没有图时给一句「可以上传」，而不是一块空白。 */}
       {image === null ? (
-        <div className="grid h-32 place-items-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+        <div className="grid h-24 place-items-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
           这一条还没有图
         </div>
       ) : (
         <button
           type="button"
           onClick={onOpenImage}
-          className="relative h-40 overflow-hidden rounded-lg border border-border bg-muted/30"
+          className="relative block h-28 w-full overflow-hidden rounded-lg border border-border bg-muted/30"
         >
           {heroUrl !== null ? (
             <img
@@ -836,7 +808,7 @@ function QuoteDetail({
         </button>
       )}
 
-      <div className="rounded-lg border border-border bg-muted/30 p-3">
+      <div className="rounded-lg border border-border bg-muted/30 p-2.5">
         <p className="text-xs text-muted-foreground">{price.caption}</p>
         <p
           className={[
@@ -856,6 +828,26 @@ function QuoteDetail({
           {item.spec === '' ? '' : ` · 规格 ${item.spec}`}
           {item.unitRaw === '' ? '' : ` · 单位 ${item.unitRaw}`}
         </p>
+        {/* 条目号 + 复制。条目号是**唯一**能拿去对台账的凭据：名称会改、价格会改，
+            而 `code` 是业务键，重新导入也不变。 */}
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
+          <span
+            title="台账条目号（跨导入批次不变）"
+            className="truncate font-mono text-[11px] text-muted-foreground-weak"
+          >
+            {item.code}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => void handleCopyQuote()}
+          >
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {copied ? '已复制' : '复制报价文本'}
+          </Button>
+        </div>
       </div>
 
       {/* 维护区。没有权限时不隐藏整块，只把它变成一句说明 + 一个解锁入口 ——

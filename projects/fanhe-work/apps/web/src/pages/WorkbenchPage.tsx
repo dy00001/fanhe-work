@@ -73,9 +73,19 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
     // 不写 `h-full` 的话这个 `flex-1` 无处可解、面板会缩成内容高，两栏各自滚动
     // 变成整页滚动。`min-h-0` 与之配套 —— 弹性子项默认 `min-height: auto`，
     // 不去掉就会被内容顶开，内部滚动条永远不出现。
+    //
+    // 页头**不能直接传 `item`**：`quote` 不是一个导航项，路由层给到这里的是
+    // workspace 根的那一条，标题会显示成「首页」。这里覆盖成这一页自己的名字。
     return (
       <div className="flex h-full min-h-0 flex-col gap-4">
-        <ModuleHeader item={item} />
+        <ModuleHeader
+          item={{
+            ...item,
+            label: '报价查价',
+            summary:
+              '台账里的官方单价：柜体、板式工艺、五金三类。按名称/型号/规格搜，点一条看详情与改价入口。',
+          }}
+        />
         <QuotePanel variant="page" />
       </div>
     )
