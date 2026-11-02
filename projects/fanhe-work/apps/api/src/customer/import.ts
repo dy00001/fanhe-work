@@ -14,6 +14,7 @@ import {
   type OrderImportDetail,
   type OrderStepSeed,
 } from './customers.js'
+import { SYSTEM_VIEWER } from './scope.js'
 import { parseLogTime } from './log-time.js'
 
 /**
@@ -335,7 +336,12 @@ export async function importPreview(
       continue
     }
 
-    const result = await createOrder(customerId, orderRequestOf(order), true, orderDetailOf(order))
+    const result = await createOrder(
+      customerId,
+      orderRequestOf(order),
+      SYSTEM_VIEWER,
+      orderDetailOf(order),
+    )
     if (!result.ok) {
       orderFailed += 1
       issues.push({ key: `order:${order.code}`, reason: result.reason })

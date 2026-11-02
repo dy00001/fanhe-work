@@ -2,20 +2,30 @@ import {
   CUSTOMER_STAGES,
   NAV_CODES,
   PERMISSIONS,
+  navPath,
+  type AssignableUserDto,
+  type CustomerAssignmentDto,
   type CustomerDetailDto,
-  type CustomerListItemDto,
   type CustomerListResponse,
   type CustomerOrderDto,
   type CustomerStage,
   type NavItem,
+  type RegionScope,
 } from '@fanhe/shared'
 import { UsersRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
 
 import { useAuth } from '../auth/useAuth'
 import { ModuleHeader } from '../components/ModuleHeader'
-import { ErrorState, EmptyState, LoadingState } from '../components/StateView'
+import { EmptyState, ErrorState, LoadingState } from '../components/StateView'
 import { TextField } from '../components/TextField'
+import { CustomerActivityLine } from '../components/customer/CustomerActivityLine'
+import { CustomerDonut, type DonutSlice } from '../components/customer/CustomerDonut'
+import { CustomerFilterBar } from '../components/customer/CustomerFilterBar'
+import { CustomerKpiCards } from '../components/customer/CustomerKpiCards'
+import { CustomerPoolDialog } from '../components/customer/CustomerPoolDialog'
+import { CustomerTable } from '../components/customer/CustomerTable'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
@@ -28,18 +38,10 @@ import {
   DialogTitle,
 } from '../components/ui/dialog'
 import { Input } from '../components/ui/input'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../components/ui/table'
 import { ApiError } from '../lib/api'
 import {
-  activityClass,
   activityOf,
+  assignmentParts,
   fillStageBuckets,
   formatDate,
   formatDateTime,
@@ -47,21 +49,34 @@ import {
   formatWan,
   orderProgress,
   parseYuanToFen,
-  reviewLabel,
   scopeLabel,
   splitStepSections,
   stageLabel,
   stageTone,
   toneClass,
+  type StageTone,
 } from '../lib/customer-display'
 import {
+  filtersFromParams,
+  filtersKey,
+  filtersToParams,
+  hourRange,
+  overlapsActivity,
+  rangeQuery,
+  resolveCustomerRange,
+  type CustomerFilters,
+} from '../lib/customer-filters'
+import {
+  assignCustomer,
   createCustomer,
   createCustomerOrder,
+  loadAssignableUsers,
   loadCustomer,
   loadCustomers,
   setCustomerStage,
   updateCustomerStep,
 } from '../lib/customers'
+import { useNow } from '../lib/use-now'
 
 /**
  * 客户信息平台的页面。
@@ -69,65 +84,86 @@ import {
  * 两个导航入口共用这一个组件，由 `item.code` 决定视角（与运营看板七项共用
  * `OpsDashboardPage` 是同一条做法）：
  *
- *   - 综合看板：先给汇总（总量、地区层级、阶段分布），再给清单 —— 回答「我一共有
- *     多少客户、都在什么阶段」；
- *   - 客户进度：隐藏汇总，直接给清单并默认带上阶段列 —— 回答「这一单做到哪了」。
+ *   - 综合看板：指标卡 + 阶段环形 + 金额环形 + 近 24 小时折线，回答「这批客户
+ *     是什么结构、钱压在哪个地区」；
+ *   - 客户进度：客户清单，回答「这一单做到哪了」。
  *
- * 两块共用同一份数据与同一套筛选，切换入口不重新学一遍界面。拆成两个页面的话，
- * 筛选条件得各维护一份，而两份迟早会不一致（在「综合看板」筛了地区，切到
- * 「客户进度」发现回到了全部）。
+ * **清单从看板搬到了进度页。** 一屏里同时放四张卡、两张环、一条折线和一个二十行的
+ * 表格，图表会被挤到需要滚动才能看全，表格又因为上面压着图只剩半屏。两栏共用同一
+ * 份数据与同一套筛选，所以「在看板点某个阶段的扇区，跳过去看到的正是那个阶段的人」
+ * 是构造上成立的。
  *
- * **金额可见性由服务端决定，界面不做二次判断。** 列表响应里的 `financeReadable`
- * 是唯一依据：它同时覆盖「有没有权限」与「服务端是否已经裁掉」。前端再按角色
- * 算一遍，等于把授权规则复制到第二个地方，而两处不一致时的表现是「金额列空着
- * 但没报错」。
+ * **筛选状态整份存在地址栏。** 两栏各存一份的话，从看板跳到进度页时筛选会丢，
+ * 而丢掉之后列表显示的是一批与刚才那张图不对应的客户，界面上没有任何提示。
+ *
+ * **金额可见性由服务端决定，界面不做二次判断。** 响应里的 `financeReadable` 与
+ * `summary.amountTotalFen` 是唯一依据：它们同时覆盖「有没有权限」与「服务端是否
+ * 已经裁掉」。前端再按角色算一遍，等于把授权规则复制到第二个地方，而两处不一致时
+ * 的表现是「金额列空着但没报错」。
  */
 export function CustomerPage({ item }: { item: NavItem }) {
   const { can } = useAuth()
   const canWrite = can(PERMISSIONS.CUSTOMER_RECORD_WRITE)
   const isProgress = item.code === NAV_CODES.CUSTOMER_PROGRESS
 
-  const [draft, setDraft] = useState('')
-  const [keyword, setKeyword] = useState('')
-  const [scope, setScope] = useState('')
-  const [stage, setStage] = useState('')
-  const [pendingReview, setPendingReview] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
+  // 每分钟推进的「现在」：区间文案（本月、本季）与自定义区间的初始日期都要用它，
+  // 而渲染里不许调 `Date.now()`。
+  const now = useNow()
+  const filters = filtersFromParams(params, now)
+
+  const [refreshToken, setRefreshToken] = useState(0)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [poolOpen, setPoolOpen] = useState(false)
+
+  /*
+   * 公共池归类要同时有「复核」与「转派」两个权限点。只判前者的话，点进去会看到
+   * 一屏建议却点不动（服务的复核接口两个点都要），那种界面比没有入口更糟。
+   */
+  const canReviewPool =
+    can(PERMISSIONS.CUSTOMER_IMPORT_REVIEW) && can(PERMISSIONS.CUSTOMER_SCOPE_WRITE)
+
+  const mode = isProgress ? 'list' : 'summary'
+  const { scope, stage, q, pendingReview } = filters
+  // 请求参数走 `rangeQuery` 而不是 `toISOString()`：后者是完整 ISO，接口的 pattern
+  // 直接拒收，且末尾的 Z 是 UTC，东八区会整体错一天。取成两个字符串而不是每次现
+  // 构造对象，是因为它们要进 effect 的依赖列表，对象引用每次都新，会让请求白跑。
+  const { from: fromParam, to: toParam } = rangeQuery(filters.range)
 
   /**
    * 加载结果带着「它是哪一次请求的」。
    *
    * **不在 effect 体里同步 `setState({ status: 'loading' })`。** 那样每改一次筛选
    * 都会多一轮渲染（先把状态切成加载中，再切回来），而 React 的 lint 规则直接把它
-   * 判成缺陷。这里的做法是让结果自己记住 `key`：当前请求的 key 与结果里的 key 不
-   * 相等，就是「还没回来」，加载态由比较得出而不是被写进去。状态只有一个来源，
-   * 也就不会出现「数据显示完了但加载态忘了关」。
+   * 判成缺陷。这里的做法是让结果自己记住 key：当前请求的 key 与结果里的 key 不相等，
+   * 就是「还没回来」，加载态由比较得出而不是被写进去。
    */
+  const requestKey = [filtersKey(filters), mode, String(refreshToken)].join('\u0000')
+
   const [result, setResult] = useState<{
     key: string
     data: CustomerListResponse | null
     error: string | null
     /**
      * 数据到达的那一刻。活跃度（「3 天前有消息」）要用它当基准。
-     *
-     * **不能在渲染里调 `Date.now()`**：渲染必须是纯的，React Compiler 会直接
-     * 判成缺陷；更实际的理由是，同一次渲染里逐行取「现在」会让跨零点的两行
-     * 出现「上面写昨天、下面写今天」。取一次，跟着数据走。
+     * 取一次跟着数据走，不在渲染里逐行取「现在」。
      */
     at: number
   }>({ key: '', data: null, error: null, at: 0 })
-  const [refreshToken, setRefreshToken] = useState(0)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
-
-  // key 里用 `\u0000` 分隔而不是逗号：客户姓名与搜索词都可能带逗号，拼起来会让
-  // 两组不同的筛选算出同一个 key，表现为「改了筛选但列表没动」。
-  const requestKey = [keyword, scope, stage, String(pendingReview), String(refreshToken)].join(
-    '\u0000',
-  )
 
   useEffect(() => {
     let cancelled = false
-    loadCustomers({ q: keyword, scope, stage, pendingReview })
+    loadCustomers({
+      q,
+      scope,
+      stage,
+      pendingReview,
+      ...(fromParam === '' ? {} : { from: fromParam }),
+      ...(toParam === '' ? {} : { to: toParam }),
+      mode,
+    })
       .then((data) => {
         if (!cancelled) setResult({ key: requestKey, data, error: null, at: Date.now() })
       })
@@ -140,7 +176,7 @@ export function CustomerPage({ item }: { item: NavItem }) {
     return () => {
       cancelled = true
     }
-  }, [requestKey, keyword, scope, stage, pendingReview])
+  }, [requestKey, q, scope, stage, pendingReview, fromParam, toParam, mode])
 
   const loading = result.key !== requestKey
   const data = loading ? null : result.data
@@ -148,138 +184,107 @@ export function CustomerPage({ item }: { item: NavItem }) {
 
   const reload = () => setRefreshToken((value) => value + 1)
 
+  /** 栏内改筛选：只改地址，地址变了数据自然重取。 */
+  const applyFilters = (next: CustomerFilters) => {
+    setParams(filtersToParams(next), { replace: true })
+  }
+
+  /**
+   * 图表下钻：带着当前筛选跳到客户进度。
+   *
+   * 用 `push` 而不是 `replace`：这是一次跨栏目的跳转，返回键应当能回到刚才那张图。
+   */
+  const jumpToProgress = (patch: Partial<CustomerFilters>) => {
+    const search = filtersToParams({ ...filters, ...patch }).toString()
+    const target = navPath(NAV_CODES.CUSTOMER_PROGRESS)
+    navigate(search === '' ? target : `${target}?${search}`)
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <ModuleHeader item={item} />
 
-      {!isProgress && data !== null ? <Summary data={data} /> : null}
+      <CustomerFilterBar filters={filters} onChange={applyFilters} now={now} />
 
-      <section className="rounded-xl border border-border bg-card">
-        <div className="flex flex-wrap items-end gap-3 border-b border-border p-4">
-          <form
-            className="flex items-end gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              setKeyword(draft.trim())
-            }}
-          >
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="customer-search" className="text-xs text-muted-foreground">
-                搜索客户
-              </label>
-              <Input
-                id="customer-search"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="姓名、昵称或显示名"
-                className="w-56"
-              />
-            </div>
-            <Button type="submit" variant="outline" size="sm">
-              查询
-            </Button>
-          </form>
+      {/*
+        范围提示必须存在。列表被静默缩小之后，用户的第一反应是「数据丢了」——
+        这个提示把「看不到别人的客户」与「客户真的没了」区分开。
+      */}
+      {data !== null && data.scopeKind === 'own' ? (
+        <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          当前只显示你负责的 {data.total} 位客户（作为设计师或销售）。需要跟进其他客户，
+          请联系管理员在「客户进度」的归属里转派给你。
+        </p>
+      ) : null}
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="customer-scope" className="text-xs text-muted-foreground">
-              地区
-            </label>
-            {/* 用原生 select 而不是造一个下拉组件：这里只需要「选一个值」，
-                原生元素自带键盘操作与读屏支持，造一个反而要补齐这些。 */}
-            <select
-              id="customer-scope"
-              value={scope}
-              onChange={(event) => setScope(event.target.value)}
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm text-foreground"
-            >
-              <option value="">全部地区</option>
-              <option value="domestic">国内</option>
-              <option value="overseas">海外</option>
-              <option value="special-region">港澳台</option>
-            </select>
-          </div>
+      {loading ? <LoadingState variant="plain" label="正在加载客户…" /> : null}
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="customer-stage" className="text-xs text-muted-foreground">
-              阶段
-            </label>
-            <select
-              id="customer-stage"
-              value={stage}
-              onChange={(event) => setStage(event.target.value)}
-              className="h-8 rounded-md border border-input bg-transparent px-2 text-sm text-foreground"
-            >
-              <option value="">全部阶段</option>
-              {CUSTOMER_STAGES.map((value) => (
-                <option key={value} value={value}>
-                  {stageLabel(value)}
-                </option>
-              ))}
-            </select>
-          </div>
+      {failure === null ? null : (
+        <ErrorState variant="plain" description={failure} onRetry={reload} />
+      )}
 
-          <label className="flex h-8 items-center gap-2 text-sm text-muted-foreground">
-            <Checkbox
-              checked={pendingReview}
-              onCheckedChange={(checked) => setPendingReview(checked === true)}
+      {data !== null && !isProgress ? (
+        <Overview
+          data={data}
+          rangeLabel={filters.range.label}
+          hasRange={filters.range.key !== 'all'}
+          activityConflict={
+            overlapsActivity(filters.range, now)
+              ? null
+              : `当前时间筛选（${filters.range.label}）与最近 24 小时没有交集`
+          }
+          onSelectStage={(value) => jumpToProgress({ stage: value })}
+          onSelectScope={(value) => jumpToProgress({ scope: value })}
+          onSelectHour={(hourStart) => {
+            const range = hourRange(hourStart)
+            if (range !== null) jumpToProgress({ range })
+          }}
+          onFocusToday={() => {
+            jumpToProgress({
+              range: resolveCustomerRange({ preset: 'day', from: null, to: null }, now),
+            })
+          }}
+        />
+      ) : null}
+
+      {data !== null && isProgress ? (
+        <section className="rounded-xl border border-border bg-card">
+          {data.items.length === 0 ? (
+            <EmptyState
+              icon={UsersRound}
+              variant="plain"
+              title="没有符合条件的客户"
+              description="换个筛选条件，或者先把客户录进来。"
             />
-            只看待复核
-          </label>
+          ) : (
+            <CustomerTable
+              items={data.items}
+              financeReadable={data.financeReadable}
+              nowMs={result.at}
+              onSelect={setSelectedId}
+            />
+          )}
 
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setDraft('')
-                setKeyword('')
-                setScope('')
-                setStage('')
-                setPendingReview(false)
-              }}
-            >
-              清空筛选
-            </Button>
-            {canWrite ? (
-              <Button type="button" size="sm" onClick={() => setCreating(true)}>
-                录入客户
-              </Button>
-            ) : null}
+          <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-2">
+            <p className="text-xs text-muted-foreground">
+              共 {data.total} 位客户
+              {data.items.length < data.total ? `，当前显示最近活跃的 ${data.items.length} 位` : ''}
+            </p>
+            <div className="ml-auto flex items-center gap-2">
+              {canReviewPool ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => setPoolOpen(true)}>
+                  公共池归类
+                </Button>
+              ) : null}
+              {canWrite ? (
+                <Button type="button" size="sm" onClick={() => setCreating(true)}>
+                  录入客户
+                </Button>
+              ) : null}
+            </div>
           </div>
-        </div>
-
-        {loading ? <LoadingState variant="plain" label="正在加载客户…" /> : null}
-
-        {failure === null ? null : (
-          <ErrorState variant="plain" description={failure} onRetry={reload} />
-        )}
-
-        {data !== null && data.items.length === 0 ? (
-          <EmptyState
-            icon={UsersRound}
-            variant="plain"
-            title="没有符合条件的客户"
-            description="换个筛选条件，或者先把客户录进来。"
-          />
-        ) : null}
-
-        {data !== null && data.items.length > 0 ? (
-          <CustomerTable
-            items={data.items}
-            financeReadable={data.financeReadable}
-            nowMs={result.at}
-            onSelect={setSelectedId}
-          />
-        ) : null}
-
-        {data === null ? null : (
-          <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-            共 {data.total} 位客户
-            {data.items.length < data.total ? `，当前显示最近活跃的 ${data.items.length} 位` : ''}
-          </p>
-        )}
-      </section>
+        </section>
+      ) : null}
 
       {selectedId === null ? null : (
         <CustomerDetailDialog
@@ -288,6 +293,10 @@ export function CustomerPage({ item }: { item: NavItem }) {
           onChanged={reload}
         />
       )}
+
+      {poolOpen ? (
+        <CustomerPoolDialog onClose={() => setPoolOpen(false)} onChanged={reload} />
+      ) : null}
 
       {creating ? (
         <CreateCustomerDialog
@@ -303,153 +312,99 @@ export function CustomerPage({ item }: { item: NavItem }) {
   )
 }
 
-/** 汇总卡。只在综合看板出现，理由见页面顶部的注释。 */
-function Summary({ data }: { data: CustomerListResponse }) {
-  // 补齐零值并按主线顺序排：缺档会让一排阶段标签在每次刷新后跳位。
-  const buckets = fillStageBuckets(data.summary.byStage, CUSTOMER_STAGES)
-  const contractTotal = data.financeReadable
-    ? data.items.reduce((sum, item) => sum + (item.contractTotalFen ?? 0), 0)
-    : null
-
-  return (
-    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <SummaryCard label="客户总数" value={String(data.total)} hint="当前筛选条件下" />
-      <SummaryCard
-        label="地区分布"
-        value={`${data.summary.byScope.domestic} / ${data.summary.byScope.overseas} / ${data.summary.byScope['special-region']}`}
-        hint="国内 / 海外 / 港澳台"
-      />
-      <SummaryCard
-        label="合同额合计"
-        value={contractTotal === null ? '无权限查看' : formatWan(contractTotal)}
-        hint={contractTotal === null ? '需要「查看客户金额」权限' : '当前页客户汇总'}
-      />
-      <SummaryCard
-        label="进行中"
-        value={String(
-          buckets
-            .filter((bucket) => bucket.stage !== 'closed' && bucket.stage !== 'lost')
-            .reduce((sum, bucket) => sum + bucket.count, 0),
-        )}
-        hint="未完结且未流失"
-      />
-
-      <div className="sm:col-span-2 lg:col-span-4">
-        <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-4">
-          {buckets.map((bucket) => (
-            <Badge
-              key={bucket.stage}
-              variant="outline"
-              className={`${toneClass(stageTone(bucket.stage))} border-0`}
-            >
-              {stageLabel(bucket.stage)} {bucket.count}
-            </Badge>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
+/** 地区层级到色调。三个层级用三种可分辨的颜色，与阶段环的五档色共用一套令牌。 */
+const SCOPE_TONE: Record<RegionScope, StageTone> = {
+  domestic: 'progress',
+  overseas: 'done',
+  'special-region': 'warn',
 }
 
-function SummaryCard({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-medium text-foreground">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground-weak">{hint}</p>
-    </div>
-  )
-}
-
-function CustomerTable({
-  items,
-  financeReadable,
-  nowMs,
-  onSelect,
-}: {
-  items: readonly CustomerListItemDto[]
-  financeReadable: boolean
-  /** 数据到达的时刻，由上游给一次。渲染里不许调 `Date.now()`。 */
-  nowMs: number
-  onSelect: (id: string) => void
+/**
+ * 综合看板主体。
+ *
+ * 四块内容全部来自同一次响应：`summary` 里的阶段分布、金额分布、24 小时活跃度，
+ * 加上 `total`。**没有一个数字是前端自己算的**（除了把比例折成弧长），因此四块
+ * 内容与客户进度页的清单永远对得上。
+ */
+function Overview(props: {
+  data: CustomerListResponse
+  rangeLabel: string
+  hasRange: boolean
+  activityConflict: string | null
+  onSelectStage: (stage: CustomerStage) => void
+  onSelectScope: (scope: string) => void
+  onSelectHour: (hourStart: string) => void
+  onFocusToday: () => void
 }) {
+  const { data } = props
+  // 补齐零值并按主线顺序排，再丢掉零档：环上不画零宽的弧，图例也不必列出 14 行空档。
+  const stageSlices: DonutSlice[] = fillStageBuckets(data.summary.byStage, CUSTOMER_STAGES)
+    .filter((bucket) => bucket.count > 0)
+    .map((bucket) => ({
+      key: bucket.stage,
+      label: stageLabel(bucket.stage),
+      value: bucket.count,
+      tone: stageTone(bucket.stage),
+    }))
+
+  const amountByScope = data.summary.amountByScope
+  const scopeOrder: RegionScope[] = ['domestic', 'overseas', 'special-region']
+  const amountSlices: DonutSlice[] =
+    amountByScope === null
+      ? []
+      : scopeOrder.map((key) => ({
+          key,
+          label: scopeLabel(key),
+          value: amountByScope[key],
+          tone: SCOPE_TONE[key],
+        }))
+
+  const amountTotal = data.summary.amountTotalFen
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>客户</TableHead>
-          <TableHead>地区</TableHead>
-          <TableHead>阶段</TableHead>
-          <TableHead>订单</TableHead>
-          <TableHead>最近消息</TableHead>
-          {financeReadable ? <TableHead className="text-right">合同额</TableHead> : null}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {items.map((item) => {
-          const review = reviewLabel(item.reviewStatus, item.confidence)
-          const activity = activityOf(item.lastMessageAt, nowMs)
-          return (
-            <TableRow
-              key={item.id}
-              className="cursor-pointer"
-              onClick={() => onSelect(item.id)}
-              // 键盘可达：只靠 onClick 的话，这张表用 Tab 走不到任何一行，
-              // 而这类「鼠标能用、键盘不能用」的缺陷在视觉上完全看不出来。
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  onSelect(item.id)
-                }
-              }}
-            >
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-foreground">{item.displayName}</span>
-                  {item.hasRepeat ? (
-                    <Badge variant="secondary" className="text-[10px]">
-                      复购
-                    </Badge>
-                  ) : null}
-                  {review === null ? null : (
-                    <Badge variant="outline" className="text-[10px]">
-                      {review}
-                    </Badge>
-                  )}
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground-weak">
-                  {item.shortName} · {item.msgRows} 条消息
-                </p>
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {item.region}
-                <span className="ml-1 text-xs text-muted-foreground-weak">
-                  {scopeLabel(item.regionScope)}
-                </span>
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline" className={`${toneClass(stageTone(item.stage))} border-0`}>
-                  {stageLabel(item.stage)}
-                </Badge>
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">{item.orderCount}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">
-                <div>{formatDateTime(item.lastMessageAt)}</div>
-                <div className={`mt-0.5 text-[11px] ${activityClass(activity.level)}`}>
-                  {activity.label}
-                </div>
-              </TableCell>
-              {financeReadable ? (
-                <TableCell className="text-right text-sm text-foreground">
-                  {formatFen(item.contractTotalFen)}
-                </TableCell>
-              ) : null}
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+    <div className="flex flex-col gap-4">
+      <CustomerKpiCards
+        summary={data.summary}
+        total={data.total}
+        rangeLabel={props.rangeLabel}
+        hasRange={props.hasRange}
+      />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <CustomerDonut
+          title="阶段分布"
+          note="按客户数，点击扇区看对应客户"
+          slices={stageSlices}
+          centerValue={String(data.total)}
+          centerLabel="位客户"
+          formatValue={(value) => `${value} 位`}
+          emptyText="当前筛选下没有客户"
+          onSelect={(key) => {
+            props.onSelectStage(key as CustomerStage)
+          }}
+        />
+
+        <CustomerDonut
+          title="合同额分布"
+          note={
+            amountTotal === null ? '需要「查看客户金额」权限' : '按地区层级，点击扇区看对应客户'
+          }
+          slices={amountSlices}
+          centerValue={amountTotal === null ? '无权限' : formatWan(amountTotal)}
+          centerLabel={amountTotal === null ? '查看金额需要授权' : '合同额合计'}
+          formatValue={(value) => formatWan(value)}
+          emptyText={amountTotal === null ? '当前账号看不到金额' : '当前筛选下的客户还没有合同额'}
+          onSelect={props.onSelectScope}
+        />
+      </div>
+
+      <CustomerActivityLine
+        points={data.summary.activity}
+        conflictNote={props.activityConflict}
+        onSelectHour={props.onSelectHour}
+        onFocusToday={props.onFocusToday}
+      />
+    </div>
   )
 }
 
@@ -483,7 +438,7 @@ function CreateCustomerDialog({
       return
     }
     if (region.trim() === '') {
-      setError('地区不能为空 —— 显示名由地区加称呼组成，缺了就分辨不出重名客户')
+      setError('地区不能为空：显示名由地区加称呼组成，缺了就分辨不出重名客户')
       return
     }
     // 合同额允许留空（还没谈定），但不允许填了却格式不对。
@@ -593,6 +548,7 @@ function CustomerDetailDialog({
 }) {
   const { can } = useAuth()
   const canOrder = can(PERMISSIONS.CUSTOMER_ORDER_WRITE)
+  const canAssign = can(PERMISSIONS.CUSTOMER_SCOPE_WRITE)
 
   // 与列表同一条做法：结果记住「是哪一位客户的」，加载态由 id 比较得出，
   // 不在 effect 体里同步清空状态（那会多渲染一轮，且 lint 直接判成缺陷）。
@@ -634,7 +590,7 @@ function CustomerDetailDialog({
     }
   }, [customerId])
 
-  /** 只替换详情里的错误，不动已加载的数据 —— 改一步失败时整页不该退回空白。 */
+  /** 只替换详情里的错误，不动已加载的数据：改一步失败时整页不该退回空白。 */
   const setError = (message: string | null) =>
     setLoaded((previous) => ({ ...previous, error: message }))
 
@@ -692,6 +648,32 @@ function CustomerDetailDialog({
               <Field label="活跃度" value={activityOf(customer.lastMessageAt, loaded.at).label} />
               <Field label="来源群文件" value={customer.groupFile ?? '手工录入'} />
             </dl>
+
+            {/*
+              负责团队。两栏同时展示，这是需求第 1 条「双向可查」的落点：
+              设计师打开时能看到销售是谁，销售打开时能看到设计师是谁，管理员两栏都看。
+            */}
+            <div className="rounded-xl border border-border p-4">
+              <p className="text-sm font-medium text-foreground">负责团队</p>
+              <AssignmentBadges assignment={customer.assignment} />
+              {canAssign ? (
+                <AssignmentEditor
+                  customerId={customer.id}
+                  current={customer.assignment}
+                  onSaved={(updated) => {
+                    setLoaded((previous) => ({
+                      ...previous,
+                      id: customer.id,
+                      customer: updated,
+                      error: null,
+                    }))
+                    setStage(updated.stage)
+                    onChanged()
+                  }}
+                  onError={setError}
+                />
+              ) : null}
+            </div>
 
             {canOrder ? (
               <div className="rounded-xl border border-border p-4">
@@ -987,10 +969,171 @@ function OrderCard({
  * 把异常翻译成一句能给人看的话。
  *
  * `ApiError` 带着服务端的中文 `message`（例如「回退到更早的阶段必须填写原因」），
- * 直接用它；其余异常一律给一句概括。**不透传 `error.message`** —— 那是英文的
+ * 直接用它；其余异常一律给一句概括。**不透传 `error.message`**：那是英文的
  * 运行时错误，对使用者没有意义。
  */
 function describeFailure(error: unknown): string {
   if (error instanceof ApiError) return error.message
   return '请求失败，请稍后重试'
+}
+
+/**
+ * 两栏归属的展示。
+ *
+ * 公共池用一句灰字说明，而不是留空：空白的含义在界面上是「没数据」，
+ * 而它实际是「待认领」——一个需要人动手的状态。
+ */
+function AssignmentBadges({ assignment }: { assignment: CustomerAssignmentDto }) {
+  const parts = assignmentParts(assignment)
+  if (parts.length === 0) {
+    return <p className="mt-1 text-sm text-muted-foreground">公共池（还没有负责人）</p>
+  }
+  return (
+    <div className="mt-1 flex flex-wrap gap-2">
+      {parts.map((part) => (
+        <Badge key={part.role} variant="outline" className="text-xs font-normal">
+          {part.roleLabel} · {part.name}
+          {part.mine ? '（我）' : ''}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * 调整归属。
+ *
+ * 两个下拉而不是一个「负责人」下拉：一栏是人，一个人可能同时是某位客户的设计师
+ * 与另一位客户的销售，把两栏合成一个下拉会让「这位客户的销售是谁」无法表达。
+ *
+ * 账号名单从 `/api/customers/assignable-users` 取，不读系统账号接口 —— 后者要
+ * `system.user.read`，而业务角色没有这个点。
+ */
+function AssignmentEditor({
+  customerId,
+  current,
+  onSaved,
+  onError,
+}: {
+  customerId: string
+  current: CustomerAssignmentDto
+  onSaved: (customer: CustomerDetailDto) => void
+  onError: (message: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [users, setUsers] = useState<AssignableUserDto[] | null>(null)
+  const [designerId, setDesignerId] = useState(current.designerId ?? '')
+  const [salesId, setSalesId] = useState(current.salesId ?? '')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  /*
+   * 名单在展开时才取。详情对话框多半只是看一眼，每次打开都拉一份账号列表
+   * 是白花一次往返；而放到页面加载时取，则会把「看客户」这个动作与「能转派」
+   * 绑在一起 —— 没有转派权的人也会发这个请求（服务端会 403）。
+   */
+  useEffect(() => {
+    if (!open || users !== null) return
+    let cancelled = false
+    loadAssignableUsers()
+      .then((list) => {
+        if (!cancelled) setUsers(list)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) onError(describeFailure(caught))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, users, onError])
+
+  if (!open) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="mt-3"
+        onClick={() => setOpen(true)}
+      >
+        调整归属
+      </Button>
+    )
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    onError(null)
+    try {
+      const updated = await assignCustomer(customerId, {
+        designerId: designerId === '' ? null : designerId,
+        salesId: salesId === '' ? null : salesId,
+        ...(reason.trim() === '' ? {} : { reason: reason.trim() }),
+      })
+      setOpen(false)
+      setReason('')
+      onSaved(updated)
+    } catch (caught) {
+      onError(describeFailure(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-muted/40 p-2">
+      <label className="text-xs text-muted-foreground">
+        设计师
+        <select
+          value={designerId}
+          onChange={(event) => setDesignerId(event.target.value)}
+          className="mt-1 block h-8 min-w-40 rounded-md border border-input bg-transparent px-2 text-sm text-foreground"
+        >
+          <option value="">未指定</option>
+          {(users ?? [])
+            .filter((user) => user.role === 'designer')
+            .map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.displayName}
+              </option>
+            ))}
+        </select>
+      </label>
+      <label className="text-xs text-muted-foreground">
+        销售
+        <select
+          value={salesId}
+          onChange={(event) => setSalesId(event.target.value)}
+          className="mt-1 block h-8 min-w-40 rounded-md border border-input bg-transparent px-2 text-sm text-foreground"
+        >
+          <option value="">未指定</option>
+          {(users ?? [])
+            .filter((user) => user.role === 'sales')
+            .map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.displayName}
+              </option>
+            ))}
+        </select>
+      </label>
+      <Input
+        value={reason}
+        onChange={(event) => setReason(event.target.value)}
+        placeholder="调整原因（必填）"
+        className="h-8 w-56"
+      />
+      <Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>
+        {busy ? '保存中…' : '保存归属'}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => setOpen(false)}
+      >
+        取消
+      </Button>
+    </div>
+  )
 }

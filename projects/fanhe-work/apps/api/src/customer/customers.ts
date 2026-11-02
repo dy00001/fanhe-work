@@ -1,6 +1,9 @@
 import {
+  AUDIT_ACTIONS,
   CUSTOMER_LIMITS,
   CUSTOMER_STAGES,
+  activityWindow,
+  bucketHourlyActivity,
   buildInitialSteps,
   customerDisplayName,
   customerShortName,
@@ -17,33 +20,45 @@ import {
   type CustomerListResponse,
   type CustomerOrderDto,
   type CustomerStage,
+  type CustomerSummary,
+  type AssignCustomerRequest,
+  type RegionScope,
   type SetCustomerStageRequest,
   type UpdateCustomerRequest,
   type UpdateCustomerStepRequest,
 } from '@fanhe/shared'
 
+import { recordAudit } from '../audit/audit.js'
 import { prisma } from '../db/prisma.js'
 /* 值导入，不是 `import type`：下面用 `Prisma.DbNull` 表示「这一列显式写 NULL」，
    那是运行时常量。用 type-only 导入时 tsc 报 TS1361，而这条路径只在
    `legacyBlocks` 缺省时才会走到，单测与冒烟都碰不到。 */
 import { Prisma } from '../generated/prisma/client.js'
+import { actorOf, roleOf, scopeWhere, SYSTEM_VIEWER, type CustomerViewer } from './scope.js'
 
 /**
  * 客户档案与订单的读写。
  *
- * **与个人工作台那几个模块最根本的差别：这里的数据不属于某个人。** 纪要与启动
- * 配置按 `userId` 隔离，谁写的谁看；客户档案是公司资产，五个账号看的是同一份。
- * 因此这里没有「所有权」参数，隔离由权限点承担，而不是由 where 条件承担 ——
- * 把 userId 塞进 where 反而会让「换个账号就看同一客户」变成一句谎话。
+ * **隔离由「权限点 × 归属范围」共同承担。** 早期版本的这里写着「数据不属于某个
+ * 人，因此没有所有权参数」，那句话在客户平台只有五个账号时成立。现在设计师与
+ * 销售各看各的客户，归属必须进 where —— 只靠权限点只能表达「能不能读客户」，
+ * 表达不了「能读哪几位客户」。
  *
- * **金额裁剪在这里做，不在路由里。** 路由只负责算出一个布尔值（有没有
- * `customer.finance.read`），裁剪本身与其余字段的映射写在同一处。分开写的话，
- * 新增一条返回订单的接口时很容易漏掉裁剪，而漏掉的表现是「金额原样出现在
- * 界面上」—— 它不会报错，只会有人某天发现自己看到了不该看的数字。
+ * 三条与隔离有关的硬规则，改动这个文件前必须先读：
  *
- * **不写审计。** 与纪要同一判断：改一个客户的电话，影响范围不超出这个客户本身。
- * 真正需要审计的是「谁把合同额从 16.8 万改成 0」，而那类改动属于金额字段，
- * 等金额编辑接口做出来时再单独加审计，不在这里预先铺一层。
+ *   1. **范围条件只在 `buildCustomerWhere` 里写一次。** 列表、总数、四张图、活跃度
+ *      七处共用它，各写一遍的结果是「列表筛了、KPI 没筛」，而那种偏差没有报错。
+ *   2. **单条读取一律 `findFirst({ where: { id, ...scopeWhere } })`**，不要
+ *      `findUnique` 之后在内存里判归属。后者会让「存在但不属于你」这条路径多一次
+ *      查询，且容易在某个分支漏判。
+ *   3. **范围判断在字段白名单之前。** 顺序颠倒时，400（字段不合法）与 404（不存在）
+ *      的差异会泄露「这个客户确实存在，只是不属于你」。
+ *
+ * **金额裁剪仍然在这里做，不在路由里。** 裁剪与其余字段的映射写在同一处，
+ * 新增一条返回订单的接口时不容易漏掉。判据由路由算好传进来（`viewer.canReadFinance`）。
+ *
+ * **归属变更写审计。** 与改电话不同，归属变更同时改变「谁能看到这份档案」与
+ * 「这单算谁的」，是本期唯一需要追溯的档案改动。
  */
 
 export type CustomerFailureReason =
@@ -56,11 +71,22 @@ export type CustomerFailureReason =
   | 'missing_reason'
   | 'duplicate_chatroom'
   | 'duplicate_code'
+  /** 提交了不在自己可编辑范围内的字段（例如没有复核权限却改 `reviewStatus`）。 */
+  | 'field_not_allowed'
+  /** 转派目标账号不存在、已删除或已停用。 */
+  | 'invalid_assignee'
 
 export type CustomerResult<T> = { ok: true; data: T } | { ok: false; reason: CustomerFailureReason }
 
-/** 列表筛选条件。全部可选，缺省即不加条件。 */
+/** 列表筛选条件。`viewer` 必填，其余可选，缺省即不加条件。 */
 export type CustomerListFilter = {
+  /**
+   * 当前账号。**必填，这是本模块最重要的一个类型设计。**
+   *
+   * 做成可选时，新增一个调用点忘了传，编译器不报错，运行时静默放开全库 ——
+   * 界面上完全看不出异常。必填把「每个调用点必须表态」变成编译期约束。
+   */
+  viewer: CustomerViewer
   // 每个字段都显式带上 `| undefined`：tsconfig 开了
   // `exactOptionalPropertyTypes`，不带的话「传一个可能为 undefined 的值」
   // 与「不传这个字段」在类型上不等价，调用方得先拼一个对象再展开才能通过。
@@ -70,6 +96,22 @@ export type CustomerListFilter = {
   /** 只看待复核。`true` 时限定 `reviewStatus = pending`。 */
   pendingReview?: boolean | undefined
   q?: string | undefined
+  /**
+   * 时间筛选起点（含）与终点（不含），按 `lastMessageAt` 判定。
+   *
+   * 锚点选「最近消息时间」的理由：列表那一列显示的就是它，活跃度折线也是按它分桶。
+   * 若改用 `createdAt`（入库时间），同一批客户会因为导入批次不同而被切到不同的
+   * 时间档里，而界面上看不出任何异常。
+   *
+   * 代价是 `lastMessageAt` 为空的客户在任何时间筛选下都不出现。这类客户是「还没有
+   * 消息的档案」，本来就不该出现在按沟通活跃度切出来的视图里。
+   */
+  from?: Date | undefined
+  to?: Date | undefined
+  /** 活跃度窗口的基准时刻。测试注入用，缺省取当前时间。 */
+  now?: Date | undefined
+  /** `summary` 时只算汇总不查列表行。综合看板用，省掉最多 200 行的往返。 */
+  mode?: 'list' | 'summary' | undefined
   limit?: number | undefined
 }
 
@@ -93,6 +135,15 @@ const LIST_SELECT = {
   lastMessageAt: true,
   contractTotalFen: true,
   repeatOfId: true,
+  /*
+   * 双角色归属要连名字一起取，不能只取 id。
+   *
+   * 需求是「设计师端看到销售是谁，销售端看到设计师是谁」——只给 id 等于不给：
+   * 前端没有账号名表，拿 id 只能渲染成一串 UUID，或者再发一次请求查名字
+   * （列表二十行就是二十次）。
+   */
+  designer: { select: { id: true, displayName: true } },
+  sales: { select: { id: true, displayName: true } },
   _count: { select: { orders: true, repeats: true } },
 } as const
 
@@ -157,10 +208,13 @@ type ListRow = {
   lastMessageAt: Date | null
   contractTotalFen: number | null
   repeatOfId: string | null
+  designer: { id: string; displayName: string } | null
+  sales: { id: string; displayName: string } | null
   _count: { orders: number; repeats: number }
 }
 
-function toListItem(row: ListRow, canReadFinance: boolean): CustomerListItemDto {
+function toListItem(row: ListRow, viewer: CustomerViewer): CustomerListItemDto {
+  const canReadFinance = viewer.canReadFinance
   return {
     id: row.id,
     displayName: row.displayName,
@@ -188,6 +242,20 @@ function toListItem(row: ListRow, canReadFinance: boolean): CustomerListItemDto 
     // 只看第 2、3 种会漏掉第 1 种 —— 而第 1 种恰恰是当前数据里的主流形态，
     // 漏掉的表现是「一人三单在列表上看不出是复购」，被当成三个客户。
     hasRepeat: row._count.orders > 1 || row.repeatOfId !== null || row._count.repeats > 0,
+    /*
+     * 双角色归属整块下发。`myRole` 在服务端算好，前端不要自己拿 id 比对：
+     * 归属规则写在两个地方，漂移时的表现是「我」这个标记偶尔消失，且不报错。
+     */
+    assignment: {
+      designerId: row.designer?.id ?? null,
+      designerName: row.designer?.displayName ?? null,
+      salesId: row.sales?.id ?? null,
+      salesName: row.sales?.displayName ?? null,
+      myRole: roleOf(
+        { designerId: row.designer?.id ?? null, salesId: row.sales?.id ?? null },
+        viewer.userId,
+      ),
+    },
   }
 }
 
@@ -250,95 +318,266 @@ function toOrder(
   }
 }
 
+/** 库里存的是字符串，收窄成契约里的联合类型。越界值落成 domestic，不透给前端。 */
+function normalizeScope(value: string): RegionScope {
+  return value === 'overseas' || value === 'special-region' ? value : 'domestic'
+}
+
+/**
+ * 把筛选条件折成一个 Prisma where。
+ *
+ * **列表、总数、阶段分布、地区分布、金额汇总、新增计数、活跃度分桶，七处共用这一个
+ * 函数。** 各写一遍的结果是「筛了地区以后环形图变了但 KPI 没变」这类偏差：每个数字
+ * 单独看都合理，放在一屏里才互相矛盾，而那种矛盾没有任何报错。
+ */
+export function buildCustomerWhere(filter: CustomerListFilter): Prisma.CustomerWhereInput {
+  const where: Prisma.CustomerWhereInput = {}
+
+  /*
+   * 范围条件放进 `AND` 数组，**不能直接赋给 `where.OR`**。检索也要用 `OR`
+   * （三个字段任一命中），两处都写 `OR` 时后写的会静默覆盖前面那个 ——
+   * 表现是「按名字搜出来的结果里出现了别人负责的客户」，而界面上不会报错。
+   */
+  const and: Prisma.CustomerWhereInput[] = []
+  if (filter.viewer.scope.kind === 'own') and.push(scopeWhere(filter.viewer.scope))
+
+  if (filter.region) where.region = filter.region
+  if (filter.scope) where.regionScope = filter.scope
+  if (filter.stage) where.stage = filter.stage
+  if (filter.pendingReview) where.reviewStatus = 'pending'
+  if (filter.q) {
+    // 检索四项：显示名、短名、真名。用 `mode: 'insensitive'` 是因为英文昵称
+    // 大小写不固定（JoJo / jojo 都有人写），而中文不受影响。
+    and.push({
+      OR: [
+        { displayName: { contains: filter.q, mode: 'insensitive' } },
+        { shortName: { contains: filter.q, mode: 'insensitive' } },
+        { realName: { contains: filter.q, mode: 'insensitive' } },
+      ],
+    })
+  }
+  if (filter.from !== undefined || filter.to !== undefined) {
+    where.lastMessageAt = {
+      ...(filter.from === undefined ? {} : { gte: filter.from }),
+      ...(filter.to === undefined ? {} : { lt: filter.to }),
+    }
+  }
+  if (and.length > 0) where.AND = and
+  return where
+}
+
+/**
+ * 时间窗口条件。半开区间，两端都可缺省。
+ *
+ * 返回的是**字段过滤器**而不是整个 where：调用处要把它挂在 `firstMessageAt` 或
+ * `lastMessageAt` 下面，返回 where 会让调用方多套一层 `AND`，而多套的那层一旦
+ * 写错，筛选就静默失效。
+ */
+function timeWindowFilter(from: Date | undefined, to: Date | undefined): { gte?: Date; lt?: Date } {
+  return {
+    ...(from === undefined ? {} : { gte: from }),
+    ...(to === undefined ? {} : { lt: to }),
+  }
+}
+
 /**
  * 列表 + 汇总。
  *
  * **汇总不受筛选条件影响的部分要分开看**：`byStage` 与 `byScope` 都按**当前筛选**
  * 统计，因为综合看板的用途是「筛完地区后看这批人的阶段分布」。若按全库统计，筛选
  * 之后图表不变，用起来会以为筛选没生效。
+ *
+ * **`mode: 'summary'` 只跳过列表行，不跳过任何汇总。** 综合看板不显示清单，但它的
+ * KPI、两个环形图与折线图都来自这里；让两栏各调一个接口的话，筛选语义会在两处
+ * 各实现一遍，而两份实现漂移时的表现是「看板与进度页对不上」。
  */
-export async function listCustomers(
-  filter: CustomerListFilter,
-  canReadFinance: boolean,
-): Promise<CustomerListResponse> {
-  const where: Prisma.CustomerWhereInput = {}
-  if (filter.region) where.region = filter.region
-  if (filter.scope) where.regionScope = filter.scope
-  if (filter.stage) where.stage = filter.stage
-  if (filter.pendingReview) where.reviewStatus = 'pending'
-  if (filter.q) {
-    // 检索三项：显示名、短名、真名。用 `mode: 'insensitive'` 是因为英文昵称
-    // 大小写不固定（JoJo / jojo 都有人写），而中文不受影响。
-    where.OR = [
-      { displayName: { contains: filter.q, mode: 'insensitive' } },
-      { shortName: { contains: filter.q, mode: 'insensitive' } },
-      { realName: { contains: filter.q, mode: 'insensitive' } },
-    ]
+export async function listCustomers(filter: CustomerListFilter): Promise<CustomerListResponse> {
+  const canReadFinance = filter.viewer.canReadFinance
+  const where = buildCustomerWhere(filter)
+  const limit = Math.min(filter.limit ?? CUSTOMER_LIMITS.PAGE_MAX, CUSTOMER_LIMITS.PAGE_MAX)
+  const wantItems = filter.mode !== 'summary'
+  const now = filter.now ?? new Date()
+  const window = activityWindow(now)
+  const hasTimeWindow = filter.from !== undefined || filter.to !== undefined
+
+  const rowsPromise: Promise<ListRow[]> = wantItems
+    ? (prisma.customer.findMany({
+        where,
+        select: LIST_SELECT,
+        // 「最近有动静的排前面」。一直按 id 排会让列表看起来随机，
+        // 而这张表的日常用途是找刚才聊过的那个人。
+        orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+        take: limit,
+      }) as unknown as Promise<ListRow[]>)
+    : Promise.resolve([])
+
+  const [rows, total, stageGroups, scopeGroups, amountGroups, newInWindow, activityRows] =
+    await Promise.all([
+      rowsPromise,
+      prisma.customer.count({ where }),
+      prisma.customer.groupBy({ by: ['stage'], where, _count: { _all: true } }),
+      prisma.customer.groupBy({ by: ['regionScope'], where, _count: { _all: true } }),
+      prisma.customer.groupBy({ by: ['regionScope'], where, _sum: { contractTotalFen: true } }),
+      // 未限定时间时「窗口内新增」就是总数，省掉一次 count。用 null 表达「无需另算」，
+      // 不用 0 或 -1 这类哨兵值：它们与真实的计数无法在类型上区分。
+      hasTimeWindow
+        ? prisma.customer.count({
+            where: {
+              AND: [where, { firstMessageAt: timeWindowFilter(filter.from, filter.to) }],
+            },
+          })
+        : Promise.resolve(null),
+      // 活跃度只看最近 24 小时，与时间筛选取交集。两者用 AND 合并，不展开成一个对象：
+      // 展开时后写的 `lastMessageAt` 会静默覆盖前面那个时间筛选。
+      prisma.customer.findMany({
+        where: { AND: [where, { lastMessageAt: { gte: window.start, lt: window.end } }] },
+        select: { lastMessageAt: true },
+      }),
+    ])
+
+  const byScope: Record<RegionScope, number> = { 'special-region': 0, overseas: 0, domestic: 0 }
+  for (const group of scopeGroups) {
+    byScope[normalizeScope(group.regionScope)] += group._count._all
   }
 
-  const limit = Math.min(filter.limit ?? CUSTOMER_LIMITS.PAGE_MAX, CUSTOMER_LIMITS.PAGE_MAX)
+  const byStage = stageGroups
+    .map((group) => ({ stage: group.stage as CustomerStage, count: group._count._all }))
+    // 非法档位直接丢掉：它说明库里有一行来自旧契约，让它出现在图表里比丢掉更糟。
+    .filter((bucket) => (CUSTOMER_STAGES as readonly string[]).includes(bucket.stage))
 
-  const [rows, total, stageGroups, scopeGroups] = await Promise.all([
-    prisma.customer.findMany({
-      where,
-      select: LIST_SELECT,
-      // 「最近有动静的排前面」。一直按 id 排会让列表看起来随机 ——
-      // 而这张表的日常用途是找刚才聊过的那个人。
-      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
-      take: limit,
-    }),
-    prisma.customer.count({ where }),
-    prisma.customer.groupBy({ by: ['stage'], where, _count: { _all: true } }),
-    prisma.customer.groupBy({ by: ['regionScope'], where, _count: { _all: true } }),
-  ])
+  // 进行中从 `byStage` 反推，不另发一次 count。同一个数字在两个地方各算一遍，
+  // 口径漂移时表现是「KPI 说 12 位进行中，环形图加起来只有 11 位」。
+  const inProgress = byStage
+    .filter((bucket) => bucket.stage !== 'closed' && bucket.stage !== 'lost')
+    .reduce((sum, bucket) => sum + bucket.count, 0)
 
-  const byScope = { 'special-region': 0, overseas: 0, domestic: 0 }
-  for (const group of scopeGroups) {
-    const key =
-      group.regionScope === 'overseas' || group.regionScope === 'special-region'
-        ? group.regionScope
-        : 'domestic'
-    byScope[key] += group._count._all
+  const amountByScope: Record<RegionScope, number> | null = canReadFinance
+    ? { 'special-region': 0, overseas: 0, domestic: 0 }
+    : null
+  if (amountByScope !== null) {
+    for (const group of amountGroups) {
+      amountByScope[normalizeScope(group.regionScope)] += group._sum.contractTotalFen ?? 0
+    }
+  }
+  const amountTotalFen =
+    amountByScope === null
+      ? null
+      : amountByScope.domestic + amountByScope.overseas + amountByScope['special-region']
+
+  const summary: CustomerSummary = {
+    byScope,
+    byStage,
+    amountByScope,
+    amountTotalFen,
+    kpi: { inProgress, newInWindow: newInWindow ?? total },
+    activity: bucketHourlyActivity(
+      activityRows.map((row) => row.lastMessageAt?.toISOString() ?? null),
+      now,
+    ),
   }
 
   return {
-    items: rows.map((row) => toListItem(row as ListRow, canReadFinance)),
+    items: rows.map((row) => toListItem(row, filter.viewer)),
     total,
-    summary: {
-      byScope,
-      byStage: stageGroups
-        .map((group) => ({ stage: group.stage as CustomerStage, count: group._count._all }))
-        // 非法档位直接丢掉：它说明库里有一行来自旧契约，让它出现在图表里比丢掉更糟。
-        .filter((bucket) => (CUSTOMER_STAGES as readonly string[]).includes(bucket.stage)),
-    },
+    summary,
     financeReadable: canReadFinance,
+    /*
+     * 范围随响应下发，前端据此决定要不要显示「当前只显示你负责的客户」这条提示
+     * 以及归属列。**不要让前端按角色自己算**：一是它拿到的角色与实际权限可能不同
+     * （账号级单独授予），二是两处算法漂移时的表现是提示消失，而不是报错。
+     */
+    scopeKind: filter.viewer.scope.kind,
   }
 }
 
 export async function getCustomer(
   id: string,
-  canReadFinance: boolean,
+  viewer: CustomerViewer,
 ): Promise<CustomerResult<CustomerDetailDto>> {
-  const row = await prisma.customer.findUnique({ where: { id }, select: DETAIL_SELECT })
-  if (row === null) return { ok: false, reason: 'not_found' }
-
-  const base = toListItem(row as unknown as ListRow, canReadFinance)
-  return {
-    ok: true,
-    data: {
-      ...base,
-      realName: row.realName,
-      phone: row.phone,
-      primaryNickname: row.primaryNickname,
-      nameSource: row.nameSource,
-      groupFile: row.groupFile,
-      firstMessageAt: row.firstMessageAt?.toISOString() ?? null,
-      skipImg: row.skipImg,
-      skipVoice: row.skipVoice,
-      repeatOfId: row.repeatOfId,
-      orders: row.orders.map((order) => toOrder(order, canReadFinance)),
-    },
+  const row = await prisma.customer.findFirst({
+    where: { id, ...scopeWhere(viewer.scope) },
+    select: DETAIL_SELECT,
+  })
+  if (row === null) {
+    await recordDeniedAccess(id, viewer)
+    return { ok: false, reason: 'not_found' }
   }
+
+  return { ok: true, data: toDetail(row as unknown as DetailRow, viewer) }
+}
+
+type DetailRow = ListRow & {
+  realName: string | null
+  phone: string | null
+  primaryNickname: string | null
+  nameSource: string | null
+  groupFile: string | null
+  firstMessageAt: Date | null
+  skipImg: number
+  skipVoice: number
+  orders: Parameters<typeof toOrder>[0][]
+}
+
+function toDetail(row: DetailRow, viewer: CustomerViewer): CustomerDetailDto {
+  return {
+    ...toListItem(row, viewer),
+    realName: row.realName,
+    phone: row.phone,
+    primaryNickname: row.primaryNickname,
+    nameSource: row.nameSource,
+    groupFile: row.groupFile,
+    firstMessageAt: row.firstMessageAt?.toISOString() ?? null,
+    skipImg: row.skipImg,
+    skipVoice: row.skipVoice,
+    repeatOfId: row.repeatOfId,
+    orders: row.orders.map((order) => toOrder(order, viewer.canReadFinance)),
+  }
+}
+
+/**
+ * 记一条行级越权尝试。
+ *
+ * **只在「这个 id 确实存在、但不在你的范围内」时写。** 不做这个区分的话，
+ * 爬虫随机打 id 会把审计表灌满，真正需要看见的试探被淹掉。
+ *
+ * 这个判断只在 404 分支上多一次 count，正常路径（可见的行）没有额外开销。
+ * 它**不改变响应**：对外一律是同一个 404，否则「403 还是 404」本身就泄露存在性。
+ */
+async function recordDeniedAccess(id: string, viewer: CustomerViewer): Promise<void> {
+  if (viewer.scope.kind === 'all') return
+  if (!UUID_PATTERN.test(id)) return
+  const exists = await prisma.customer.count({ where: { id } })
+  if (exists === 0) return
+  await recordAudit({
+    action: AUDIT_ACTIONS.CUSTOMER_ACCESS_DENIED,
+    // 记 failure 而不是 success：审计按 result 过滤时，越权尝试应与正常读取分开。
+    result: 'failure',
+    actor: actorOf(viewer),
+    target: { type: 'customer', id },
+  })
+}
+
+/** 主键是 uuid7。非法串直接判不存在，避免 Postgres 抛 `invalid input syntax for type uuid`。 */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 取一条在当前范围内可见的客户。不可见与不存在同形返回 null。
+ *
+ * 五条写路径（改档案、建订单、改环节、推阶段、转派）统一走它。写路径漏掉范围校验
+ * 是本期最危险的缺陷：漏了不会报错，只会让「A 能改 B 的客户」这件事在界面上
+ * 完全看不出来。
+ */
+async function findScopedCustomer(
+  id: string,
+  viewer: CustomerViewer,
+): Promise<{ id: string; stage: string; realName: string | null; region: string } | null> {
+  if (!UUID_PATTERN.test(id)) return null
+  const row = await prisma.customer.findFirst({
+    where: { id, ...scopeWhere(viewer.scope) },
+    select: { id: true, stage: true, realName: true, region: true },
+  })
+  if (row === null) await recordDeniedAccess(id, viewer)
+  return row
 }
 
 /**
@@ -389,6 +628,29 @@ export type CustomerArchiveExtras = {
   groupFile?: string | null | undefined
   legacyBlocks?: Prisma.InputJsonValue | undefined
   repeatOfId?: string | null | undefined
+  /** 导入时可显式指定归属；缺省由创建者身份决定（见 `defaultAssignment`）。 */
+  designerId?: string | null | undefined
+  salesId?: string | null | undefined
+}
+
+/**
+ * 新建客户的默认归属。
+ *
+ * **不默认进公共池。** 设计师自己录进来一位客户，如果两个归属都留空，那一行立刻
+ * 落到公共池 —— 而公共池只有持 `customer.scope.read` 的账号看得到。表现是
+ * 「刚录完，客户不见了」，且没有任何报错。这是行级隔离上线后最容易踩的一脚。
+ *
+ * 判据用角色 code 只为决定「记到哪一栏」，不参与可见性：销售录的记 sales，
+ * 其余（设计师、以及被单独授予客户权限的成员）记 designer。全局范围的账号
+ * 不自动归属 —— 管理员录入的客户本来就该由人来分配。
+ */
+function defaultAssignment(viewer: CustomerViewer): {
+  designerId: string | null
+  salesId: string | null
+} {
+  if (viewer.scope.kind === 'all') return { designerId: null, salesId: null }
+  if (viewer.roleCode === 'sales') return { designerId: null, salesId: viewer.userId }
+  return { designerId: viewer.userId, salesId: null }
 }
 
 function normalizeRegionOrNull(region: string): string | null {
@@ -436,6 +698,7 @@ export async function insertCustomer(
   input: CreateCustomerInput,
   origin: CustomerOrigin,
   extras: CustomerArchiveExtras = {},
+  viewer: CustomerViewer = SYSTEM_VIEWER,
 ): Promise<CustomerResult<CustomerDetailDto>> {
   const normalized = normalizeCustomerInput(input)
   if (!normalized.ok) return { ok: false, reason: normalized.reason }
@@ -451,6 +714,7 @@ export async function insertCustomer(
   if (exists !== null) return { ok: false, reason: 'duplicate_chatroom' }
 
   const project = input.project?.trim() ?? ''
+  const fallback = defaultAssignment(viewer)
   const created = await prisma.customer.create({
     data: {
       chatroom: finalChatroom,
@@ -466,6 +730,8 @@ export async function insertCustomer(
       reviewStatus: origin.reviewStatus,
       stage: input.stage ?? 'consulting',
       stageSource: origin.stageSource,
+      designerId: extras.designerId ?? fallback.designerId,
+      salesId: extras.salesId ?? fallback.salesId,
       groupFile: extras.groupFile ?? null,
       msgRows: extras.msgRows ?? 0,
       firstMessageAt: extras.firstMessageAt ?? null,
@@ -481,13 +747,14 @@ export async function insertCustomer(
     select: { id: true },
   })
 
-  return getCustomer(created.id, true)
+  return getCustomer(created.id, viewer)
 }
 
 export async function createCustomer(
   input: CreateCustomerInput,
+  viewer: CustomerViewer = SYSTEM_VIEWER,
 ): Promise<CustomerResult<CustomerDetailDto>> {
-  return insertCustomer(input, MANUAL_ORIGIN)
+  return insertCustomer(input, MANUAL_ORIGIN, {}, viewer)
 }
 
 export type UpdateCustomerInput = UpdateCustomerRequest
@@ -495,13 +762,26 @@ export type UpdateCustomerInput = UpdateCustomerRequest
 export async function updateCustomer(
   id: string,
   input: UpdateCustomerInput,
-  canReadFinance: boolean,
+  viewer: CustomerViewer,
 ): Promise<CustomerResult<CustomerDetailDto>> {
-  const current = await prisma.customer.findUnique({
-    where: { id },
-    select: { id: true, realName: true, region: true },
-  })
+  /*
+   * 先判范围，再判字段。**顺序不能反**：先判字段时，两次响应（400 字段越界 /
+   * 404 不存在）的差异会泄露「这个客户确实存在，只是不属于你」。顺序错了不会
+   * 有任何测试变红，只能靠评审发现。
+   */
+  const current = await findScopedCustomer(id, viewer)
   if (current === null) return { ok: false, reason: 'not_found' }
+
+  /*
+   * 复核状态不在普通编辑范围内。它决定一条机器猜测能不能当正式档案用，
+   * 因此只给持 `customer.import.review` 的账号。
+   *
+   * 拒绝时返回 400 而不是静默忽略：静默忽略会让用户以为保存成功，而那颗
+   * 变更从来没有落库 —— 这类「看起来成功了」的失败最难发现。
+   */
+  if (input.reviewStatus !== undefined && !viewer.canReview) {
+    return { ok: false, reason: 'field_not_allowed' }
+  }
 
   const data: Prisma.CustomerUpdateInput = {}
 
@@ -540,10 +820,10 @@ export async function updateCustomer(
     data.shortName = customerShortName(nextName, nextRegion)
   }
 
-  if (Object.keys(data).length === 0) return getCustomer(id, canReadFinance)
+  if (Object.keys(data).length === 0) return getCustomer(id, viewer)
 
   await prisma.customer.update({ where: { id }, data })
-  return getCustomer(id, canReadFinance)
+  return getCustomer(id, viewer)
 }
 
 /** 合同额变化后重算客户级汇总。派生列，任何地方都不直接写。 */
@@ -618,13 +898,12 @@ export function normalizeOrderAmounts(
 export async function createOrder(
   customerId: string,
   input: CreateOrderInput,
-  canReadFinance: boolean,
+  viewer: CustomerViewer,
   detail?: OrderImportDetail,
 ): Promise<CustomerResult<CustomerDetailDto>> {
-  const customer = await prisma.customer.findUnique({
-    where: { id: customerId },
-    select: { id: true, stage: true, stageSource: true },
-  })
+  // 现状这里只判「客户存在」，没判归属 —— 也就是 A 能给 B 的客户建单。
+  // 建单会改客户级合同额汇总，等于间接改了别人名下的数字。
+  const customer = await findScopedCustomer(customerId, viewer)
   if (customer === null) return { ok: false, reason: 'not_found' }
 
   const amountInvalid = normalizeOrderAmounts(input)
@@ -709,7 +988,7 @@ export async function createOrder(
   })
 
   await recomputeContractTotal(customerId)
-  return getCustomer(customerId, canReadFinance)
+  return getCustomer(customerId, viewer)
 }
 
 export type UpdateStepInput = UpdateCustomerStepRequest
@@ -737,8 +1016,14 @@ export async function updateStep(
   orderId: string,
   idx: number,
   input: UpdateStepInput,
-  canReadFinance: boolean,
+  viewer: CustomerViewer,
 ): Promise<CustomerResult<CustomerDetailDto>> {
+  // 先判客户归属，再判订单归属。只判后者时，A 可以对 B 的客户名下、自己猜到的
+  // orderId 推进环节 —— 而 orderId 会出现在客户详情响应里，猜到并不难。
+  if ((await findScopedCustomer(customerId, viewer)) === null) {
+    return { ok: false, reason: 'not_found' }
+  }
+
   const order = await prisma.customerOrder.findUnique({
     where: { id: orderId },
     select: { customerId: true },
@@ -772,7 +1057,7 @@ export async function updateStep(
   if (Object.keys(data).length > 0) {
     await prisma.customerOrderStep.update({ where: { id: step.id }, data })
   }
-  return getCustomer(customerId, canReadFinance)
+  return getCustomer(customerId, viewer)
 }
 
 export type SetStageInput = SetCustomerStageRequest
@@ -790,15 +1075,12 @@ export type SetStageInput = SetCustomerStageRequest
 export async function setStage(
   customerId: string,
   input: SetStageInput,
-  canReadFinance: boolean,
+  viewer: CustomerViewer,
 ): Promise<CustomerResult<CustomerDetailDto>> {
   if (!(CUSTOMER_STAGES as readonly string[]).includes(input.stage)) {
     return { ok: false, reason: 'invalid_stage' }
   }
-  const customer = await prisma.customer.findUnique({
-    where: { id: customerId },
-    select: { id: true, stage: true },
-  })
+  const customer = await findScopedCustomer(customerId, viewer)
   if (customer === null) return { ok: false, reason: 'not_found' }
 
   const from = customer.stage as CustomerStage
@@ -823,5 +1105,95 @@ export async function setStage(
     })
   }
 
-  return getCustomer(customerId, canReadFinance)
+  return getCustomer(customerId, viewer)
+}
+
+/**
+ * 调整客户的负责设计师与销售。
+ *
+ * 四条约束，每一条都对应一次真实事故的形态：
+ *
+ *   1. 目标账号必须存在、未删除、`status = active`。指向停用账号等于把客户扔进
+ *      黑洞：新负责人登不进来，旧负责人已经看不到。
+ *   2. 归属发生变化时 `reason` 必填。归属比阶段更需要说法，因为它同时改变
+ *      「谁能看到」与「算谁的」。
+ *   3. 写审计 `customer.assignment.change`，detail 记 `{ from, to, reason }`。
+ *   4. 无变化直接返回，不报错也不写审计。界面上重复点一次不该产生一条日志。
+ *
+ * **只由持 `customer.scope.write` 的账号调用。** 这是整条链上唯一能「合法化」
+ * 越权的入口 —— 把别人的客户划到自己名下，之后一切读写都合规。因此即便路由
+ * 已经挂了守卫，这里仍然自己判一次：service 被别的路径复用时守卫就没了。
+ */
+export async function assignCustomer(
+  customerId: string,
+  input: AssignCustomerRequest,
+  viewer: CustomerViewer,
+  options: { keepSuggestionId?: string | undefined } = {},
+): Promise<CustomerResult<CustomerDetailDto>> {
+  if (!viewer.canAssign) return { ok: false, reason: 'field_not_allowed' }
+  if (!UUID_PATTERN.test(customerId)) return { ok: false, reason: 'not_found' }
+
+  const current = await prisma.customer.findFirst({
+    where: { id: customerId, ...scopeWhere(viewer.scope) },
+    select: { id: true, designerId: true, salesId: true },
+  })
+  if (current === null) {
+    await recordDeniedAccess(customerId, viewer)
+    return { ok: false, reason: 'not_found' }
+  }
+
+  const nextDesigner =
+    input.designerId === undefined ? current.designerId : (input.designerId ?? null)
+  const nextSales = input.salesId === undefined ? current.salesId : (input.salesId ?? null)
+
+  // 无变化：既不报错，也不写审计。重复提交与「点了保存但没改」是同一种情形。
+  if (nextDesigner === current.designerId && nextSales === current.salesId) {
+    return getCustomer(customerId, viewer)
+  }
+
+  const reason = (input.reason ?? '').trim()
+  if (reason === '') return { ok: false, reason: 'missing_reason' }
+
+  // 两个目标账号一起校验完再写库：只校验第一个就写，会出现「设计师改了、销售
+  // 没改成」这种半完成的归属，而界面上看起来只是一次普通保存。
+  for (const targetId of [nextDesigner, nextSales]) {
+    if (targetId === null) continue
+    const account = await prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, status: true, deletedAt: true },
+    })
+    if (account === null || account.deletedAt !== null || account.status !== 'active') {
+      return { ok: false, reason: 'invalid_assignee' }
+    }
+  }
+
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: { designerId: nextDesigner, salesId: nextSales },
+  })
+
+  // 归属变了就清掉未复核的归类结果：它描述的是「这条还没人认领时该怎么分」，
+  // 认领之后留着只会让下一个人以为系统建议再改一次。
+  // 复核路径会把自己那条排除掉（`keepSuggestionId`），否则刚复核完的记录会被
+  // 这次清理顺手删掉，审计里留下一条指向已删除行的 id。
+  await prisma.customerPoolSuggestion.deleteMany({
+    where: {
+      customerId,
+      status: 'pending',
+      ...(options.keepSuggestionId === undefined ? {} : { id: { not: options.keepSuggestionId } }),
+    },
+  })
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.CUSTOMER_ASSIGNMENT_CHANGE,
+    actor: actorOf(viewer),
+    target: { type: 'customer', id: customerId },
+    detail: {
+      from: { designerId: current.designerId, salesId: current.salesId },
+      to: { designerId: nextDesigner, salesId: nextSales },
+      reason,
+    },
+  })
+
+  return getCustomer(customerId, viewer)
 }

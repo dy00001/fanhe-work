@@ -37,6 +37,7 @@ if (databaseUrl !== null) {
    而那时 `DATABASE_URL` 还没被覆盖。 */
 const { prisma } = await import('../src/db/prisma.js')
 const { insertCustomer, createOrder } = await import('../src/customer/customers.js')
+const { SYSTEM_VIEWER } = await import('../src/customer/scope.js')
 const { syncCustomersFromArchive, diffActiveFields, decideStage, nameFromGroupFile } =
   await import('../src/customer/sync.js')
 
@@ -325,7 +326,7 @@ describe('每日同步', { skip: databaseUrl === null ? '数据库不可达' : f
     const created = await prisma.customer.findUnique({ where: { chatroom }, select: { id: true } })
     assert.notEqual(created, null)
     if (created === null) return
-    await createOrder(created.id, { contractFen: 3780000, receivedFen: 0 }, true, {
+    await createOrder(created.id, { contractFen: 3780000, receivedFen: 0 }, SYSTEM_VIEWER, {
       code: `${CODE_PREFIX}01`,
     })
     writeGroupFor(chatroom, makeMd(chatroom, { contract: '13847391188' }))

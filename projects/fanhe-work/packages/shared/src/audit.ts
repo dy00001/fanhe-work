@@ -30,6 +30,22 @@ export const AUDIT_ACTIONS = {
   SYSTEM_USER_RESET_PASSWORD: 'system.user.reset_password',
   /** 调整子账号的账号级权限覆盖。 */
   SYSTEM_USER_SET_PERMISSIONS: 'system.user.set_permissions',
+  /**
+   * 客户归属变更（设计师 / 销售）。detail 记 `{ from, to, reason }`。
+   *
+   * 归属变更必须留痕：它同时改变「谁能看到这份档案」与「这单算谁的业绩」，
+   * 而客户档案按人隔离之后，「谁把客户划走了」是一个必须能回答的问题。
+   */
+  CUSTOMER_ASSIGNMENT_CHANGE: 'customer.assignment.change',
+  /**
+   * 行级越权尝试：有客户段权限，但目标客户不在自己的归属范围内。
+   *
+   * 与 `system.*` 的 403 不同，行级越权对外返回 404（不泄露存在性），因此请求日志
+   * 里看不出来。这条审计的唯一用途是发现「有人在按 id 顺序试探」。
+   */
+  CUSTOMER_ACCESS_DENIED: 'customer.access.denied',
+  /** 公共池归类结果的人工复核：接受 / 调整 / 驳回。detail 记判定与理由。 */
+  CUSTOMER_POOL_REVIEW: 'customer.pool.review',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]

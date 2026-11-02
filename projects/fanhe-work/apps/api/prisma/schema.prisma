@@ -166,6 +166,17 @@ model User {
   /// 自己上传的案例图片（字节本体在这里，见 `CaseUpload`）。
   caseUploads      CaseUpload[]
 
+  /// 这个账号作为「设计师」负责的客户。与下面 salesCustomers 是两条不同关系，
+  /// 都指向 customers 表，因此必须命名区分 —— 不命名时 Prisma 无法判断该走哪一条。
+  designerCustomers Customer[] @relation("CustomerDesigner")
+  /// 这个账号作为「销售」负责的客户。
+  salesCustomers    Customer[] @relation("CustomerSales")
+
+  /// 公共池归类结果：被建议指派给这个账号的，以及这个账号复核过的。
+  /// 两者同样是两条关系，必须分开命名。
+  poolSuggestionsAssigned CustomerPoolSuggestion[] @relation("PoolSuggestionAssignee")
+  poolSuggestionsReviewed CustomerPoolSuggestion[] @relation("PoolSuggestionReviewer")
+
   @@index([roleId])
   @@index([status])
   @@map("users")
@@ -1155,6 +1166,23 @@ model Customer {
   /// `ai_schema` 原始块。保留是为了回溯：净化规则改了以后能重新跑，不必重读源文件。
   legacyBlocks Json? @map("legacy_blocks")
 
+  /// 负责这位客户的设计师。与 `salesId` **可以同时有值**：一位客户常由销售签单、
+  /// 设计师做方案，两人都要能看到对方是谁。两者都为空即公共池，只有持
+  /// `customer.scope.read` 的账号看得到。
+  ///
+  /// 不复用单个 `assignee_id`：合并之后无法回答「这一单的销售是谁」，而这正是
+  /// 设计端打开详情时要看的第一条信息。SetNull 而非 Cascade：账号删了，客户要留下，
+  /// 只是这项归属空掉，由管理员重新指派。
+  designerId String? @map("designer_id") @db.Uuid
+  designer   User?   @relation("CustomerDesigner", fields: [designerId], references: [id], onDelete: SetNull)
+
+  /// 负责这位客户的销售。语义与 `designerId` 对称。
+  salesId String? @map("sales_id") @db.Uuid
+  sales   User?   @relation("CustomerSales", fields: [salesId], references: [id], onDelete: SetNull)
+
+  /// 这位客户的公共池归类结果。一对一：重跑覆盖未复核的那条，已复核的保留。
+  poolSuggestion CustomerPoolSuggestion?
+
   orders CustomerOrder[]
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -1165,6 +1193,10 @@ model Customer {
   @@index([stage])
   @@index([reviewStatus])
   @@index([repeatOfId])
+  /// 行级范围查询是 `designer_id = 我 OR sales_id = 我`，两个索引各管一支。
+  /// 列序与列表一致：先按归属过滤，再按最近消息排序，省掉一次额外排序。
+  @@index([designerId, lastMessageAt])
+  @@index([salesId, lastMessageAt])
   @@map("customers")
 }
 
@@ -1239,4 +1271,58 @@ model CustomerOrderStep {
 
   @@unique([orderId, idx])
   @@map("customer_order_steps")
+}
+
+/// 公共池归类的判定结果。
+///
+/// **一位客户最多一条。** 重跑归类时覆盖未复核（`pending`）的那一条，已复核的
+/// 三条状态（accepted / adjusted / rejected）不再被覆盖 —— 那是人签过的字，
+/// 机器重算不该把它改掉。想重算已复核的条目必须显式 `force`，且会重置为 pending。
+///
+/// 为什么不保留全部历史：真正需要留痕的是「谁把这条判成了设计师」，那件事写在
+/// `audit_logs`（`customer.pool.review`）里，而不是在这里堆版本。这张表的职责是
+/// 「当前待办」，不是审计流水。
+model CustomerPoolSuggestion {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  customerId String   @unique @map("customer_id") @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  /// 建议归给哪个角色：designer / sales。存字符串不存枚举，与 stage 同一个理由：
+  /// 契约是唯一来源，加角色只改代码不写迁移。
+  role String @db.VarChar(20)
+
+  /// 建议的具体账号。没有可用账号时为空，复核时由人指定。
+  suggestedUserId String? @map("suggested_user_id") @db.Uuid
+  suggestedUser   User?   @relation("PoolSuggestionAssignee", fields: [suggestedUserId], references: [id], onDelete: SetNull)
+
+  /// 0–100 的置信度。整数，理由见 `customer-api.ts` 里 PoolSuggestionDto 的注释。
+  confidence Int @default(0)
+  /// 两侧的原始得分。存下来是为了复核时能看出「差一点就反过来了」。
+  salesScore    Int @default(0) @map("sales_score")
+  designerScore Int @default(0) @map("designer_score")
+
+  /// 判定依据，形状为 `PoolReason[]`。用 Json 而不是关联表：它只被整体读取，
+  /// 从不按单条理由查询，拆表只会多一次 join。
+  reasons Json
+  /// 打分用到的原始证据（词频、阶段、消息数），用于复盘「为什么这次判得不一样」。
+  signals Json?
+
+  /// 规则版本。规则改动后可用它筛出需要重算的旧结论。
+  engine String @default("rules-v1") @db.VarChar(20)
+
+  /// pending / accepted / adjusted / rejected。
+  status String @default("pending") @db.VarChar(20)
+
+  reviewedBy String?   @map("reviewed_by") @db.Uuid
+  reviewer   User?     @relation("PoolSuggestionReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote String?   @map("review_note") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status])
+  @@index([role])
+  @@map("customer_pool_suggestions")
 }

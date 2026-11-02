@@ -60,18 +60,33 @@ export const PERMISSIONS = {
   //   - `record.read` 开的是客户姓名、电话、微信昵称、门牌地址与全年聊天原文。
   //     这是公司最核心的资产清单，一个刚入职的设计助理不该在第一天看到全部；
   //   - `record.write` 改的是档案本身，写坏了不会报错，只会让某天的跟进找不到人；
-  //   - `finance.read` 是合同额与回款。与 ops 的金额点同一个理由：金额是经营机密，
-  //     而「客户叫什么、做到哪一步」是设计岗的日常必需。合成一个点时，结果必然是
-  //     所有人都能看到金额 —— 因为没人愿意为了看客户名字去开一道审批；
+  //   - `finance.read` 是合同额与回款。**本期起它不再是「全局可见金额」的开关，
+  //     而是「在可见行内金额不被打码」的开关。** 金额真正的保护来自行级范围：
+  //     设计师与销售都能看到自己名下客户的金额，但看不到别人名下的客户 ——
+  //     连那一行都不在响应里，谈不到金额。把范围做成行维度之后，再拿这个点去
+  //     区分岗位就没有意义了：同一个人看自己的单子还要被遮掉金额，只会逼着大家
+  //     互相要密码。鉴于此，designer / sales 两个角色默认持有它；
   //   - `order.write` 推进的是十四环节进度。这一项要单独给，是因为它会被**客户看到**
   //     （进度对外播报），而改档案不会；
   //   - `import.review` 复核的是从聊天记录里自动抽出来的结果。它一旦放行就把
   //     几百条机器猜测变成正式档案，比逐条录入危险得多，因此不随 `record.write` 一起给。
+  //     公共池的归类复核也挂在这个点上：两者都是「把机器判断签字变成正式事实」。
   CUSTOMER_RECORD_READ: 'customer.record.read',
   CUSTOMER_RECORD_WRITE: 'customer.record.write',
   CUSTOMER_FINANCE_READ: 'customer.finance.read',
   CUSTOMER_ORDER_WRITE: 'customer.order.write',
   CUSTOMER_IMPORT_REVIEW: 'customer.import.review',
+
+  // ---- 数据范围。与上面五个「动作」点是正交的第三个维度。 ----
+  //
+  // 动作点回答「能不能读客户」，范围点回答「能读哪些行」。合成一个点表达不了
+  // 「能读，但只能读自己的」这种最常见的情形。
+  //
+  // 语义固定为「覆盖全库」：持有 `scope.read` 时 where 不加归属条件；不持有时
+  // 自动收窄为 `designer_id = 我 OR sales_id = 我`。默认收窄、显式放开，这样
+  // 新增一个岗位却忘了配范围点时，结果是看到得少，而不是看到全部。
+  CUSTOMER_SCOPE_READ: 'customer.scope.read',
+  CUSTOMER_SCOPE_WRITE: 'customer.scope.write',
 } as const
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
@@ -106,7 +121,9 @@ const PERMISSION_DESCRIPTIONS: Record<PermissionCode, string> = {
   [PERMISSIONS.CUSTOMER_RECORD_WRITE]: '新增、修改客户档案与显示名、地区等身份字段',
   [PERMISSIONS.CUSTOMER_FINANCE_READ]: '查看合同额、已收款与欠款金额',
   [PERMISSIONS.CUSTOMER_ORDER_WRITE]: '新建订单并推进十四环节进度与节点日期',
-  [PERMISSIONS.CUSTOMER_IMPORT_REVIEW]: '复核聊天记录自动抽取结果并确认入库',
+  [PERMISSIONS.CUSTOMER_IMPORT_REVIEW]: '复核聊天记录自动抽取结果与公共池归类结果并确认入库',
+  [PERMISSIONS.CUSTOMER_SCOPE_READ]: '查看全部客户（不限于本人负责），含未分配的公共池',
+  [PERMISSIONS.CUSTOMER_SCOPE_WRITE]: '调整客户的负责设计师与销售，并可将客户转派给他人',
 }
 
 export type PermissionMeta = {
@@ -144,6 +161,8 @@ export const PERMISSION_CATALOG: readonly PermissionMeta[] = ALL_PERMISSIONS.map
 export const ROLE_CODES = {
   OWNER: 'owner',
   ADMIN: 'admin',
+  DESIGNER: 'designer',
+  SALES: 'sales',
   MEMBER: 'member',
   VIEWER: 'viewer',
 } as const
@@ -156,7 +175,7 @@ export type RoleDefinition = {
   description: string
   /** 层级高低。数值大的可以管理数值小的，同层之间互相不可管理。 */
   rank: number
-  /** 内置角色不允许在界面上删除。四个角色全部内置。 */
+  /** 内置角色不允许在界面上删除。六个角色全部内置，含 designer 与 sales。 */
   isSystem: boolean
   /** 授权模式，写法见 expandGrants。种子阶段展开成具体的权限行。 */
   grants: readonly string[]
@@ -200,6 +219,52 @@ export const ROLES: readonly RoleDefinition[] = [
       PERMISSIONS.CUSTOMER_FINANCE_READ,
       PERMISSIONS.CUSTOMER_ORDER_WRITE,
       PERMISSIONS.CUSTOMER_IMPORT_REVIEW,
+      // 范围两点必须与「开启行级过滤」同一个版本上线。admin 原本已持有客户段
+      // 全部五个动作点，一旦开始按归属过滤而不补这两点，管理员会立刻变成
+      // 「只看自己名下」—— 而管理员名下通常没有任何客户，表现是全公司管理员
+      // 打开客户平台看到空列表，且零报错、零日志。
+      PERMISSIONS.CUSTOMER_SCOPE_READ,
+      PERMISSIONS.CUSTOMER_SCOPE_WRITE,
+    ],
+  },
+  {
+    code: ROLE_CODES.DESIGNER,
+    name: '设计师',
+    // 业务角色，与 admin/member 那组管理角色不是一类。它们只拿「客户平台的读写 +
+    // 本人范围内的金额」，不拿任何 system 段权限，也不拿范围点。
+    //
+    // **不拿 `scope.*` 是这套隔离能成立的前提。** 范围点的含义是「覆盖全库」，
+    // 发给业务角色等于隔离失效，而且失效时界面看起来完全正常 —— 列表只是变长了。
+    //
+    // `finance.read` 给了：金额的保护改为行级（只看得见自己名下的行），不再靠
+    // 字段级遮罩。详见 PERMISSIONS 里客户段的注释。
+    description: '客户平台读写，仅限本人负责的客户，可看这些客户的金额',
+    rank: 60,
+    isSystem: true,
+    grants: [
+      'personal.*',
+      PERMISSIONS.CUSTOMER_RECORD_READ,
+      PERMISSIONS.CUSTOMER_RECORD_WRITE,
+      PERMISSIONS.CUSTOMER_FINANCE_READ,
+      PERMISSIONS.CUSTOMER_ORDER_WRITE,
+    ],
+  },
+  {
+    code: ROLE_CODES.SALES,
+    name: '销售',
+    // 与设计师同一套授权。两个角色的差别在**归属字段**（`designer_id` /
+    // `sales_id`），不在权限点：设计师看的是自己作为设计师的那批客户，销售看的是
+    // 自己作为销售的那批。权限完全相同，因此不复制一份差异化的 grant 列表 ——
+    // 有差别时改一处即可，不会出现「同一个动作两个岗位一个有、一个没有」。
+    description: '客户平台读写，仅限本人负责的客户，可看这些客户的金额',
+    rank: 60,
+    isSystem: true,
+    grants: [
+      'personal.*',
+      PERMISSIONS.CUSTOMER_RECORD_READ,
+      PERMISSIONS.CUSTOMER_RECORD_WRITE,
+      PERMISSIONS.CUSTOMER_FINANCE_READ,
+      PERMISSIONS.CUSTOMER_ORDER_WRITE,
     ],
   },
   {

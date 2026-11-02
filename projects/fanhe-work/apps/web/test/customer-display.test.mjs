@@ -12,12 +12,17 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  activityCeiling,
   activityOf,
+  donutArcs,
   fillStageBuckets,
   formatFen,
   formatWan,
+  hourText,
   orderProgress,
   parseYuanToFen,
+  peakHourIndex,
+  percentText,
   reviewLabel,
   scopeLabel,
   splitStepSections,
@@ -195,4 +200,54 @@ test('没有消息、时间坏掉、未来时间都不许显示成负数', () =>
   assert.equal(activityOf('不是时间', now).level, 'unknown')
   // 时钟不同步或手工改过库时会出现未来时间。显示「-3 天前」比不显示更糟。
   assert.equal(activityOf(new Date(2026, 9, 30, 12, 0).toISOString(), now).label, '今天有消息')
+})
+
+test('环形图弧段：比例之和为 1，起点依次后移', () => {
+  const arcs = donutArcs([1, 1, 2])
+  assert.equal(arcs.length, 3)
+  assert.equal(arcs[0].fraction, 0.25)
+  assert.equal(arcs[0].start, 0)
+  assert.equal(arcs[1].start, 0.25)
+  assert.equal(arcs[2].fraction, 0.5)
+  assert.equal(arcs[2].start, 0.5)
+  const sum = arcs.reduce((total, arc) => total + arc.fraction, 0)
+  // 浮点累加会留 1e-16 级别的尾巴，比较到小数第 9 位即可。
+  assert.ok(Math.abs(sum - 1) < 1e-9)
+})
+
+test('环形图全零不平均分配：空数据不能画出满环', () => {
+  const arcs = donutArcs([0, 0, 0])
+  assert.deepEqual(
+    arcs.map((arc) => arc.fraction),
+    [0, 0, 0],
+  )
+  // 负数（理论上不该出现）按 0 计，不让它把别的弧拉长。
+  assert.deepEqual(
+    donutArcs([-5, 10]).map((arc) => arc.fraction),
+    [0, 1],
+  )
+})
+
+test('百分比文案：不写假精度', () => {
+  assert.equal(percentText(0), '0%')
+  assert.equal(percentText(1 / 3), '33%')
+  assert.equal(percentText(0.5), '50%')
+  // 小于 10% 才保留一位小数，否则「3%」会被写成「3.0%」。
+  assert.equal(percentText(0.032), '3.2%')
+  assert.equal(percentText(Number.NaN), '0%')
+})
+
+test('小时标签取本地小时，不是 UTC 小时', () => {
+  const iso = new Date(2026, 9, 30, 14, 30).toISOString()
+  assert.equal(hourText(iso), '14:00')
+  assert.equal(hourText('不是时间'), '—')
+})
+
+test('折线峰值：全零返回 -1，不能把第一格当成峰值', () => {
+  assert.equal(peakHourIndex([{ count: 0 }, { count: 0 }]), -1)
+  assert.equal(peakHourIndex([{ count: 1 }, { count: 5 }, { count: 3 }]), 1)
+  // 并列时取靠前的那一格，结果稳定（否则同一份数据两次渲染的高亮会跳）。
+  assert.equal(peakHourIndex([{ count: 4 }, { count: 4 }]), 0)
+  assert.equal(activityCeiling([{ count: 0 }]), 1)
+  assert.equal(activityCeiling([{ count: 7 }, { count: 2 }]), 7)
 })

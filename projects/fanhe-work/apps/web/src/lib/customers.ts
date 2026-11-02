@@ -1,18 +1,30 @@
 import type {
+  AssignCustomerRequest,
+  AssignableUserDto,
+  ClassifyPoolRequest,
+  ClassifyPoolResponse,
   CreateCustomerOrderRequest,
   CreateCustomerRequest,
   CustomerDetailDto,
   CustomerListResponse,
+  PoolListResponse,
+  PoolSuggestionDto,
+  ReviewPoolSuggestionRequest,
   SetCustomerStageRequest,
   UpdateCustomerRequest,
   UpdateCustomerStepRequest,
 } from '@fanhe/shared'
 
 import {
+  assignCustomerRequest,
+  assignableUsersRequest,
+  classifyCustomerPoolRequest,
   createCustomerOrderRequest,
   createCustomerRequest,
   customerDetailRequest,
+  customerPoolRequest,
   customersRequest,
+  reviewPoolSuggestionRequest,
   setCustomerStageRequest,
   updateCustomerRequest,
   updateCustomerStepRequest,
@@ -82,4 +94,41 @@ export function setCustomerStage(
   return withAccessToken(
     async (token) => (await setCustomerStageRequest(token, id, input)).customer,
   )
+}
+
+// ---------------------------------------------------------------------------
+// 归属与公共池
+// ---------------------------------------------------------------------------
+
+export function loadCustomerPool(): Promise<PoolListResponse> {
+  return withAccessToken((token) => customerPoolRequest(token))
+}
+
+export function classifyCustomerPool(
+  input: ClassifyPoolRequest = {},
+): Promise<ClassifyPoolResponse> {
+  return withAccessToken((token) => classifyCustomerPoolRequest(token, input))
+}
+
+export function assignCustomer(
+  id: string,
+  input: AssignCustomerRequest,
+): Promise<CustomerDetailDto> {
+  return withAccessToken(async (token) => (await assignCustomerRequest(token, id, input)).customer)
+}
+
+/** 复核归类结果。返回单条建议的新状态，调用方据此就地更新那一行。 */
+export function reviewPoolSuggestion(
+  customerId: string,
+  suggestionId: string,
+  input: ReviewPoolSuggestionRequest,
+): Promise<PoolSuggestionDto> {
+  return withAccessToken(
+    async (token) =>
+      (await reviewPoolSuggestionRequest(token, customerId, suggestionId, input)).suggestion,
+  )
+}
+
+export function loadAssignableUsers(): Promise<AssignableUserDto[]> {
+  return withAccessToken(async (token) => (await assignableUsersRequest(token)).users)
 }

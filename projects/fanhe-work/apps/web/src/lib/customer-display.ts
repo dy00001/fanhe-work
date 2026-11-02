@@ -336,3 +336,160 @@ export function reviewLabel(reviewStatus: string, confidence: string): string | 
   // 需要花的复核力气完全不同，混成一句话会让人以为两者一样。
   return confidence === 'low' || confidence === 'none' ? '待复核 · 低置信' : '待复核'
 }
+
+// ---------------------------------------------------------------------------
+// 环形图与折线图
+// ---------------------------------------------------------------------------
+
+/**
+ * 一段弧。`fraction` 是占全环的比例，`start` 是它在环上的起点比例。
+ *
+ * 用比例而不是角度或像素：SVG 的 `<circle pathLength={100}>` 之后，
+ * `stroke-dasharray` 的单位就是百分之一圈，比例可以直接填进去，不必再乘 2πr。
+ * 半径改了也不用重算。
+ *
+ * 总数为 0 时返回全零，不平均分配。平均分配会让「一位客户都没有」画出一个满环，
+ * 那是最容易被当成「有数据」的一种空态。
+ */
+export type DonutArc = { fraction: number; start: number }
+
+export function donutArcs(values: readonly number[]): readonly DonutArc[] {
+  const total = values.reduce((sum, value) => sum + Math.max(value, 0), 0)
+  if (total <= 0) return values.map(() => ({ fraction: 0, start: 0 }))
+
+  let cursor = 0
+  return values.map((value) => {
+    const fraction = Math.max(value, 0) / total
+    const arc = { fraction, start: cursor }
+    cursor += fraction
+    return arc
+  })
+}
+
+/** 比例转百分比文案。整数就写整数，避免「33.0%」这种假精度。 */
+export function percentText(fraction: number): string {
+  if (!Number.isFinite(fraction) || fraction <= 0) return '0%'
+  const percent = fraction * 100
+  return percent >= 10 || Number.isInteger(percent)
+    ? `${Math.round(percent)}%`
+    : `${percent.toFixed(1)}%`
+}
+
+/** 活跃度折线的横轴标签：`14:00`。只到小时，分钟在这里没有意义。 */
+export function hourText(hourStart: string): string {
+  const date = new Date(hourStart)
+  if (Number.isNaN(date.getTime())) return '—'
+  return `${String(date.getHours()).padStart(2, '0')}:00`
+}
+
+/**
+ * 折线的峰值格下标。全为 0 时返回 -1。
+ *
+ * 返回 -1 而不是 0：0 会让「一格都没有」画成「第一格是峰值」，
+ * 图例上就会写出一句「00:00 为 0 位客户」。
+ */
+export function peakHourIndex(points: readonly { count: number }[]): number {
+  let best = -1
+  let bestValue = 0
+  points.forEach((point, index) => {
+    if (point.count > bestValue) {
+      bestValue = point.count
+      best = index
+    }
+  })
+  return best
+}
+
+/** 折线纵轴的上界。全零时给 1，避免除零，同时让零线贴着底边。 */
+export function activityCeiling(points: readonly { count: number }[]): number {
+  const peak = points.reduce((max, point) => Math.max(max, point.count), 0)
+  return peak <= 0 ? 1 : peak
+}
+
+// ---------------------------------------------------------------------------
+// 双角色归属与公共池
+// ---------------------------------------------------------------------------
+
+/** 归属展示需要的字段。与 DTO 解耦，单测里造一个对象就能验。 */
+export type AssignmentView = {
+  designerName: string | null
+  salesName: string | null
+  myRole: 'designer' | 'sales' | null
+}
+
+export type AssignmentPart = {
+  role: 'designer' | 'sales'
+  roleLabel: string
+  name: string
+  /** 当前账号就是这一位。展示成「名字（我）」。 */
+  mine: boolean
+}
+
+/**
+ * 把归属拆成「角色 + 名字」的片段，供界面渲染成两个小标签。
+ *
+ * **两栏可以同时有值。** 需求是设计师端要看到销售是谁、销售端要看到设计师是谁，
+ * 所以不能只渲染「自己对应那一栏」—— 那样一来，设计师看不到销售，双向就断了。
+ * 也不能只渲染「对方那一栏」—— 全局范围的管理员两个都要看。
+ */
+export function assignmentParts(view: AssignmentView): AssignmentPart[] {
+  const parts: AssignmentPart[] = []
+  if (view.designerName !== null) {
+    parts.push({
+      role: 'designer',
+      roleLabel: '设计师',
+      name: view.designerName,
+      mine: view.myRole === 'designer',
+    })
+  }
+  if (view.salesName !== null) {
+    parts.push({
+      role: 'sales',
+      roleLabel: '销售',
+      name: view.salesName,
+      mine: view.myRole === 'sales',
+    })
+  }
+  return parts
+}
+
+/**
+ * 一行文本版的归属。列表列宽有限，两个标签放不下时用它兜底，也用于导出与复制。
+ *
+ * 「公共池」与「未分配」是同一件事的两种说法，这里统一成「公共池」：它同时是
+ * 一个功能名（公共池归类），用户点进去就能看到待办，比「未分配」更可操作。
+ */
+export function assignmentSummary(view: AssignmentView): string {
+  const parts = assignmentParts(view)
+  if (parts.length === 0) return '公共池'
+  return parts
+    .map((part) => `${part.roleLabel} ${part.name}${part.mine ? '（我）' : ''}`)
+    .join(' · ')
+}
+
+/** 角色名。归类结果与归属两处共用，避免一处写「设计」另一处写「设计师」。 */
+export function poolRoleLabel(role: 'designer' | 'sales'): string {
+  return role === 'designer' ? '设计师' : '销售'
+}
+
+/**
+ * 置信度的展示档位。
+ *
+ * 分三档而不是直接显示百分数：复核的人要做的是「这条要不要看一眼」，「72%」
+ * 回答不了这个问题，而「需人工判断」可以。具体数字仍然显示，但只作为副文本。
+ *
+ * 60 是规则引擎的「陈旧证据」上限，70 是「差距明显」的下限。两个阈值都来自
+ * `customer-pool.ts` 的常量，改规则时要一起看。
+ */
+export function confidenceLevel(confidence: number): 'high' | 'medium' | 'low' {
+  if (confidence >= 70) return 'high'
+  if (confidence >= 50) return 'medium'
+  return 'low'
+}
+
+export function confidenceLabel(confidence: number): string {
+  const level = confidenceLevel(confidence)
+  if (level === 'high') return '可以直接采用'
+  if (level === 'medium') return '建议看一眼'
+  return '需人工判断'
+}

@@ -34,6 +34,7 @@ const { prisma } = await import('../src/db/prisma.js')
 const { createCustomer, createOrder, getCustomer, insertCustomer } =
   await import('../src/customer/customers.js')
 const { importPreview, parseLogTime, yuanToFen } = await import('../src/customer/import.js')
+const { SYSTEM_VIEWER } = await import('../src/customer/scope.js')
 
 const PREFIX = 'zz_test_import_'
 const CODE_PREFIX = 'ZZTEST-'
@@ -144,7 +145,7 @@ describe('批量导入', { skip: databaseUrl === null ? '数据库不可达' : f
     assert.equal(customer.ok, true)
     if (!customer.ok) return
 
-    const order = await createOrder(customer.data.id, { contractFen: 1815100 }, true, {
+    const order = await createOrder(customer.data.id, { contractFen: 1815100 }, SYSTEM_VIEWER, {
       code: `${CODE_PREFIX}01`,
       seq: 1,
       stage: 'producing',
@@ -188,7 +189,7 @@ describe('批量导入', { skip: databaseUrl === null ? '数据库不可达' : f
     assert.equal(third?.done, false)
 
     // 客户级合同额是派生列，导入也要重算，否则列表上的合计是空的。
-    const detail = await getCustomer(customer.data.id, true)
+    const detail = await getCustomer(customer.data.id, SYSTEM_VIEWER)
     assert.equal(detail.ok, true)
     if (!detail.ok) return
     assert.equal(detail.data.contractTotalFen, 1815100)

@@ -145,8 +145,76 @@ export function parseArchiveText(text: string, file: string): ArchiveStats {
   }
 }
 
-/** 目录下的群文件名（**含 `.md`**），按名称排序便于报告稳定。 */
-export function listArchiveFiles(dir: string): string[] {
+/** 一条聊天消息。`at` 为 `YYYY-MM-DD HH:MM` 原文，不带时区。 */
+export type ArchiveMessage = {
+  at: string
+  sender: string
+  content: string
+}
+
+/**
+ * 把群文件正文解析成消息数组。
+ *
+ * 与 `parseArchiveText` 共用同一个行首正则：两个解析器各写一套的结果是
+ * 「统计说有 1211 条、归类只看到 1180 条」，而差异只出现在含 `|` 的消息行上。
+ *
+ * **内容里的竖线要保留。** 客户常把尺寸表直接贴进群（`| 宽 | 高 |`），按 `|` 切完
+ * 只取第三段会把后半句丢掉，而丢掉的恰好是尺寸数字 —— 那是归类最需要的证据。
+ * 因此从第 3 段一直拼到倒数第二段。
+ */
+export function parseArchiveMessages(text: string): ArchiveMessage[] {
+  const messages: ArchiveMessage[] = []
+  for (const line of text.split('\n')) {
+    if (!MESSAGE_LINE.test(line)) continue
+    const cells = line.split('|')
+    if (cells.length < 4) continue
+    const at = (cells[1] ?? '').trim()
+    const sender = (cells[2] ?? '').trim()
+    // 行尾带 `|` 时最后一段是空串；不带时最后一段就是内容，不能一起切掉。
+    const tail = cells[cells.length - 1] ?? ''
+    const content = (tail.trim() === '' ? cells.slice(3, -1) : cells.slice(3)).join('|').trim()
+    if (at === '' || content === '') continue
+    messages.push({ at, sender, content })
+  }
+  return messages
+}
+
+/**
+ * 读整个目录，产出「chatroom → 消息数组」。
+ *
+ * 归类要按客户找消息，而客户行上只有 `groupFile` 与 `chatroom`。用 chatroom 而不是
+ * 文件名做键：群一改名文件就改名，而 `username` 不变 —— 按文件名索引的症状是
+ * 「刚改过名的群，归类结果退回默认值」，且不报错。
+ *
+ * 目录读不到时返回空 Map，不抛错。调用方据此把 `source` 标成 `stored`；
+ * 抛错会让人误以为整个归类跑不动，而实际上只用库里字段也能给出一个低置信度结论。
+ */
+export function readArchiveMessageIndex(dir: string): Map<string, ArchiveMessage[]> {
+  const index = new Map<string, ArchiveMessage[]>()
+  let files: string[]
+  try {
+    files = listArchiveFiles(dir)
+  } catch {
+    return index
+  }
+
+  for (const file of files) {
+    let text: string
+    try {
+      text = fs.readFileSync(path.join(dir, file), 'utf8')
+    } catch {
+      continue
+    }
+    const chatroom = parseArchiveText(text, file).chatroom
+    if (chatroom === null) continue
+    index.set(chatroom, parseArchiveMessages(text))
+  }
+  return index
+}
+
+/** 目录下的群文件名（**含 `.md`**），按名称排序便于报告稳定。 */ export function listArchiveFiles(
+  dir: string,
+): string[] {
   return fs
     .readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))

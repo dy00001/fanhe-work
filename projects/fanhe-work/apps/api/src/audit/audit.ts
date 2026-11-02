@@ -42,8 +42,14 @@ export type AuditRecord = {
   action: AuditAction
   /** 结果。默认 success，失败事件显式传 failure。 */
   result?: AuditResult | undefined
-  /** 操作者。账号不存在、未认证或事件与具体账号无关时留空。 */
-  actor?: { id: string; name: string } | undefined
+  /**
+   * 操作者。账号不存在、未认证或事件与具体账号无关时留空。
+   *
+   * `id` 允许为 `null` 而不是整个 `actor` 缺省：内部调用（命令行、定时任务）也想
+   * 留下 `actorName: '系统'` 这个快照，只是没有对应的账号行。写成「要么全给要么
+   * 全不给」会逼调用方在「撞外键」与「丢掉是谁做的」之间二选一。
+   */
+  actor?: { id: string | null; name: string } | undefined
   /** 操作对象。例如被整链撤销的会话、被创建的账号。 */
   target?: { type: string; id: string } | undefined
   /** 补充信息。**不得包含凭证。** */

@@ -22,7 +22,8 @@
     "db:reset-password": "tsx src/tools/reset-password.ts",
     "db:studio": "prisma studio",
     "db:customer-import": "tsx src/tools/customer-import.ts",
-    "db:customer-sync": "tsx src/tools/customer-sync.ts"
+    "db:customer-sync": "tsx src/tools/customer-sync.ts",
+    "db:pool-classify": "tsx src/tools/customer-pool-classify.ts"
   },
   "dependencies": {
     "@fanhe/shared": "workspace:*",

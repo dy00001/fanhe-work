@@ -42,10 +42,17 @@ import type {
   ReorderLaunchProfilesRequest,
   RoleListResponse,
   RunLaunchProfileResponse,
+  AssignCustomerRequest,
+  AssignableUsersResponse,
+  ClassifyPoolRequest,
+  ClassifyPoolResponse,
   CreateCustomerOrderRequest,
   CreateCustomerRequest,
   CustomerDetailResponse,
   CustomerListResponse,
+  PoolListResponse,
+  PoolSuggestionDto,
+  ReviewPoolSuggestionRequest,
   SetCustomerStageRequest,
   SetEventStatusRequest,
   SetNoteArchivedRequest,
@@ -1077,6 +1084,12 @@ export type CustomerListQuery = {
   /** 只看待复核（`reviewStatus = pending`）。 */
   pendingReview?: boolean | undefined
   q?: string | undefined
+  /** 时间筛选起点（含），ISO 时刻。 */
+  from?: string | undefined
+  /** 时间筛选终点（不含），ISO 时刻。 */
+  to?: string | undefined
+  /** `summary` 时不取列表行，只要汇总。综合看板用。 */
+  mode?: 'list' | 'summary' | undefined
   limit?: number | undefined
 }
 
@@ -1090,6 +1103,11 @@ export function customersRequest(
   if (query.stage !== undefined && query.stage !== '') search.set('stage', query.stage)
   if (query.pendingReview === true) search.set('review', 'pending')
   if (query.q !== undefined && query.q !== '') search.set('q', query.q)
+  // 服务端按本地时区解析日期串，因此这里一律送完整 ISO 时刻，把时区判断留在前端
+  // 一处（`filtersToQuery`），服务端不必再猜。
+  if (query.from !== undefined && query.from !== '') search.set('from', query.from)
+  if (query.to !== undefined && query.to !== '') search.set('to', query.to)
+  if (query.mode !== undefined) search.set('mode', query.mode)
   if (query.limit !== undefined) search.set('limit', String(query.limit))
   const queryString = search.toString()
   const path = queryString === '' ? '/api/customers' : `/api/customers?${queryString}`
@@ -1160,6 +1178,68 @@ export function setCustomerStageRequest(
   return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}/stage`, {
     method: 'PUT',
     body: input,
+    accessToken,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 归属与公共池
+// ---------------------------------------------------------------------------
+
+/** 公共池列表。需要 `customer.scope.read`，否则服务端 403。 */
+export function customerPoolRequest(accessToken: string): Promise<PoolListResponse> {
+  return request<PoolListResponse>('/api/customers/pool', { method: 'GET', accessToken })
+}
+
+/** 触发一次归类。不传 id 时分析整个公共池。 */
+export function classifyCustomerPoolRequest(
+  accessToken: string,
+  input: ClassifyPoolRequest = {},
+): Promise<ClassifyPoolResponse> {
+  return request<ClassifyPoolResponse>('/api/customers/pool/classify', {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+/** 调整负责的设计师与销售。`null` 表示清空那一栏。 */
+export function assignCustomerRequest(
+  accessToken: string,
+  id: string,
+  input: AssignCustomerRequest,
+): Promise<CustomerDetailResponse> {
+  return request<CustomerDetailResponse>(`/api/customers/${encodeURIComponent(id)}/assignment`, {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+  })
+}
+
+/**
+ * 复核一条归类结果。
+ *
+ * 返回的单条建议而不是整条客户详情：复核一屏二十行，逐行返回十四环明细会把
+ * 响应放大二十倍，而界面上一个字都用不到。
+ */
+export function reviewPoolSuggestionRequest(
+  accessToken: string,
+  customerId: string,
+  suggestionId: string,
+  input: ReviewPoolSuggestionRequest,
+): Promise<{ suggestion: PoolSuggestionDto }> {
+  const path = `/api/customers/${encodeURIComponent(customerId)}/pool-suggestions/${encodeURIComponent(suggestionId)}/review`
+  return request<{ suggestion: PoolSuggestionDto }>(path, {
+    method: 'POST',
+    body: input,
+    accessToken,
+  })
+}
+
+/** 可指派的账号（设计师 / 销售）。归属下拉与复核页共用。 */
+export function assignableUsersRequest(accessToken: string): Promise<AssignableUsersResponse> {
+  return request<AssignableUsersResponse>('/api/customers/assignable-users', {
+    method: 'GET',
     accessToken,
   })
 }
