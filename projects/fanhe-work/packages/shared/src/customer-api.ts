@@ -359,6 +359,11 @@ export type PoolSuggestionStatus = (typeof POOL_SUGGESTION_STATUSES)[number]
  *
  * `confidence` 是 0–100 的整数，不是 0–1 的小数：它只用于「模糊时提示人工复核」，
  * 用百分比更直观，也避免浮点在 JSON 里出现 0.30000000000000004 这种值。
+ *
+ * `salesScore` / `designerScore` **没有上界**，只用来算 `confidence` 那个比例。
+ * 不要当成 0–100 的百分制去显示或比较：一个 2700 条消息的成熟客户，两侧是
+ * `257 : 553` 这样的数值，读作「设计证据是销售的两倍多」才对；曾经有一道
+ * 100 分封顶把它们压成 `100 : 100`，读起来就成了「两边一样」，而事实正好相反。
  */
 export type PoolSuggestionDto = {
   id: string

@@ -67,6 +67,9 @@ tools/collector/.tmp/
 tools/collector/data/sync-watch.log*
 # 每日叠加的运行日志，同上
 tools/collector/data/daily-catchup.log*
+# 计划任务的 stdout 重定向（`.run-YYYYMMDD.out`）。计划任务每次运行都会新建一个，
+# 内容只是当次采集的进度行，可重新生成；不忽略的话每天几百字节的噪声会持续冒出来。
+tools/collector/data/.run-*.out
 # 调试用的临时日志（仓库根与各 app 下都可能有）
 .tmp-*.log
 

@@ -175,8 +175,12 @@ test('最近 90 天没有新消息只加标记，不压分', () => {
    *
    * 现在的口径：置信度只回答「两侧证据有多一致」，新旧由 `stale` 依据码单独标注。
    *
-   * 推导：图纸 20 次 ×4 分 + 拆单 20 次 ×4 分 = 160，封顶 100；加 designing 先验 16
-   * 后仍封顶 100。销售侧定金 1 次 ×4 分 = 4。总分 104，差距 96 → 96/104 ≈ 92%。
+   * 推导（去掉总分封顶后）：图纸 20 次 ×4 分 + 拆单 20 次 ×4 分 = 160；销售侧定金
+   * 1 次 ×4 分 = 4；差距 156 / 总量 164 ≈ 95%。先验不进置信度的分母，所以它加在
+   * `designerScore` 上但不影响这个数。
+   *
+   * 旧口径下同一组输入得 92%（designer 被压到 100，总量 104）。两个数都高，
+   * 但 95 才是「真实证据比例」—— 92 里混着封顶带来的截断误差。
    */
   const verdict = classifyPoolCustomer(
     emptyEvidence({
@@ -187,7 +191,7 @@ test('最近 90 天没有新消息只加标记，不压分', () => {
       salesHits: hits({ 定金: 1 }, { 定金: 0 }),
     }),
   )
-  assert.equal(verdict.confidence, 92, `陈旧不该压分（旧行为会得 60），实际 ${verdict.confidence}`)
+  assert.equal(verdict.confidence, 95, `陈旧不该压分（旧行为会得 60），实际 ${verdict.confidence}`)
   assert.ok(
     verdict.reasons.some((item) => item.code === 'stale'),
     '标记必须还在',
@@ -235,7 +239,21 @@ test('单字计数上限 20：刷屏不放大权重', () => {
   assert.equal(flooded.designerScore, once.designerScore)
 })
 
-test('分数封顶 100，不会因为命中太多而虚高', () => {
+test('两侧都大量命中时不封顶，差异必须保留', () => {
+  /*
+   * 守的是 2026-11-02 首轮实跑暴露的缺陷：当时有一道 `SCORE_CAP = 100` 的
+   * 总分封顶，两侧同时撞顶后差值恒为 0，53 条建议里 14 条被判成「证据不足」，
+   * 而它们的真实比例是 18:82、20:80、37:63 这种悬殊数字。
+   *
+   * 最坏的表现不是「判错」，是「客户消息越多越判不出来」—— 判得准的只剩
+   * 刚加微信、只提过一句「多少钱」的新客户。
+   *
+   * 推导：设计侧 5 个 4 分词各命中 20 次（单词封顶），每次计 count + recent = 40
+   * → 5×4×40 = 800；销售侧 4+4+3 分词各 20 次 → 440。先验 designing 给设计 +16，
+   * 但先验不进置信度的分母，所以比例是 800:440 ≈ 29%。
+   *
+   * 只要总分封顶回来，两个分数都会变成 100，`designerScore > salesScore` 立刻失败。
+   */
   const verdict = classifyPoolCustomer(
     emptyEvidence({
       stage: 'designing',
@@ -245,8 +263,13 @@ test('分数封顶 100，不会因为命中太多而虚高', () => {
       salesHits: hits({ 定金: 20, 签单: 20, 报价: 20 }),
     }),
   )
-  assert.ok(verdict.designerScore <= 100)
-  assert.ok(verdict.salesScore <= 100)
+  assert.equal(verdict.role, 'designer')
+  assert.ok(verdict.designerScore > 100, `不封顶时应超过 100，实际 ${verdict.designerScore}`)
+  assert.ok(
+    verdict.designerScore > verdict.salesScore,
+    `两侧同时大量命中时差异必须保留，相等即被封顶抹平（实际 ${verdict.designerScore} : ${verdict.salesScore}）`,
+  )
+  assert.ok(verdict.confidence > 20, `判决由证据决定就该有置信度，实际 ${verdict.confidence}`)
 })
 
 test('每条依据都带权重，界面才能按说服力排序', () => {
@@ -315,4 +338,30 @@ test('关键词表不含重复分值以外的空词', () => {
       assert.ok(weight >= 1 && weight <= 4, `词「${term}」权重 ${weight} 超出 1–4`)
     }
   }
+})
+
+test('有记录但零关键词命中时，依据要写明「没有可判定的关键词」', () => {
+  /*
+   * 这类客户的真值只有几条消息（实测 6 条与 9 条），说的都是「在吗」「发你了」，
+   * 词表里一个词都没有。
+   *
+   * 分数却不是 0 —— 因为阶段先验本身带分（consulting 给销售 12 分）。那是流程
+   * 假设，不是证据。判据曾经错用含先验的 `total`：12 ≠ 0，于是走进「由证据决定」
+   * 分支，置信度又因关键词总分为 0 而算不出来，最后界面上写着「销售 12 : 设计 0」、
+   * 结论 0 分、依据只有一句「阶段先验」—— 那 12 分从哪来的，没人看得出来。
+   */
+  const verdict = classifyPoolCustomer(
+    emptyEvidence({ stage: 'consulting', messageCount: 6, recentMessageCount: 6 }),
+  )
+  assert.ok(verdict.salesScore > 0, `先验应给销售分，实际 ${verdict.salesScore}`)
+  assert.equal(verdict.designerScore, 0)
+  assert.equal(verdict.confidence, 0, '先验不算证据，置信度必须是 0')
+  assert.ok(
+    verdict.reasons.some((item) => item.code === 'no-keyword'),
+    '必须有 no-keyword 依据，否则界面上那笔分数无从解释',
+  )
+  assert.ok(
+    !verdict.reasons.some((item) => item.code === 'tie-break'),
+    '零命中不是「两侧接近」，不该留 tie-break',
+  )
 })

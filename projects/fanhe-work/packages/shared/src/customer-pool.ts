@@ -161,8 +161,6 @@ export type PoolVerdict = {
 const TERM_COUNT_CAP = 20
 /** 最近窗口内的命中额外算一次。它是「现在在聊什么」，比半年前聊过什么更重要。 */
 const RECENT_MULTIPLIER = 1
-/** 分数上限。超过之后边际信息为零，反而会让置信度算得虚高。 */
-const SCORE_CAP = 100
 /** 读不到群文件时置信度上限。低于 60 的条目界面会提示「需要人工判断」。 */
 const NO_TRANSCRIPT_CONFIDENCE_CAP = 45
 /**
@@ -174,8 +172,24 @@ const NO_TRANSCRIPT_CONFIDENCE_CAP = 45
  */
 const EMPTY_CONFIDENCE = 20
 
-function clampScore(value: number): number {
-  return Math.min(SCORE_CAP, Math.max(0, Math.round(value)))
+/**
+ * 分数只取整、不允许为负，**不设上限**。
+ *
+ * 这里曾经有一个 `SCORE_CAP = 100` 的总分封顶，2026-11-02 首轮实跑发现它正是
+ * 「成熟客户判不出来」的直接原因：进入生产阶段的客户，群里必然既谈定金尾款合同、
+ * 又谈尺寸图纸拆单，两侧各自轻松越过 100，双双停在 100，差值恒为 0。
+ * 当时 23 条「证据不足」里有 14 条是这么来的 —— 真实关键词分是 63:279、96:429、
+ * 136:537、439:736 这样的悬殊比例，全被压成了 100:100。
+ *
+ * 封顶本来是想防「谁刷屏谁赢」，但这件事 `TERM_COUNT_CAP` 在单词层面已经做了。
+ * 总分封顶唯一的作用是让数字好看，代价恰好是把差异抹平，而且专挑信息最全的
+ * 客户下手 —— 消息越少判得越准，消息越多越判不出来。
+ *
+ * 分数只用来算比例，绝对值本身没有意义，所以不需要一个上界。界面上看到
+ * `63:279` 不好看，但那是真的；改成 `100:100` 好看，却是假的。
+ */
+function sanitizeScore(value: number): number {
+  return Math.max(0, Math.round(value))
 }
 
 /**
@@ -202,7 +216,7 @@ function scoreTerms(
   }
   counted.sort((left, right) => right.count * right.weight - left.count * left.weight)
   return {
-    score: clampScore(score),
+    score: sanitizeScore(score),
     top: counted.slice(0, 5).map((item) => ({ term: item.term, count: item.count })),
   }
 }
@@ -240,9 +254,23 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
   const designer = scoreTerms(evidence.designerHits, DESIGNER_TERMS)
   const prior = STAGE_PRIOR[evidence.stage]
 
-  /** 纯关键词分，不含先验与合同额。置信度只用这一对数字算。 */
+  /*
+   * 两套分，各有各的用处，**不要合并**。
+   *
+   * `keyword*` 是纯关键词分，只有它参与置信度；`salesScore`/`designerScore` 还要
+   * 加上阶段先验与合同额，只有它参与「平局还是悬殊」的判定。
+   *
+   * 乍看该统一成一套（我也试过），但先验的作用恰恰是**把弱证据拉进平局区间**：
+   * 「已下定、全程只提过一次定金」的真实形态是关键词 8 : 0，先验给设计 6 分之后
+   * 变成 8 : 6，差距落进阈值，「证据太单薄、按阶段收口」这个判断才成立。把先验
+   * 从分数里拿掉，它就变成 8 : 0 的 100% 自信 —— 一次提及钉死归属。
+   *
+   * 反过来，置信度绝不能含先验：先验是流程假设，若它也能撑起置信度，「处于生产
+   * 阶段」这一条就能给任何结论刷出高分。
+   */
   const keywordSales = sales.score
   const keywordDesigner = designer.score
+  const keywordTotal = keywordSales + keywordDesigner
 
   let salesScore = sales.score
   let designerScore = designer.score
@@ -291,8 +319,8 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
     })
   }
 
-  salesScore = clampScore(salesScore)
-  designerScore = clampScore(designerScore)
+  salesScore = sanitizeScore(salesScore)
+  designerScore = sanitizeScore(designerScore)
 
   // 规则 1：完全没有聊天记录。
   if (evidence.messageCount === 0) {
@@ -318,11 +346,35 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
   /** 判决是否由**关键词证据的差距**决定。走阶段先验收口时为 false。 */
   let decidedByEvidence = false
 
-  if (total === 0) {
-    // 有记录但一个关键词都没命中（例如只发了图片与地址）。按阶段收口。
+  if (keywordTotal === 0) {
+    /*
+     * 有聊天记录，但一个关键词都没命中（只发了图片、地址，或语音没转写出来）。
+     *
+     * 判据必须用 `keywordTotal` 而不是含先验的 `total`：有几档阶段先验本身有分，
+     * `total` 就不会是 0，于是「靠先验收口」被记成「由证据决定」，置信度又因为
+     * 关键词总分为 0 而算不出来 —— 判决与依据自相矛盾。实测有两位客户（消息 6 条
+     * 与 9 条）就是这样：界面上写着「销售 12 : 设计 0」，结论是 0 分，依据里只有
+     * 一句「阶段先验」，看不出那 12 分是哪来的。
+     */
     role = prior.role
+    reasons.push({
+      code: 'no-keyword',
+      label: '聊天里没有可判定的关键词',
+      detail: '只看阶段，分数里的非零部分来自阶段先验而不是证据',
+      weight: 0,
+    })
   } else {
     const diff = Math.abs(salesScore - designerScore)
+    /*
+     * 规则 2 的阈值是「差距不足总量的 20%」，是比例而不是绝对分。
+     *
+     * 这一点在总分封顶的年代被彻底掩盖过：`total ≈ 200` 时 20% 等于 40 分，
+     * 而两侧都被压在 100 分，实际差值只有 4–19 分，于是**所有成熟客户都落进这一支**，
+     * 一个也判不出来。去掉封顶后 `total` 变成几百，阈值跟着变大，但比例不变。
+     *
+     * `Math.max(4, …)` 只管小样本：两条消息、各命中一个 1 分词时 20% 只有 0.4 分，
+     * 不设下限会让「1 : 0」被当成决定性证据。
+     */
     if (diff <= Math.max(4, total * 0.2)) {
       // 规则 2：证据互相抵消，交给阶段。
       role = prior.role
@@ -339,16 +391,17 @@ export function classifyPoolCustomer(evidence: PoolEvidence): PoolVerdict {
   }
 
   /*
-   * 置信度只由**关键词证据**算，且只在「判决确实由证据决定」时才有值。
+   * 置信度 = **关键词**证据的差距占比，且只在「判决确实由证据决定」时才有值。
    *
-   * 两种情况一律为 0，而不是给个好看的数：
-   *   - 走了阶段先验（平局 / 零命中 / 先验分独大）—— 证据没能决定，谈不上多一致；
-   *   - 关键词总分为 0 —— 什么都没读到，分母不存在。
+   * 三种情况一律为 0，而不是给个好看的数：
+   *   - 走了阶段先验（平局 / 零命中）—— 证据没能决定，谈不上多一致；
+   *   - 关键词总分为 0 —— 什么都没读到，分母不存在；
+   *   - 判决其实被先验推翻（含先验的结论与关键词方向不一致）—— 这时给个高分
+   *     等于让「处于生产阶段」替证据背书。
    *
    * 它不回答「证据新不新」「读没读到原文」：那两件事各有依据码（`stale` /
    * `no-transcript`），由界面单独标注。一个数字背两层含义时，两层都会失真。
    */
-  const keywordTotal = keywordSales + keywordDesigner
   let confidence = 0
   if (decidedByEvidence && keywordTotal > 0) {
     confidence = Math.round((Math.abs(keywordSales - keywordDesigner) / keywordTotal) * 100)
