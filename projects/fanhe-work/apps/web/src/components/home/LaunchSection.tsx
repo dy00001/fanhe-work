@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   Music,
   Plus,
-  ReceiptText,
   Rocket,
   Scissors,
   UserRound,
@@ -42,15 +41,9 @@ import { useLaunchProfiles } from '../../lib/use-launch-profiles'
 import { formatRelativeTime } from '../../lib/relative-time'
 
 import { LaunchProfileDialog, type LaunchFormValues } from '../launch/LaunchProfileDialog'
+import { QuoteEntryCard } from '../quote/QuoteEntryCard'
 import { QuotePanel } from '../quote/QuotePanel'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '../ui/dialog'
+import { Dialog, DialogContent } from '../ui/dialog'
 
 /**
  * AI 模块单元卡里还是静态占位的那几张（原型编号 10 的第二排与主卡右侧）。
@@ -133,6 +126,8 @@ export function LaunchSection() {
   const [editing, setEditing] = useState<LaunchProfile | null>(null)
   const [focusPath, setFocusPath] = useState(false)
   const [quoteOpen, setQuoteOpen] = useState(false)
+  /** 从卡里的输入框带进面板的关键字。面板一开就该是按这个词筛过的。 */
+  const [quoteKeyword, setQuoteKeyword] = useState('')
 
   // 选中态 = 用户点过的那条，否则回落到列表第一条。用「派生」而不是「effect 里 setState」：
   // 这样既能在 profiles 初次到达时自动选中第一条，又不会在用户手动选过、或 profiles 重新
@@ -486,60 +481,53 @@ export function LaunchSection() {
 
         {/* 第一排第三格：报价查价（原来这里是「无限画布」的占位卡）。
 
+            **这张卡是真的能查价的。** 卡面里常驻一个 34px 输入框，键入即出结果浮层
+            （最多 7 行），回车或点「查看全部结果」开全屏面板 —— 与静态稿
+            `.quote-card` + `.pop` 一一对应。整卡的职责只剩「点空白处开空面板」。
+
             卡面类名与右下角那几张占位卡共用 `.mod-card`，图标底与悬停辉光同样按
             `--hue` + `--wash` 走 —— 两套卡并排时材质必须一致，否则一眼能看出
-            「这张是新加的」。区别只有两处：**没有「开发中」角标**（它是能用的），
-            以及整张卡是个按钮（`text-left` 是必需的，`<button>` 默认居中）。
+            「这张是新加的」。区别只有两处：**角标是「可用」而不是「开发中」**，
+            以及它里面有一个真正吃掉点击的输入区。
 
             `Dialog` 是 Radix 的根，**不产出 DOM 节点**，因此它可以作为网格的子项
-            直接包住触发器，不会多出一层盒子把 Bento 的格子挤歪。
+            直接包住卡面，不会多出一层盒子把 Bento 的格子挤歪。
 
-            没有读权限时退回一张一模一样的「无限画布」占位卡：格子留着，人看到的是
-            「这功能还在做」，而不是「这里缺了一块」。 */}
+            没有读权限时退回一张一模一样的占位卡：格子留着，人看到的是
+            「当前账号没有权限」，而不是「这里缺了一块」。 */}
         {canQuote ? (
           <Dialog open={quoteOpen} onOpenChange={setQuoteOpen}>
-            <DialogTrigger asChild>
-              <button
-                type="button"
-                style={{ '--hue': 'var(--m-teal)' } as React.CSSProperties}
-                className="mod-card w-full text-left"
-              >
-                <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
-                  <ReceiptText className="size-[18px]" />
-                </span>
-                <div className="mod-body w-full min-w-0">
-                  <h4 className="mb-0.5 text-lg leading-7 font-medium">报价查价</h4>
-                  <p className="text-sm leading-5 text-muted-foreground">
-                    五金与柜体单价，搜名字、型号或规格
-                  </p>
-                </div>
-              </button>
-            </DialogTrigger>
+            <QuoteEntryCard
+              onOpen={(needle) => {
+                setQuoteKeyword(needle)
+                setQuoteOpen(true)
+              }}
+            />
 
-            {/* 弹窗形状照 `CaseGalleryDialogContent` 那条验证过的路子：`p-0 gap-0` +
-                两段式 `grid-rows-[auto_minmax(0,1fr)]` —— 头部固定、内容在剩余空间里。
+            {/* 面板自带头部（标题 / 搜索 / 价格维护 / 关闭），所以这里**不要**
+                `DialogHeader` —— 两套标题叠在一起就不是一比一了。
 
                 **不要在 `className` 里加 `relative` 或任何定位类。** `DialogContent`
                 的基类是 `fixed` + `translate-x/y-[-50%]`，tailwind-merge 会把同组的
                 定位类当成覆盖对象删掉 `fixed`，只剩一个平移量，窗口被推出视口
-                （2026-10-30 真实故障，门禁全绿）。判据：`test/case-library-dialog-layout.test.mjs`。 */}
-            <DialogContent className="max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 p-0 sm:max-w-[min(1180px,94vw)]">
-              <DialogHeader className="px-6 pt-6 pb-4">
-                {/* `pr-8` 给右上角的关闭按钮让位。 */}
-                <DialogTitle className="pr-8 text-left">报价查价</DialogTitle>
-                <DialogDescription className="text-left">
-                  台账里的官方单价。改了价会记一条审计，换图优先用人工上传的那张。
-                </DialogDescription>
-              </DialogHeader>
-              <div className="min-h-0 overflow-hidden px-6 pb-6">
-                <QuotePanel variant="dialog" onRequestClose={() => setQuoteOpen(false)} />
-              </div>
+                （2026-10-30 真实故障，门禁全绿）。判据：`test/case-library-dialog-layout.test.mjs`。
+                同理也不要在子元素上写内联 `transform` —— Tailwind v4 把 `translate-x-[-50%]`
+                编成独立属性 `translate`，`transform:none` 抹不掉它（2026-11-02 第二次踩到）。 */}
+            <DialogContent
+              showCloseButton={false}
+              className="w-[min(1180px,94vw)] max-w-none gap-0 rounded-[18px] border-0 bg-transparent p-0 shadow-none"
+            >
+              <QuotePanel
+                variant="dialog"
+                initialKeyword={quoteKeyword}
+                onRequestClose={() => setQuoteOpen(false)}
+              />
             </DialogContent>
           </Dialog>
         ) : (
           <div style={{ '--hue': 'var(--m-teal)' } as React.CSSProperties} className="mod-card">
             <span className="absolute top-3 right-3 z-[1] rounded-full border border-border px-2 text-xs leading-[1.6] text-muted-foreground-weak">
-              开发中
+              无权限
             </span>
             <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
               <ImageIcon className="size-[18px]" />

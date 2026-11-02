@@ -1,39 +1,56 @@
-import { QUOTE_SOURCE_NAMES, type QuoteItemDto } from '@fanhe/shared'
-import { useCallback } from 'react'
+import type { QuoteItemDto, QuoteSource } from '@fanhe/shared'
 
-import { describePrice, itemQualifier, splitHighlight } from '../../lib/quote-display'
-import { cn } from '../../lib/utils'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
+import { describePrice, splitHighlight } from '../../lib/quote-display'
 
 import { QuoteThumb } from './QuoteThumb'
 
 /**
- * 结果表。
+ * 结果表。**逐项对齐静态稿 `报价查价-嵌入静态展示.html` 的 `.tbl`。**
  *
- * ## 为什么是表格，而不是一列卡片
+ * ## 为什么不用 `components/ui/table`
  *
- * 报价是**横向比出来**的：同一个分类下几行挨着，比的是单价与单位。卡片式只把
- * 「名称 + 一个价格」放在一起，型号、规格、单位全被压进副标题，扫一眼看不出差别。
- * 这里的列与静态稿一致：图 · 名称 · 型号/规格 · 单价 · 单位 · 来源。
+ * 那一套在 `<table>` 外面又套了一层 `overflow-x-auto` 的 div。后果有两个，都不报错：
  *
- * ## 行不是按钮
+ * 1. **表头不再吸顶。** `position: sticky` 相对最近的滚动容器定位，而这一层自己就是
+ *    滚动容器（`overflow:auto` 就算不滚也算）—— 表头贴着它不动，外面真正在滚的是
+ *    `.tbl-wrap`，于是一往下翻表头就没了。
+ * 2. **选中行的底色被吃掉。** 它的 `TableRow` 带 `data-[state=selected]:bg-muted`，
+ *    属性选择器的优先级高于我们那个普通 `bg-[color-mix(...)]`，选中一行只会变成灰底。
  *
- * 与 `EventRow` 同一条规矩：行里已经有可点的缩略图，把 `<tr>` 再包成一个按钮会
- * 得到嵌套的可点元素。所以 `tr` 只挂 `onClick` + `tabIndex` + 键盘处理，本身仍是
- * 一个 `row`，读屏念出来的是「表格的一行」而不是「一个按钮」。
+ * 原生的 `table` + `border-collapse` 与静态稿的 `.tbl` 完全一致，两件事一起消失。
  *
- * ## 空值不写成空白
+ * ## 列宽照抄静态稿
  *
- * 柜体类 571 条没有型号、规格大面积缺失。留空会让人以为这列坏了，写「—」表示
- * 「这一项台账里没有」。两者在数据修复上要做的事完全不同。
+ * 图 52px · 名称 40% · 型号/规格 15% · 单价 15%（右对齐）· 单位 8% · 来源 16%。
+ * 名称列给得最大是因为台账里的名称最长（「EO级实木颗粒板+鲁丽欧松板（精板）门板」），
+ * 单价列反而短 —— 金额最多五位数字加一个符号。**不按「金额最重要所以最宽」排**：
+ * 单价那列一宽，名称就得折成三行，扫一列下来反而更慢。
+ *
+ * ## 一行三段各回答一个问题
+ *
+ * 名称行回答「这是什么」，下面一行 11.5px 的灰字回答「有什么限制」（备注，截 62 字），
+ * 型号列回答「是哪一个规格」。同名 15 行的拉篮靠后两段才分得开。
+ *
+ * ## 三种价格形态在表里长得不一样
+ *
+ * 金额：`¥668`，等宽数字；规则价（「按所选花色36板的5倍单价计算」）：琥珀色、允许
+ * 换行、最宽 158px；空价：`待补价` 圆角标签 —— 留白会被读成「免费」。
  */
-
-/** 分类标签按来源上色。令牌见 `index.css` 的 `--m-teal / --m-amber / --m-blue`。 */
-const SOURCE_TEXT: Record<QuoteItemDto['source'], string> = {
-  sale: 'text-m-teal',
-  craft: 'text-m-amber',
-  hardware: 'text-m-blue',
+const SOURCE_COLOR: Record<QuoteSource, string> = {
+  sale: 'var(--m-teal)',
+  craft: 'var(--m-amber)',
+  hardware: 'var(--m-blue)',
 }
+
+/** 静态稿把来源标签里的分类名截到 10 个字：再长就把 16% 的列挤爆。 */
+const TAG_MAX = 10
+
+/** `.tbl thead th`：底色 card、11.5px、下边一条实线（不是 soft）。 */
+const TH =
+  'sticky top-0 z-[1] border-b border-border bg-card px-3 py-[9px] text-left text-[11.5px] font-medium whitespace-nowrap text-muted-foreground-weak'
+
+/** `.tbl tbody td`：9/12 内边距、下边一条 soft 分隔线、顶部对齐。 */
+const TD = 'border-b border-border-soft px-3 py-[9px] align-top'
 
 export function QuoteResultTable({
   rows,
@@ -49,156 +66,121 @@ export function QuoteResultTable({
   onSelect: (code: string) => void
   onOpenImage: (item: QuoteItemDto) => void
 }) {
-  /** ↑↓ 在行间移动。表格里用方向键比 Tab 更接近「扫一遍价格」的动作。 */
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLTableRowElement>, index: number) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault()
-        const row = rows[index]
-        if (row !== undefined) onSelect(row.code)
-        return
-      }
-      const delta = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
-      if (delta === 0) return
-      event.preventDefault()
-      const next = rows[index + delta]
-      if (next === undefined) return
-      onSelect(next.code)
-      // 焦点跟着选中走，否则连按两次方向键焦点还停在原处，第三次就按不动了。
-      const siblings = event.currentTarget.parentElement?.children
-      const target = siblings?.[index + delta]
-      if (target instanceof HTMLElement) target.focus()
-    },
-    [onSelect, rows],
-  )
-
   return (
-    // `min-w` 是给窄屏的兜底：六列在手机上平分出来每列不到 60px，名称会折成
-    // 两三行、单价被截成一个字符。`ui/table` 外面那层是 `overflow-x-auto`，
-    // 所以设一个下限之后，窄屏是**横向滚动**而不是把内容压扁 —— 报价是横向比的，
-    // 压扁了就看不出差别，反而比滚一下更难用。
-    <Table className="min-w-[560px] table-fixed">
+    <table className="w-full border-collapse text-[13px]">
       <colgroup>
-        <col className="w-12" />
-        <col className="w-[34%]" />
-        <col className="w-[14%]" />
-        <col className="w-[20%]" />
-        <col className="w-10" />
+        <col className="w-[52px]" />
+        <col className="w-[40%]" />
+        <col className="w-[15%]" />
+        <col className="w-[15%]" />
+        <col className="w-[8%]" />
         <col className="w-[16%]" />
       </colgroup>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2">
+      <thead>
+        <tr>
+          <th className={`${TH} pr-0`}>
             <span className="sr-only">商品图</span>
-          </TableHead>
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2 text-[11px] font-normal text-muted-foreground-weak">
-            名称
-          </TableHead>
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2 text-[11px] font-normal text-muted-foreground-weak">
-            型号 / 规格
-          </TableHead>
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2 text-right text-[11px] font-normal text-muted-foreground-weak">
-            单价
-          </TableHead>
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2 text-[11px] font-normal text-muted-foreground-weak">
-            单位
-          </TableHead>
-          <TableHead className="sticky top-0 z-1 h-8 bg-card px-2 text-[11px] font-normal text-muted-foreground-weak">
-            来源
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((item, index) => {
+          </th>
+          <th className={TH}>名称</th>
+          <th className={TH}>型号 / 规格</th>
+          <th className={`${TH} text-right`}>单价</th>
+          <th className={TH}>单位</th>
+          <th className={TH}>来源</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((item) => {
           const price = describePrice(item)
-          const qualifier = itemQualifier(item)
-          const sub = [item.note, qualifier].filter((part) => part !== '').join(' · ')
+          const active = item.code === selectedCode
+          const color = SOURCE_COLOR[item.source]
           return (
-            <TableRow
+            <tr
               key={item.code}
-              tabIndex={0}
-              aria-selected={item.code === selectedCode}
-              data-state={item.code === selectedCode ? 'selected' : undefined}
-              onClick={() => onSelect(item.code)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-              className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={() => {
+                onSelect(item.code)
+              }}
+              className={[
+                'cursor-pointer hover:bg-accent',
+                active ? 'bg-[color-mix(in_srgb,var(--m-teal)_6%,var(--card))]' : '',
+              ].join(' ')}
             >
-              <TableCell className="px-2 py-2">
+              <td className={`${TD} pr-0`}>
                 <QuoteThumb
                   item={item}
                   onOpen={() => {
                     onOpenImage(item)
                   }}
                 />
-              </TableCell>
-              <TableCell className="px-2 py-2 whitespace-normal">
-                <div className="line-clamp-2 text-sm leading-5">
-                  {splitHighlight(item.name, keyword).map((segment, segmentIndex) =>
+              </td>
+
+              <td className={TD}>
+                <div className="leading-[19px] font-medium">
+                  {splitHighlight(item.name, keyword).map((segment, index) =>
                     segment.hit ? (
-                      <mark
-                        key={segmentIndex}
-                        className="rounded-sm bg-transparent font-semibold text-foreground underline decoration-1 underline-offset-2"
-                      >
+                      <mark key={index} className="bg-transparent text-inherit">
                         {segment.text}
                       </mark>
                     ) : (
-                      <span key={segmentIndex}>{segment.text}</span>
+                      <span key={index}>{segment.text}</span>
                     ),
                   )}
                 </div>
-                {sub !== '' && (
-                  <div className="mt-0.5 line-clamp-1 text-[11px] leading-4 text-muted-foreground-weak">
-                    {sub}
+                {item.note !== '' && (
+                  <div className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground-weak">
+                    {item.note.length > 62 ? `${item.note.slice(0, 62)}…` : item.note}
                   </div>
                 )}
-              </TableCell>
-              <TableCell className="px-2 py-2 whitespace-normal">
-                <div className="truncate text-xs text-foreground">
-                  {item.model === '' ? '—' : item.model}
+              </td>
+
+              <td className={TD}>
+                <div>
+                  {item.model === '' ? (
+                    <span className="text-muted-foreground-weak">—</span>
+                  ) : (
+                    item.model
+                  )}
                 </div>
                 {item.spec !== '' && (
-                  <div className="mt-0.5 truncate text-[11px] leading-4 text-muted-foreground-weak">
+                  <div className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground-weak">
                     {item.spec}
                   </div>
                 )}
-              </TableCell>
-              <TableCell className="px-2 py-2 text-right">
-                {/* 规则价是整句话（「按所选花色36板的5倍单价计算 最低单价2800元/平方」），
-                    在 140px 的列宽里必然放不下。列表只给一行前缀，全文放 `title`，
-                    完整规则在右侧详情里 —— 查价时先看有没有数，再决定要不要读规则。 */}
+              </td>
+
+              <td className={`${TD} text-right tabular-nums`}>
+                {price.tone === 'amount' ? (
+                  <span className="font-medium whitespace-nowrap">{price.primary}</span>
+                ) : price.tone === 'empty' ? (
+                  <span className="inline-block rounded-full border border-border px-1.5 text-[11px] whitespace-nowrap text-m-amber">
+                    待补价
+                  </span>
+                ) : (
+                  <span className="inline-block max-w-[158px] text-right text-[11.5px] leading-4 whitespace-normal text-m-amber">
+                    {price.primary}
+                  </span>
+                )}
+              </td>
+
+              <td className={TD}>{item.unit === '' ? '—' : item.unit}</td>
+
+              <td className={TD}>
                 <span
-                  title={price.primary}
-                  className={cn(
-                    'block truncate text-sm leading-5 tabular-nums',
-                    price.tone === 'amount' ? 'font-medium text-foreground' : '',
-                    price.tone === 'text' ? 'text-m-amber' : '',
-                    price.tone === 'empty' ? 'text-m-amber' : '',
-                  )}
+                  title={item.category}
+                  style={{
+                    borderColor: `color-mix(in srgb, ${color} 34%, var(--border))`,
+                    color,
+                  }}
+                  className="inline-block rounded-full border px-1.5 text-[11px] whitespace-nowrap"
                 >
-                  {price.primary}
-                  {price.suffix !== '' && (
-                    <span className="text-[11px] text-muted-foreground-weak">{price.suffix}</span>
-                  )}
+                  {item.category.length > TAG_MAX
+                    ? `${item.category.slice(0, TAG_MAX)}…`
+                    : item.category}
                 </span>
-              </TableCell>
-              <TableCell className="truncate px-2 py-2 text-xs text-muted-foreground">
-                {item.unitRaw === '' ? (item.unit === '' ? '—' : item.unit) : item.unitRaw}
-              </TableCell>
-              <TableCell className="px-2 py-2">
-                <span
-                  title={`${QUOTE_SOURCE_NAMES[item.source]} · ${item.category}`}
-                  className={cn(
-                    'inline-flex max-w-full items-center truncate rounded border border-border px-1 text-[11px] leading-[18px]',
-                    SOURCE_TEXT[item.source],
-                  )}
-                >
-                  {item.category}
-                </span>
-              </TableCell>
-            </TableRow>
+              </td>
+            </tr>
           )
         })}
-      </TableBody>
-    </Table>
+      </tbody>
+    </table>
   )
 }
