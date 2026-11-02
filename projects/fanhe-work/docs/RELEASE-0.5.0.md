@@ -131,11 +131,11 @@
 | 3. 四道门禁 | 完成，见 §4.1 |
 | 4. 迁移 + `db:seed` + `db:quote-import` | 完成（16 个迁移、`permissions` 24 行、1225 条 / 293 张图） |
 | 5. `pnpm build`（含 web） | 完成：四包全 `Done`，`apps/web/dist` 3.7 MB / 108 个文件，`0.5.0` 已烧进 `assets/index-*.js`（见 §4.1 末两段） |
-| 6. `pnpm --filter @fanhe/desktop dist` | 待做（约 10 分钟，含签名） |
-| 7. `verify:sign` + `verify:pack` | 待做 |
-| 8. 推送与打 tag `v0.5.0` | 待做：**探活失败，见 §4.3 末两行**。本地两笔提交已就位（`110ae2a` 代码、`2a6568f` 文档），tag 未打 |
-| 9. 发布与四项核对 | 待做 |
-| 10. 容器重建（§3.1 第 4 条） | 待做 |
+| 6. `pnpm --filter @fanhe/desktop dist` | 完成：9 分 6 秒，`fanhe-work-setup-0.5.0.exe` 114,849,704 字节，signtool 逐件签名 |
+| 7. `verify:sign` + `verify:pack` | 完成：18 个 exe 全 `Status=Valid`（`VALUE=0`）/ `RESULT=OK`；`verify-pack` 47 项断言全过，含 6 条反例 |
+| 8. 推送与打 tag `v0.5.0` | 完成：`main` 与 `dev` 同到 `c50b9f7`，annotated tag 已推。首轮探活失败的两小时见 §4.3 |
+| 9. 发布与四项核对 | 完成：release `431191254` 已公开，四项核对全 PASS，见 §4.4 |
+| 10. 容器重建（§3.1 第 4 条） | 完成：api `11e3ff0b` / migrate `1cb04cdf` / web `ff7b3988`，`--force-recreate` 后 healthy，容器内产物与接口均已核，见 §4.4 |
 
 ### 4.1 本轮门禁
 
@@ -195,5 +195,93 @@
 | `Buffer` 不能直接写 Prisma Bytes | TS2322：`Uint8Array<ArrayBufferLike>` 不兼容 `Uint8Array<ArrayBuffer>` | `new Uint8Array(len)` 再 `.set(buffer)` |
 | 构建撞本机删除守卫 | `pnpm build` 在 web 阶段失败，栈里全是 vite 内部帧，第一眼像前端代码有错 | 见 §4.1 两条前置条件。**判据是日志里有没有 `safe-delete`**，有就不是代码问题 |
 | `ws-run.cmd` 的第一个参数是可执行文件 | 写成 `ws-run.cmd build` 报「无法将 build 识别为 cmdlet」 | 正确写法 `ws-run.cmd pnpm build` |
-| 推送探活不通（2026-11-02） | `ls-remote` 三种走法全失败：清空代理直连 15 秒超时、走会话代理 `CONNECT 502`、`gitconfig` 里的 `127.0.0.1:7897` 无人监听（Clash 未开） | **不是凭据问题**：报错停在 TCP，GCM 根本没被唤起。本地两笔提交已就位，网络恢复后直接跑第 8 步 |
+| 推送探活不通（2026-11-02） | `ls-remote` 三种走法全失败：清空代理直连 15 秒超时、走会话代理 `CONNECT 502`、`gitconfig` 里的 `127.0.0.1:7897` 无人监听（Clash 未开） | **不是凭据问题**：报错停在 TCP，GCM 根本没被唤起。**当天 16:55 网络自行恢复（直连 200、会话代理仍 502），已按第 8 步推完，见 §5.2** |
 | `git push origin dev` 被拒 | dev 落后 main，非快进 | 先 `git branch -f dev main` 再推。当前 dev 停在 `f9675c0`，落后 main 两笔 |
+
+## 五、本轮实发记录（2026-11-02）
+
+### 5.1 打包
+
+第一次 `dist` 在 2 分 45 秒时失败，报 `[safe-delete] spawnSync genie-trash ETIMEDOUT`，栈在 `electronGet.ts:248` 的 `extractArchive` —— **不是编译错，是 electron 解压时清 `release\win-unpacked`（上次失败留下的 134 个半解压文件）被本机回收站卡住**。把 `win-unpacked` 移走后重跑 9 分 6 秒通过。与 §4.1 那条 vite 清 `dist` 是同一类问题，只是触发点换成了 electron-builder。
+
+签名报告（`release/signature-report.txt`）关键行：
+
+```
+EXE_COUNT=18
+DISTINCT_SIGNER_SUBJECTS=1
+SIGNER_SUBJECT=CN=Fanhe Work
+NOT_VALID_COUNT=0
+RESULT=OK
+```
+
+**18 个 exe 全是 `Status=Valid`（`STATUS_VALUE=0`）** —— 判据之所以必须是 `Valid` 而不是「不是 NotSigned」，是因为 electron-updater 只在 `Status === 0` 时才做 publisherName 匹配，其余一律拒绝更新。证书指纹 `095CB390…` 与身份档案一致。
+
+`verify:pack` 47 项全过，含 6 条反例（PE 解析器对非 PE 必须抛错、未登记列必须抛错、指纹漂移必须判漂移等）。它留的手工步骤也跑了：
+
+```
+ELECTRON_RUN_AS_NODE=1 "…/win-unpacked/梵禾 Work.exe" --input-type=module \
+  -e 'console.log(Object.keys(await import(process.argv[1])).sort().join(","))' \
+  "file:///…/win-unpacked/resources/agent/agent.ts"
+→ 8 个导出，stderr 干净
+```
+
+### 5.2 推送
+
+直连可用（会话代理反而 502）。三条命令按序：
+
+```
+git branch -f dev main                     # dev 落后 main，不先同步会被拒
+git -c "http.https://github.com/.proxy=" -c http.proxy= push origin main
+git -c "http.https://github.com/.proxy=" -c http.proxy= push origin dev
+git tag -a v0.5.0 -F .tmp/tag-msg-0.5.0.txt
+git -c "http.https://github.com/.proxy=" -c http.proxy= push origin v0.5.0
+```
+
+两个分支都从 `f9675c0` 快进到 `c50b9f7`，tag 为 annotated（与 v0.3.x / v0.4.0 一致）。
+
+### 5.3 发布：没走 `electron-builder publish`
+
+那个子命令会先跑一次完整构建（又一次 9 分钟 + 又一次清目录）。改用 GitHub API 三步，可控且不触发重建：
+
+1. `POST /releases`（`draft: true`）→ id `431191254`；
+2. 逐个 `POST /releases/{id}/assets?name=…` 上传三件（`-f` 必须点名，漏一件不报错）；
+3. `PATCH /releases/{id}` `{"draft": false}` → `published_at` 有值、by-tag 变 200。
+
+三件资产 `state=uploaded`，`size` 与本地一致：114,849,704 / 121,004 / 349。
+
+### 5.4 容器重建
+
+```
+ws-compose.cmd build api web migrate     # 1 分 7 秒；改权限点必须连 migrate 一起建
+ws-compose.cmd up -d --force-recreate api web
+```
+
+镜像 id 全部换新（api `f4a0ab38`→`11e3ff0b`、migrate `a0feb1e7`→`1cb04cdf`、web `505a524c`→`ff7b3988`）。`migrate` 容器退出码 0，日志尾部 `权限点 24 / 内置角色 6 / 新增授权关联 0 / 移除 0` —— 授权关联是 0 而不是 6，因为宿主侧 `db:seed` 已经加过。
+
+验收取的是**容器内的东西**，不是「我构建了」这句话：
+
+| 探针 | 结果 |
+| --- | --- |
+| `docker exec fanhe-work-web grep -o "0\.5\.0" /usr/share/nginx/html/assets/*.js` | 命中 |
+| 同上 `grep -o "报价查价"` | 命中 2 次 |
+| `docker exec fanhe-work-api ls apps/api/dist/routes` | 有 `quote.js` |
+| 容器内 `packages/shared/dist/permissions.js` 含 `personal.quote.read` | 命中（owner 清单走代码常量，这条必须查） |
+| `GET /api/quote/meta`、`/access-state`、`/search` 未认证 | 全部 401 `{"error":"unauthorized"}` |
+| `GET http://127.0.0.1:8080/` | 200，`assets/index-CFWgAz7x.js`（新哈希） |
+| `docker logs fanhe-work-api` | 无 500，只有我自己的探针请求 |
+
+**探针本身踩了两个坑，都值得记**：
+
+- 我一开始探 `/api/quote/keys` 拿到 404，差点判「路由没上」。实际路由是 `/meta` `/search` `/items/:code` `/images/:key` —— **`keys` 是模块名，不是路由**。404 与 401 的区别在这里恰好是两组不同的事实：404 是我写错了，401 才是「路由在、鉴权生效」。
+- `curl "…?q=拉篮"` 返回 400 而不是 401：中文没编码，Fastify 的 querystring schema 在 `preHandler` 之前就跑，直接判非法。加 `--data-urlencode` 后回到 401。
+
+### 5.5 四项核对输出
+
+```
+== 核对 1：线上 latest.yml 与本地逐字节一致      PASS  349 字节
+== 核对 2：files[].sha512 / 顶层 sha512 / files[].size  PASS  114849704 字节
+== 核对 3：三件资产 sha256 digest 对本地文件     PASS  exe / blockmap / latest.yml
+[release-verify] PASS —— 四项核对全过
+```
+
+第四条（`assets[].digest`）才是「传上去的字节就是本地那份」的唯一证明 —— 前三条只证明清单与本地一致。核对脚本里 `files[].sha512` 用缩进正则、`size` 只在 `files[]` 里，所以另外做了反例：把 `size` 放到顶层，缩进正则必须取到 456 而不是 123（历史在这里栽过，见 `verify-pack.mjs` 的同族 bug）。
