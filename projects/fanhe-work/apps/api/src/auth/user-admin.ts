@@ -793,7 +793,16 @@ export async function resetManagedUserPassword(
   if (!canManage(actor, target)) return { ok: false, reason: 'cannot_manage_peer_or_above' }
   if (target.role.code === ROLE_CODES.OWNER) return { ok: false, reason: 'cannot_modify_owner' }
 
-  if (newPassword.length < 12 || newPassword.length > 512) {
+  // 长度必须用 shared 的常量，不要在这里写字面量。
+  //
+  // 这里曾写死成 `< 12`：路由的 JSON schema 与错误文案都是 `PASSWORD_MIN_LENGTH`
+  // （6），于是 6~11 位的密码过了 schema、被业务层拦下，返回的却是「密码长度需在
+  // 6 到 512 之间」—— 用户照着提示输 6 位，系统坚持说不合要求。三个地方各说各的
+  // 话，只有常量能把它们绑在一起。
+  //
+  // 若将来要收紧或放宽，改 `packages/shared/src/account.ts` 的常量：schema、文案、
+  // 创建账号的校验、前端输入框占位符会一起跟着变。
+  if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
     return { ok: false, reason: 'invalid_password' }
   }
 

@@ -24,6 +24,7 @@ import { after, before, describe, test } from 'node:test'
 
 import {
   AUDIT_ACTIONS,
+  PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   PERMISSIONS,
   ROLE_CODES,
@@ -412,6 +413,56 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
       ip: TEST_IP,
     })
     assert.ok(withNew.ok, '新密码应当可以登录')
+  })
+
+  /**
+   * 长度边界必须与 `PASSWORD_MIN_LENGTH` 对齐。
+   *
+   * 这条用例的存在理由是一次真实缺陷：业务层把下限写死成 12，而 schema 与
+   * 错误文案用的是常量 6。6~11 位的密码通过 schema、被业务层拒绝，返回的文案
+   * 却写着「密码长度需在 6 到 512 之间」，用户照着提示输 6 位永远重置不成。
+   *
+   * 断言用「恰好等于常量」而不是写死 6，这样将来调整常量时用例自动跟上，
+   * 真正要守的是「三处规则一致」这件事，不是某个具体数字。
+   */
+  test('重置密码的长度下限与公开常量一致', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const target = await createUser(ROLE_CODES.MEMBER)
+
+    const atLimit = 'a'.repeat(PASSWORD_MIN_LENGTH)
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/api/system/users/${target.id}/reset-password`,
+      headers: auth(owner.token),
+      payload: { newPassword: atLimit },
+    })
+    assert.equal(
+      accepted.statusCode,
+      200,
+      `恰好 ${PASSWORD_MIN_LENGTH} 位的密码应当被接受，实际 ${accepted.statusCode}：${accepted.body}`,
+    )
+
+    const signedIn = await login({
+      username: target.username,
+      password: atLimit,
+      ip: TEST_IP,
+    })
+    assert.ok(signedIn.ok, '边界长度的新密码应当能登录')
+
+    // 少一位与超上限都该被拒。断言 400 而不区分是 schema 还是业务层拦的：
+    // 两者本就该一致，谁拦住都算对。
+    for (const [label, password] of [
+      ['低于下限一位', 'a'.repeat(PASSWORD_MIN_LENGTH - 1)],
+      ['超过上限一位', 'a'.repeat(PASSWORD_MAX_LENGTH + 1)],
+    ] as const) {
+      const rejected = await app.inject({
+        method: 'POST',
+        url: `/api/system/users/${target.id}/reset-password`,
+        headers: auth(owner.token),
+        payload: { newPassword: password },
+      })
+      assert.equal(rejected.statusCode, 400, `${label}的密码应当被拒绝`)
+    }
   })
 
   test('删除是软删除，账号即刻无法登录但历史记录保留', async () => {
