@@ -133,7 +133,7 @@
 | 5. `pnpm build`（含 web） | 完成：四包全 `Done`，`apps/web/dist` 3.7 MB / 108 个文件，`0.5.0` 已烧进 `assets/index-*.js`（见 §4.1 末两段） |
 | 6. `pnpm --filter @fanhe/desktop dist` | 待做（约 10 分钟，含签名） |
 | 7. `verify:sign` + `verify:pack` | 待做 |
-| 8. 推送与打 tag `v0.5.0` | 待做 |
+| 8. 推送与打 tag `v0.5.0` | 待做：**探活失败，见 §4.3 末两行**。本地两笔提交已就位（`110ae2a` 代码、`2a6568f` 文档），tag 未打 |
 | 9. 发布与四项核对 | 待做 |
 | 10. 容器重建（§3.1 第 4 条） | 待做 |
 
@@ -195,3 +195,5 @@
 | `Buffer` 不能直接写 Prisma Bytes | TS2322：`Uint8Array<ArrayBufferLike>` 不兼容 `Uint8Array<ArrayBuffer>` | `new Uint8Array(len)` 再 `.set(buffer)` |
 | 构建撞本机删除守卫 | `pnpm build` 在 web 阶段失败，栈里全是 vite 内部帧，第一眼像前端代码有错 | 见 §4.1 两条前置条件。**判据是日志里有没有 `safe-delete`**，有就不是代码问题 |
 | `ws-run.cmd` 的第一个参数是可执行文件 | 写成 `ws-run.cmd build` 报「无法将 build 识别为 cmdlet」 | 正确写法 `ws-run.cmd pnpm build` |
+| 推送探活不通（2026-11-02） | `ls-remote` 三种走法全失败：清空代理直连 15 秒超时、走会话代理 `CONNECT 502`、`gitconfig` 里的 `127.0.0.1:7897` 无人监听（Clash 未开） | **不是凭据问题**：报错停在 TCP，GCM 根本没被唤起。本地两笔提交已就位，网络恢复后直接跑第 8 步 |
+| `git push origin dev` 被拒 | dev 落后 main，非快进 | 先 `git branch -f dev main` 再推。当前 dev 停在 `f9675c0`，落后 main 两笔 |
