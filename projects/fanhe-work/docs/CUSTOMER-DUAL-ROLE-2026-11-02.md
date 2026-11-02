@@ -333,7 +333,7 @@ type CustomerViewer = {
 
 ### 11.3 手工核验
 
-- `psql` 查 `permissions` 应 23 行、`roles` 应 6 行、`role_permissions` 含 designer/sales 各 5 条。
+- `psql` 查 `permissions` 应 23 行、`roles` 应 6 行、`role_permissions` 合计 72 行，其中 designer 与 sales 各 **10** 条（`personal.*` 展开 6 条 + 客户段 4 条），owner 23、admin 20、member 6、viewer 3。
 - 用设计师账号登录：列表只有自己的客户，顶部有范围提示条，看不到「公共池归类」按钮，直接请求 `/api/customers/pool` 得 403。
 - 用销售账号打开同一位客户：`myRole` 为 `sales`，`designerName` 与设计师端看到的逐字相同。
 - `audit_logs` 里 `customer.assignment.change` 一条不缺、`actor_id` 非全零 UUID。
