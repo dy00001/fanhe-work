@@ -6,12 +6,14 @@ import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   ROLE_CODES,
+  USERNAME_MAX_LENGTH,
   type AccountPermissions,
   type PermissionCode,
 } from '@fanhe/shared'
 
 import { recordAudit, type AuditContext } from '../audit/audit.js'
 import { prisma } from '../db/prisma.js'
+import { Prisma } from '../generated/prisma/client.js'
 import { hashPassword } from './password.js'
 
 /** 事务回调里的客户端类型。与 prisma 同源，但不接受 $transaction 之外的方法。 */
@@ -222,6 +224,58 @@ class UsernameTakenError extends Error {
     super('username taken')
     this.name = 'UsernameTakenError'
   }
+}
+
+/**
+ * 已删除账号的登录名墓碑前缀。
+ *
+ * 首字符取 `#`，而 `USERNAME_PATTERN` 要求首字符是字母或数字 —— 这类名字**永远
+ * 无法通过 `isValidUsername`**，因此不可能被谁注册进来，也就不会与真实账号撞名。
+ */
+const DELETED_USERNAME_PREFIX = '#deleted#'
+
+/**
+ * 把已删除账号的登录名改写成「墓碑」，释放它占着的那一格唯一索引。
+ *
+ * ## 为什么要这么做
+ *
+ * `users.username` 上是**全表唯一索引**（`users_username_key`），不带
+ * `deleted_at IS NULL` 条件。Prisma 的 `@unique` 表达不出部分唯一索引，这一点在
+ * `launch_profiles` 的表注释里已经记过一次：软删除与普通唯一索引天然冲突 ——
+ * 删掉一行之后，同名的第二行永远插不进来，而报错信息只说「重复键」。
+ *
+ * 账号管理这条路径比它更严重：`POST /api/system/users` 撞上的是业务层预检，
+ * 提示「登录账号已被占用」，而占用它的那条记录在界面上已经看不到了。管理员看到
+ * 的是一个自相矛盾的画面 —— 列表里没有这个账号，系统却说它被占着。
+ *
+ * 两条可选的路：把唯一索引换成 `WHERE deleted_at IS NULL` 的部分索引，或者在
+ * 删除时把登录名让出来。选后者，理由有三条：
+ *
+ * 1. **不需要迁移。** 部分唯一索引只能手写 SQL 迁移，且 `schema.prisma` 里会留下
+ *    一个 Prisma 认不出的索引，之后每次 `migrate dev` 都会想把它改回去。把代价
+ *    压在一条 UPDATE 上，比压在 schema 的长期一致性上划算。
+ * 2. **数据库的唯一性保证不被削弱。** 全表唯一索引仍在，并发抢注由数据库兜底；
+ *    改成部分索引虽然语义更准，但那条约束从此只存在于迁移文件里，任何人重建库时
+ *    都可能漏掉。
+ * 3. **「删除后释放登录名」本身就是产品语义。** 管理员删掉一个账号，期望的是
+ *    这个名字可以再给下一个人用，而这条规则由删除动作自己完成，不依赖调用方记得
+ *    去过滤 `deletedAt`。
+ *
+ * ## 为什么用 id 而不是随机串
+ *
+ * 墓碑值必须**互不相同**：同一个登录名可能被建、删、再建、再删反复多轮，每轮的
+ * 行都要有自己的墓碑。用行 id 做后缀是确定性的，不会出现「随机串碰撞导致删除
+ * 失败」这种无法复现的故障；id 本身是全表唯一，重复的墓碑值不可能出现。
+ *
+ * 长度：`#deleted#` + uuid(36) + `#` 共 46 字符，`username` 是 VarChar(64)，因此
+ * 原名最多还能留 18 个字符。留一段原名是为了让直接查库的人一眼看出这行原来是谁，
+ * 完整的原名另有去处 —— 删除动作会把 `username` 写进审计 detail，那条记录不会被
+ * 后续改名影响。
+ */
+function deletedUsernameTombstone(username: string, userId: string): string {
+  const head = `${DELETED_USERNAME_PREFIX}${userId}#`
+  const keep = Math.max(0, USERNAME_MAX_LENGTH - head.length)
+  return `${head}${username.slice(0, keep)}`
 }
 
 /** 取一个账号及其权限关联。 */
@@ -450,7 +504,15 @@ export async function createManagedUser(
   const validated = validatePermissions(input.permissions?.granted, input.permissions?.denied)
   if (!validated.ok) return { ok: false, reason: 'invalid_permissions' }
 
-  const taken = await prisma.user.findFirst({ where: { username }, select: { id: true } })
+  // 占用判定只认**未删除**的行。
+  //
+  // 这里此前少了 `deletedAt: null`，于是软删除的账号会继续挡住同名的新账号：
+  // 界面上已经看不到它，接口却回「登录账号已被占用」。那段残留同时体现在唯一索引
+  // 上，见 deletedUsernameTombstone 的注释 —— 两处都要修，只修一处仍然建不回来。
+  const taken = await prisma.user.findFirst({
+    where: { username, deletedAt: null },
+    select: { id: true },
+  })
   if (taken !== null) return { ok: false, reason: 'username_taken' }
 
   // 哈希在事务外算，与 createOwnerAccount 同理：Argon2 单次几十毫秒，放进事务
@@ -462,9 +524,23 @@ export async function createManagedUser(
     created = await prisma.$transaction(async (tx) => {
       // 事务内重查一次用户名。事务外那次是廉价的前置检查，这里才是真正的判定 ——
       // 两次之间可能有另一个并发请求抢注了同一个名字。
-      const stillTaken = await tx.user.findFirst({ where: { username }, select: { id: true } })
-      if (stillTaken !== null) {
+      //
+      // 查的是**任意状态**的行，而不是只查未删除的：唯一索引覆盖全表，一条已删除
+      // 的行如果还顶着这个名字，插入必然撞键。那种行来自本修复上线之前的历史数据
+      // （删除时没有改名），在这里顺手把它改成墓碑，等于一次惰性回收 —— 管理员
+      // 不需要记得跑清理脚本，第一次重建同名账号时数据自己就对齐了。
+      const holder = await tx.user.findFirst({
+        where: { username },
+        select: { id: true, deletedAt: true },
+      })
+      if (holder !== null && holder.deletedAt === null) {
         throw new UsernameTakenError()
+      }
+      if (holder !== null) {
+        await tx.user.update({
+          where: { id: holder.id },
+          data: { username: deletedUsernameTombstone(username, holder.id) },
+        })
       }
 
       const user = await tx.user.create({
@@ -488,6 +564,13 @@ export async function createManagedUser(
   } catch (error) {
     // 并发抢注走到这里。事务外那次检查没能拦住竞争，这里才是真正的判定点。
     if (error instanceof UsernameTakenError) {
+      return { ok: false, reason: 'username_taken' }
+    }
+    // 兜底：唯一索引是最后一道防线，它拦下的重复键同样是「名字被占用」这件事。
+    // 不接这一支的话，两个并发请求各自通过预检时，后到的那个会拿到 500，而界面
+    // 会把 500 显示成「操作失败，请稍后重试」—— 管理员会反复重试，每一次都被
+    // 同一条约束拒绝，却看不出真正的原因。
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       return { ok: false, reason: 'username_taken' }
     }
     throw error
@@ -611,15 +694,29 @@ export async function updateManagedUser(
 // ---------------------------------------------------------------------------
 
 /**
- * 软删除账号。
+ * 软删除账号，并把它占着的登录名、权限覆盖与会话一并清干净。
  *
  * 走软删除而非物理删除，与 users 表上其它数据一致：账号被笔记、事件、审计日志
  * 引用，物理删除会连带抹掉那些历史痕迹（外键是 SetNull 或 Restrict，前者让
  * 历史记录里的操作人变空）。
  *
- * 删除前**必须吊销全部会话**，理由同 updateManagedUser。软删除后账号立刻无法
- * 登录，已签发的访问令牌也因 deletedAt 非空而失效，但刷新令牌若不吊销，仍能
- * 换出新的访问令牌 —— 那条路径查的是 tokenHash 而不检查账号状态。
+ * **删除必须同时清掉三类残留**，缺任何一类都会留下「账号已删除却还在影响系统」
+ * 的状态：
+ *
+ * 1. **登录名（唯一性校验数据）。** 软删除的行仍然是一行真实存在的记录，
+ *    `users_username_key` 这个全表唯一索引照样认它。删除时把登录名改写成墓碑，
+ *    名字才真正让出来 —— 细节见 `deletedUsernameTombstone`。
+ * 2. **账号级权限覆盖。** 那是「这个人被单独调整过什么」，账号没了就失去归属对象。
+ *    同名重建会拿到新的 `user_id`，旧行不会被继承，留着只是孤儿数据。
+ * 3. **会话。** 刷新令牌若不吊销，仍能换出新的访问令牌 —— 那条路径查的是
+ *    `tokenHash` 而不检查账号状态。**吊销而不删除**：那一行是「这张令牌为什么
+ *    失效」的唯一凭据，删掉就再答不出它是被删除带走的还是自然过期的。
+ *
+ * 失败计数与锁定时间也一并清零。行被软删后没有任何路径再读它们，留着只会在人工
+ * 查库时误导 —— 看起来像这个账号还在被人爆破。
+ *
+ * 删除前的层级与 owner 判定见上方 `canManage`：能删掉谁，与它是不是 owner、
+ * rank 高低有关，与权限点无关。
  */
 export async function deleteManagedUser(
   actor: Actor,
@@ -636,8 +733,18 @@ export async function deleteManagedUser(
   await prisma.$transaction([
     prisma.user.update({
       where: { id: userId },
-      data: { deletedAt: now, status: 'disabled' },
+      data: {
+        // 登录名改写必须在**同一个事务**里与软删除一起提交。分成两次写的话，
+        // 中间态是「行还在列表外、名字已被改掉」或者反过来「名字还占着、账号
+        // 已消失」，两个中间态都会让并发到来的创建请求做出错误判断。
+        username: deletedUsernameTombstone(target.username, userId),
+        deletedAt: now,
+        status: 'disabled',
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
     }),
+    prisma.userPermission.deleteMany({ where: { userId } }),
     prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: now, revokedReason: 'account_deleted' },
@@ -648,6 +755,8 @@ export async function deleteManagedUser(
     action: AUDIT_ACTIONS.SYSTEM_USER_DELETE,
     actor: { id: actor.userId, name: actor.displayName },
     target: { type: 'user', id: userId },
+    // 记的是**删除前**的那个登录名。行上的 username 此刻已经变成墓碑，审计是
+    // 事后回答「删掉的是哪个账号」的唯一依据，它不能被墓碑影响。
     detail: { username: target.username },
     ip: context?.ip,
     userAgent: context?.userAgent,

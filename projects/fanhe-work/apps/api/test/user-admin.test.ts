@@ -442,6 +442,218 @@ describe('账号与权限管理', { skip: reachable ? false : '数据库不可�
   })
 
   // -----------------------------------------------------------------------
+  // 删除后的重建（创建 → 删除 → 重新创建）
+  // -----------------------------------------------------------------------
+
+  /**
+   * 这条守的是本次缺陷：删除后同名账号建不回来。
+   *
+   * 断言分成三段，缺一段就证明不了完整链路：
+   *   1. **反例对照** —— 账号还在时同名创建必须被拒（409）。少了它，后面那次
+   *      201 有可能只是「占用检查根本没生效」，而不是「删除真的让出了名字」。
+   *   2. **删除确实让出了名字** —— 软删除的行还在，但它的 username 已经变成墓碑，
+   *      不再占着全表唯一索引。
+   *   3. **重建出来的是新行，并且能登录** —— 新行有自己的 id，不是把那行「复活」。
+   */
+  test('删除后同名账号可以重新创建，且重建的账号能登录', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const username = `${TEST_DATA_PREFIX}again${randomUUID().replaceAll('-', '').slice(0, 12)}`
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '重建测试',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(first.statusCode, 201)
+    const firstId = (first.json() as { user: { id: string } }).user.id
+    createdUserIds.push(firstId)
+
+    // 反例对照：账号活着时，同名创建必须被挡下。
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '重复账号',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(duplicate.statusCode, 409, '账号还在时，同名创建应当被拒')
+    assert.equal(duplicate.json().error, 'username_taken')
+
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/api/system/users/${firstId}`,
+      headers: auth(owner.token),
+    })
+    assert.equal(removed.statusCode, 200)
+
+    // 软删除的行仍在，但登录名必须已经让出来 —— 这是唯一索引层面的事实，
+    // 只改业务层判定的话，插入仍然会撞 users_username_key。
+    const stale = await prisma.user.findUnique({
+      where: { id: firstId },
+      select: { username: true, deletedAt: true },
+    })
+    assert.notEqual(stale?.deletedAt, null, '仍然是软删除，行没有物理消失')
+    assert.notEqual(stale?.username, username, '删除后登录名应当改写成墓碑，不再占唯一索引')
+    assert.ok(stale?.username.startsWith('#deleted#'), '墓碑要落在普通账号名规则之外')
+
+    // 重建同名账号。
+    const rebuilt = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '重建后的账号',
+        department: '设计部',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(rebuilt.statusCode, 201, '同名账号删除后应当可以重新创建')
+    const rebuiltId = (rebuilt.json() as { user: { id: string } }).user.id
+    createdUserIds.push(rebuiltId)
+    assert.notEqual(rebuiltId, firstId, '重建应当是新的行，而不是把旧行复活')
+
+    const signInResult = await login({ username, password: TEST_PASSWORD, ip: TEST_IP })
+    assert.ok(signInResult.ok, '重建后的账号应当能登录')
+    assert.equal(signInResult.data.user.id, rebuiltId, '登录的应当是新行')
+
+    // 两行同名历史都在，但只有一个能用这个名字 —— 这是「不误伤历史」的判据。
+    const rows = await prisma.user.findMany({
+      where: { id: { in: [firstId, rebuiltId] } },
+      select: { id: true, username: true, deletedAt: true },
+    })
+    assert.equal(rows.length, 2)
+    assert.equal(rows.filter((row) => row.username === username).length, 1)
+  })
+
+  test('删除会一并清掉权限覆盖与会话，不留孤儿记录', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const username = `${TEST_DATA_PREFIX}purge${randomUUID().replaceAll('-', '').slice(0, 12)}`
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '残留清理测试',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(created.statusCode, 201)
+    const targetId = (created.json() as { user: { id: string } }).user.id
+    createdUserIds.push(targetId)
+
+    // 造出三类残留的前置条件：权限覆盖、有效会话、锁定计数。
+    await app.inject({
+      method: 'PUT',
+      url: `/api/system/users/${targetId}/permissions`,
+      headers: auth(owner.token),
+      payload: { granted: [PERMISSIONS.SYSTEM_AUDIT_READ], denied: [] },
+    })
+    const targetSignIn = await login({ username, password: TEST_PASSWORD, ip: TEST_IP })
+    assert.ok(targetSignIn.ok)
+    await prisma.user.update({
+      where: { id: targetId },
+      data: { failedLoginAttempts: 3, lockedUntil: new Date(Date.now() + 600_000) },
+    })
+
+    assert.ok((await prisma.userPermission.count({ where: { userId: targetId } })) > 0)
+    assert.ok((await prisma.refreshToken.count({ where: { userId: targetId } })) > 0)
+
+    const removed = await app.inject({
+      method: 'DELETE',
+      url: `/api/system/users/${targetId}`,
+      headers: auth(owner.token),
+    })
+    assert.equal(removed.statusCode, 200)
+
+    assert.equal(
+      await prisma.userPermission.count({ where: { userId: targetId } }),
+      0,
+      '账号级权限覆盖应当随删除清掉',
+    )
+    assert.equal(
+      await prisma.refreshToken.count({ where: { userId: targetId, revokedAt: null } }),
+      0,
+      '删除必须吊销全部会话',
+    )
+    const row = await prisma.user.findUnique({
+      where: { id: targetId },
+      select: { failedLoginAttempts: true, lockedUntil: true },
+    })
+    assert.equal(row?.failedLoginAttempts, 0, '失败计数应当清零')
+    assert.equal(row?.lockedUntil, null, '锁定应当解除')
+
+    // 老访问令牌立刻失效，不必等它自然过期。
+    const withStaleToken = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: auth(targetSignIn.data.accessToken),
+    })
+    assert.equal(withStaleToken.statusCode, 401)
+  })
+
+  /**
+   * 修复上线之前删掉的账号，行还顶着原名（删除时没有改名）。
+   *
+   * 这类历史数据不清理的话，管理员第一次重建同名账号仍会拿到「已被占用」——
+   * 而那条记录他根本看不到。这里直接写库造出那条历史行，验证创建路径会把它顺手
+   * 改成墓碑，不需要任何人手工跑脚本。
+   */
+  test('历史遗留的软删除行会被创建路径惰性回收，不挡同名重建', async () => {
+    const owner = await signIn(ROLE_CODES.OWNER)
+    const username = `${TEST_DATA_PREFIX}legacy${randomUUID().replaceAll('-', '').slice(0, 12)}`
+
+    const legacy = await prisma.user.create({
+      data: {
+        username,
+        passwordHash,
+        displayName: '修复前的残留',
+        roleId: roleId(ROLE_CODES.MEMBER),
+        status: 'disabled',
+        deletedAt: new Date(Date.now() - 86_400_000),
+      },
+      select: { id: true },
+    })
+    createdUserIds.push(legacy.id)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/users',
+      headers: auth(owner.token),
+      payload: {
+        username,
+        password: TEST_PASSWORD,
+        displayName: '回收后重建',
+        roleCode: ROLE_CODES.MEMBER,
+      },
+    })
+    assert.equal(response.statusCode, 201, '历史残留不应挡住同名重建')
+    const rebuiltId = (response.json() as { user: { id: string } }).user.id
+    createdUserIds.push(rebuiltId)
+
+    const recycled = await prisma.user.findUnique({
+      where: { id: legacy.id },
+      select: { username: true, deletedAt: true },
+    })
+    assert.ok(recycled?.username.startsWith('#deleted#'), '历史行应当被改成墓碑')
+    assert.notEqual(recycled?.deletedAt, null, '回收不该把历史行复活')
+  })
+
+  // -----------------------------------------------------------------------
   // 权限叠加
   // -----------------------------------------------------------------------
 
