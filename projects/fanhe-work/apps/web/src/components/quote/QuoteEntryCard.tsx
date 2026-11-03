@@ -163,7 +163,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
           openPanel('')
         }}
       >
-        <span className="absolute top-3 right-3 z-[1] rounded-full border border-[color-mix(in_srgb,var(--m-teal)_32%,var(--border))] bg-[color-mix(in_srgb,var(--m-teal)_6%,var(--card))] px-2 text-xs leading-[1.6] text-m-teal">
+        <span className="absolute top-3 right-3 z-[1] rounded-full border border-[color-mix(in_srgb,var(--m-teal)_32%,var(--border))] bg-[color-mix(in_srgb,var(--m-teal)_6%,var(--card))] px-2 py-px text-xs leading-[1.6] text-m-teal">
           可用
         </span>
         <span className="mod-icon grid size-9 shrink-0 place-items-center rounded-xl bg-[color-mix(in_srgb,var(--hue)_var(--wash),var(--card))] text-[var(--hue)]">
@@ -174,7 +174,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
 
           {/* 输入区自己吃掉点击：点它只该聚焦，不该跳面板。 */}
           <div
-            className="relative flex h-[34px] w-full items-center gap-1.5 rounded-lg border border-border bg-background px-2 focus-within:border-ring focus-within:bg-card focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--m-teal)_12%,transparent)]"
+            className="relative flex h-[34px] w-full items-center gap-1.5 rounded-[10px] border border-border bg-background px-2 focus-within:border-ring focus-within:bg-card focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--m-teal)_12%,transparent)]"
             onClick={(event) => {
               event.stopPropagation()
               inputRef.current?.focus()
@@ -253,7 +253,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
               top: pos.top,
               width: Math.min(POP_WIDTH, window.innerWidth - 24),
             }}
-            className="fixed z-[70] flex max-h-[420px] flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-[0_4px_16px_rgb(0_0_0_/_0.06),0_18px_50px_rgb(0_0_0_/_0.14)]"
+            className="fixed z-[70] flex max-h-[420px] flex-col overflow-hidden rounded-[14px] border border-border bg-popover shadow-[0_18px_48px_rgb(0_0_0_/_0.16),0_0_0_0.5px_rgb(0_0_0_/_0.04)]"
           >
             <div className="flex items-center gap-2 border-b border-border-soft bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
               <span>{keyword.trim() === '' ? '全部来源' : `关键词「${keyword.trim()}」`}</span>
@@ -270,7 +270,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
                   </code>{' '}
                   的价格条目
                   <br />
-                  <span className="text-xs">可试：爱格 / 欧松 / 拉直器 / 2010001</span>
+                  <span className="text-xs">可试：爱格 / 欧松 / 拉直器 / 2010001 / 洞洞板</span>
                 </div>
               ) : (
                 rows.map((item, index) => {

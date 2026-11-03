@@ -1,5 +1,5 @@
 import { NAV_CODES, navPath, type NavItem } from '@fanhe/shared'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 
 import { ModuleHeader } from '../components/ModuleHeader'
 import { EventsPanel } from '../components/events/EventsPanel'
@@ -38,6 +38,7 @@ import { HomePage } from './HomePage'
  */
 export function WorkbenchPage({ item }: { item: NavItem }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const base = navPath(NAV_CODES.WORKBENCH)
   const normalized = pathname.replace(/\/+$/, '')
 
@@ -69,26 +70,14 @@ export function WorkbenchPage({ item }: { item: NavItem }) {
   }
 
   if (normalized === `${base}/quote`) {
-    // `h-full` 是必需的：内容区（`main`）只是一个可滚动的块级容器，不是弹性列，
-    // 不写 `h-full` 的话这个 `flex-1` 无处可解、面板会缩成内容高，两栏各自滚动
-    // 变成整页滚动。`min-h-0` 与之配套 —— 弹性子项默认 `min-height: auto`，
-    // 不去掉就会被内容顶开，内部滚动条永远不出现。
-    //
-    // 页头**不能直接传 `item`**：`quote` 不是一个导航项，路由层给到这里的是
-    // workspace 根的那一条，标题会显示成「首页」。这里覆盖成这一页自己的名字。
-    return (
-      <div className="flex h-full min-h-0 flex-col gap-4">
-        <ModuleHeader
-          item={{
-            ...item,
-            label: '报价查价',
-            summary:
-              '台账里的官方单价：柜体、板式工艺、五金三类。按名称/型号/规格搜，点一条看详情与改价入口。',
-          }}
-        />
-        <QuotePanel variant="page" />
-      </div>
-    )
+    /* 这一页**不再套页头**：静态稿的 `.panel` 是一层 `fixed inset-0` 的居中浮层
+       （口径见 `QuotePanel` 的 `page` 分支），浮层里自带标题与副标题。
+       在外面再叠一个 `ModuleHeader` 会变成两层标题，而且会把宽度压到约 730px ——
+       三栏里 212 + 326 是定尺，结果表只剩 260，规则价直接溢出到详情栏上。
+
+       `onRequestClose` 回首页：地址能直接发给别人（这是整页形态存在的理由），
+       所以「关闭」是路由后退，不是把面板藏起来留一个空页面。 */
+    return <QuotePanel variant="page" onRequestClose={() => navigate(base)} />
   }
 
   return <HomePage />

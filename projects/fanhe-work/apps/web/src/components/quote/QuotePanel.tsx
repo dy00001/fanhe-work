@@ -20,7 +20,6 @@ import {
   releaseQuoteImages,
   searchQuotes,
 } from '../../lib/quote'
-import { cn } from '../../lib/utils'
 import { ErrorState, LoadingState } from '../StateView'
 
 import { PriceGateDialog } from './PriceGateDialog'
@@ -280,6 +279,26 @@ export function QuotePanel({
       .catch(() => setAccess(null))
   }, [])
 
+  /**
+   * Esc 收起整页形态（静态稿第 1497 行）。
+   *
+   * 只在 `page` 上挂：弹窗形态由 Radix `Dialog` 自己处理 Esc，再挂一层会重复触发。
+   * 浮层（灯箱 / 口令 / 维护）开着时交给它们各自处理 —— 否则按一下 Esc 会连面板
+   * 一起收掉，人还得重新打开。
+   */
+  useEffect(() => {
+    if (variant !== 'page' || onRequestClose === undefined) return
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== 'Escape') return
+      if (lightboxOpen || gateOpen || maintOpen) return
+      onRequestClose?.()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [variant, onRequestClose, lightboxOpen, gateOpen, maintOpen])
+
   if (!canRead) {
     return (
       <p className="p-6 text-sm text-muted-foreground">
@@ -295,18 +314,23 @@ export function QuotePanel({
         ? '正在检索…'
         : `共 ${total} 条${total > LIMIT ? `，显示前 ${LIMIT} 条，请输入更精确的关键字` : ''}`
 
-  return (
+  /* 面板本体：两种形态共用同一份。
+     定尺照静态稿 `.panel` —— 宽 `min(1180px,100%)`、高 `min(760px,calc(100vh - 56px))`、
+     18px 圆角、外投影。**不要按形态各写一套**：一比一的前提是同一个盒子。
+
+     **尺寸用内联 `style` 而不是 Tailwind 任意值。** `h-[min(760px,calc(100vh-56px))]`
+     里 `calc` 的减号两侧缺空格，CSS 判为非法 → 整条 `min()` 失效 → 退成 `auto`，
+     面板被内容压成 364px 宽、标题竖排（11-02 现场截图确认）。Tailwind 的 `_` 转空格
+     能修，但这类写法一个字符写错就静默失效，不如直接给 CSS。 */
+  const panel = (
     <div
-      className={cn(
-        'flex min-h-0 flex-col overflow-hidden rounded-[18px] bg-card',
-        // 弹窗形态照 `.panel` 的定尺：宽 min(1180, 100%)、高 min(760, 100vh-56px)。
-        // 整页形态反过来吃满剩余高度 —— 外框（`WorkbenchPage`）是 `h-full` 的弹性列，
-        // 头部占自然高、面板拿走剩下的。**这里不能用 `h-full`**：100% 是按外框算的，
-        // 会把页头那一段也算进来，面板底部被顶出可视区。
-        variant === 'dialog'
-          ? 'h-[min(760px,calc(100vh-56px))] w-full shadow-[0_30px_80px_rgb(0_0_0_/_0.3)]'
-          : 'min-h-0 flex-1 border border-border',
-      )}
+      style={{
+        width: '1180px',
+        maxWidth: '100%',
+        height: '760px',
+        maxHeight: 'calc(100vh - 56px)',
+      }}
+      className="flex min-h-0 flex-col overflow-hidden rounded-[18px] bg-card shadow-[0_30px_80px_rgb(0_0_0_/_0.3)]"
     >
       {/* 头部：标题 + 副标题 + 搜索 + 价格维护 + 关闭 */}
       <div className="flex flex-none items-center gap-3 border-b border-border-soft px-[18px] py-3.5">
@@ -449,6 +473,42 @@ export function QuotePanel({
       <QuoteMaintPanel open={maintOpen} onOpenChange={setMaintOpen} access={access} meta={meta} />
     </div>
   )
+
+  /* 整页形态也套 `.overlay` 那层壳。静态稿的面板从来不是页面里的一个盒子，而是
+     `fixed inset-0` + `padding:28px` 的居中浮层 —— 把它塞进 `WorkbenchPage` 的正文
+     容器会掉到约 730px 宽：212 筛选 + 326 详情先占掉 538，结果表只剩 260，
+     `max-width:158px` 的规则价会撑出表格边界、压在详情栏上（11-02 现场截图确认）。
+     点遮罩空白处等于关闭，与「关闭」按钮同一条出口。 */
+  if (variant === 'page') {
+    return (
+      <div
+        /* 遮罩整层用内联样式，不用 Tailwind 类。两条原因都是实测踩到的：
+           ① `bg-[rgb(9_9_11_/_0.42)]` 里的 `/` 会被当成「颜色/透明度」分隔符，
+              整条类名被丢掉 —— 遮罩根本不渲染，看上去像「面板浮在页面上」；
+           ② 水平居中在 flex 容器里也没有如期生效。
+           静态稿第 213 行的 `.overlay` 就三件事：铺满、半透明、居中。写死更稳。 */
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 80,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 28,
+          background: 'rgb(9 9 11 / 0.42)',
+        }}
+        /* 静态稿第 1344 行用的是 `mousedown` 而不是 `click`：起手在面板内、松手
+           在遮罩上（拖选文字时常见）不该关闭。用 `click` 会把这种手势判成「点了外面」。 */
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onRequestClose?.()
+        }}
+      >
+        {panel}
+      </div>
+    )
+  }
+
+  return panel
 }
 
 /**

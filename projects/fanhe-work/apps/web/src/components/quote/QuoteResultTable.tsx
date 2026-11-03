@@ -67,25 +67,31 @@ export function QuoteResultTable({
   onOpenImage: (item: QuoteItemDto) => void
 }) {
   return (
+    /* 列宽写在 `th` 的内联 `style` 上，与静态稿第 644–646 行逐字一致。
+       **不用 `colgroup`。** `table-layout` 是 auto，`<col>` 的宽度只是建议值，
+       而 `th`/`td` 上的宽度会同时抬高该列的最小宽度 —— 两者在「内容比列宽」时的
+       收敛结果不同，这正是结果表偶发横向滚动条的来源。 */
     <table className="w-full border-collapse text-[13px]">
-      <colgroup>
-        <col className="w-[52px]" />
-        <col className="w-[40%]" />
-        <col className="w-[15%]" />
-        <col className="w-[15%]" />
-        <col className="w-[8%]" />
-        <col className="w-[16%]" />
-      </colgroup>
       <thead>
         <tr>
-          <th className={`${TH} pr-0`}>
+          <th className={`${TH} pr-0`} style={{ width: '52px' }}>
             <span className="sr-only">商品图</span>
           </th>
-          <th className={TH}>名称</th>
-          <th className={TH}>型号 / 规格</th>
-          <th className={`${TH} text-right`}>单价</th>
-          <th className={TH}>单位</th>
-          <th className={TH}>来源</th>
+          <th className={TH} style={{ width: '40%' }}>
+            名称
+          </th>
+          <th className={TH} style={{ width: '15%' }}>
+            型号 / 规格
+          </th>
+          <th className={`${TH} text-right`} style={{ width: '15%' }}>
+            单价
+          </th>
+          <th className={TH} style={{ width: '8%' }}>
+            单位
+          </th>
+          <th className={TH} style={{ width: '16%' }}>
+            来源
+          </th>
         </tr>
       </thead>
       <tbody>
@@ -104,7 +110,7 @@ export function QuoteResultTable({
                 active ? 'bg-[color-mix(in_srgb,var(--m-teal)_6%,var(--card))]' : '',
               ].join(' ')}
             >
-              <td className={`${TD} pr-0`}>
+              <td className={`${TD} pr-0`} style={{ width: '52px' }}>
                 <QuoteThumb
                   item={item}
                   onOpen={() => {

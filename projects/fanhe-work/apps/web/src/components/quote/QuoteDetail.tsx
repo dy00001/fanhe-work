@@ -287,7 +287,7 @@ export function QuoteDetail({
               {price.primary}
             </span>
             <span className="text-[12.5px] leading-[1.5] text-muted-foreground">
-              {price.suffix === '' ? '' : `/${item.unit}`}
+              {price.suffix === '' ? '' : `/ ${item.unit}`}
             </span>
           </>
         ) : price.tone === 'empty' ? (
