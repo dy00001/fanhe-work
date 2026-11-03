@@ -5,10 +5,13 @@ import {
   Maximize2,
   Minimize2,
   RotateCcw,
+  RotateCcwSquare,
+  RotateCwSquare,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
+  CSSProperties,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   RefObject,
@@ -19,12 +22,17 @@ import {
   distanceBetween,
   formatLightboxZoom,
   isLightboxReset,
+  isQuarterTurned,
   LIGHTBOX_DRAG_THRESHOLD,
   LIGHTBOX_IDENTITY,
   LIGHTBOX_SCALE_MIN,
+  lightboxFitLimit,
+  lightboxVisualSize,
   pinchLightboxScale,
+  rotateLightbox,
   wheelLightboxScale,
   zoomLightbox,
+  type LightboxRotation,
   type LightboxSize,
   type LightboxView,
 } from '../../lib/case-lightbox-view'
@@ -84,11 +92,32 @@ export function CaseLightbox({
   const imgRef = useRef<HTMLImageElement | null>(null)
 
   /**
-   * 「哪一次的缩放」。换图、进出全屏都要回到适配尺寸，但**不能用 effect 去 setState**
-   * 复位 —— 那会在画完一帧之后再来一次渲染，正好是「闪一下」的来源。改成把场景 key
-   * 与视图一起存：key 对不上时读出来的就是初始值，等下一次真正缩放时一并写正。
+   * 旋转角度，**按图片记账**。
+   *
+   * 与下面 `scene` 同一种写法：存的是「哪一张图转了多少度」，切到别的图时读出来的自然
+   * 是 0（新图没有这条账）。改用 effect 复位的话，会在画完一帧之后再渲染一次，正好
+   * 是一次可见的闪动；而这里不需要任何复位动作。
+   *
+   * 角度归一在 `[0, 360)`，只留四个方向。旋转是纯视图状态 —— 不写回任何数据、不重新
+   * 上传，所以「原图」永远是原图。
    */
-  const sceneKey = `${currentId ?? ''}:${immersive ? 'fullscreen' : 'inline'}`
+  const [rotationScene, setRotationScene] = useState<{ id: string | null; deg: LightboxRotation }>({
+    id: null,
+    deg: 0,
+  })
+  const rotation = rotationScene.id === currentId ? rotationScene.deg : 0
+  /** 旋转 90°/270° 时宽高互换，下面几处计算都要用这个判断。 */
+  const quarterTurned = isQuarterTurned(rotation)
+
+  /**
+   * 「哪一次的缩放」。换图、进出全屏、**旋转**都要回到适配尺寸，但**不能用 effect 去
+   * setState** 复位 —— 那会在画完一帧之后再来一次渲染，正好是「闪一下」的来源。改成把
+   * 场景 key 与视图一起存：key 对不上时读出来的就是初始值，等下一次真正缩放时一并写正。
+   *
+   * 旋转要进这个 key：转 90° 之后适配基准的宽高互换，沿用旧的倍率会让刚转过来的图立刻
+   * 溢出舞台（视觉上像被裁了一半）。回到适配是唯一确定的构图。
+   */
+  const sceneKey = `${currentId ?? ''}:${immersive ? 'fullscreen' : 'inline'}:${rotation}`
   const [scene, setScene] = useState<{ key: string; view: LightboxView }>(() => ({
     key: sceneKey,
     view: LIGHTBOX_IDENTITY,
@@ -115,18 +144,38 @@ export function CaseLightbox({
   const suppressClickUntilRef = useRef(0)
 
   /**
+   * 舞台的布局尺寸。
+   *
+   * 平时它是 `100%`（图片自己不超出舞台）。**旋转 90° 时必须知道具体数字**：转过来
+   * 之后图片的视觉宽高互换，若仍按「不超过舞台的宽 / 不超过舞台的高」限制未旋转的盒子，
+   * 一张 4:3 的横图会变得比舞台还高，下缘被 `overflow-hidden` 裁掉。
+   *
+   * 由下面那个 `ResizeObserver` 维护（它本来就在观察舞台）。只在数字真的变了时换引用，
+   * 否则每次 reflow 都会多一次重渲染。
+   */
+  const [stageBox, setStageBox] = useState<LightboxSize>({ width: 0, height: 0 })
+
+  /**
    * 量一次当前几何。**图片用 `offsetWidth/offsetHeight`**：它们是布局尺寸，不受
    * `transform: scale()` 影响，正好是「适配尺寸」，与 `scale = 1` 的定义对齐。
    * `getBoundingClientRect()` 会把缩放算进去，用它就成了自己缩自己的死循环。
+   *
+   * **旋转 90° 时把宽高换过来**：`offsetWidth/Height` 量的是未旋转的盒子，而夹取偏移、
+   * 计算适配比例都只关心「屏幕上占多大」。换过来之后，`scale = 1` 仍然等于「刚好装进
+   * 舞台」，滚轮缩放的手感与不旋转时一致。
    */
   const measure = useCallback((): { content: LightboxSize; stage: LightboxSize } => {
     const stage = stageRef.current
     const image = imgRef.current
     return {
       stage: { width: stage?.clientWidth ?? 0, height: stage?.clientHeight ?? 0 },
-      content: { width: image?.offsetWidth ?? 0, height: image?.offsetHeight ?? 0 },
+      // 视觉尺寸：转 90° 时宽高互换。见 `lightboxVisualSize` 的注释。
+      content: lightboxVisualSize(
+        { width: image?.offsetWidth ?? 0, height: image?.offsetHeight ?? 0 },
+        rotation,
+      ),
     }
-  }, [])
+  }, [rotation])
 
   /** 读当前视图。场景已经换了的时候，正确答案是初始值而不是上一个场景的残留。 */
   const readView = useCallback(
@@ -205,6 +254,43 @@ export function CaseLightbox({
     if (immersive) exitImmersive()
     else enterImmersive()
   }, [enterImmersive, exitImmersive, immersive])
+
+  /**
+   * 旋转。左旋 -90、右旋 +90。
+   *
+   * **只改视图，不动图片本身。** `<img>` 的字节、`src`、以及上传时入库的那一份都不受
+   * 影响 —— 旋转后关掉弹窗再打开、或把它移到别的文件夹，看到的仍是原来那张图。
+   *
+   * 角度归一在 `[0, 360)`：它要进 `sceneKey`，点多了之后让一个四位数一路带着没有意义。
+   * 读 `previous` 时先看 id 对不对得上 —— 切到新图之后紧接着点旋转，基线必须是 0 而
+   * 不是上一张图的角度。
+   */
+  const rotate = useCallback(
+    (delta: -90 | 90) => {
+      setRotationScene((previous) => {
+        const base = previous.id === currentId ? previous.deg : 0
+        return { id: currentId, deg: rotateLightbox(base, delta) }
+      })
+    },
+    [currentId],
+  )
+
+  /**
+   * 旋转 90° 时的适配约束。
+   *
+   * 未旋转的盒子要按「宽 ≤ 舞台的高、高 ≤ 舞台的宽」来限，转过来才刚好装下 —— 两者
+   * 正好是默认 `max-w-full / max-h-full` 的反向。0° 与 180° 的宽高关系不变，用回默认值。
+   *
+   * 舞台还没量出来时（首帧）回落成 `100%`：那一个瞬间的构图可能略大，但 `overflow-hidden`
+   * 兜住，下一帧就正了。
+   */
+  const fitLimit = lightboxFitLimit(stageBox, rotation)
+  const rotateFit: CSSProperties = quarterTurned
+    ? {
+        maxWidth: fitLimit.width > 0 ? `${fitLimit.width}px` : '100%',
+        maxHeight: fitLimit.height > 0 ? `${fitLimit.height}px` : '100%',
+      }
+    : {}
 
   /**
    * 浏览器那头退全屏（Esc、F11、手势）时把我们的状态跟上，否则界面与事实不一致。
@@ -330,11 +416,18 @@ export function CaseLightbox({
   /**
    * 舞台尺寸变了（拖窗口、进出全屏、旋转屏幕）要把偏移重新夹一次。
    * 不夹的话放大后的图片会有一半留在可视区之外，而且拖不回来。
+   *
+   * 顺手把尺寸记进 `stageBox`：旋转 90° 时那张图的 `max-width/max-height` 要按它来
+   * 算。只在数字真的变了时更新，否则每一帧 resize 都会多一次重渲染。
    */
   useEffect(() => {
     const stage = stageRef.current
     if (stage === null) return
     const observer = new ResizeObserver(() => {
+      const next = { width: stage.clientWidth, height: stage.clientHeight }
+      setStageBox((previous) =>
+        previous.width === next.width && previous.height === next.height ? previous : next,
+      )
       reflow()
     })
     observer.observe(stage)
@@ -451,6 +544,32 @@ export function CaseLightbox({
           {immersive ? '滚轮缩放 · 拖动平移 · Esc 退出全屏' : '滚轮缩放 · 拖动平移 · 点击图片全屏'}
         </span>
         <div className="flex items-center gap-1">
+          {/* 旋转。放在最左边、与缩放百分比分开：它改的是「图的朝向」，不是「看多大」，
+              两者挨在一起会让人以为它们是一组。 */}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              rotate(-90)
+            }}
+            aria-label="向左旋转 90 度"
+            title="向左旋转"
+            className="grid size-8 place-items-center rounded-full hover:bg-background/15 hover:text-background"
+          >
+            <RotateCcwSquare className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              rotate(90)
+            }}
+            aria-label="向右旋转 90 度"
+            title="向右旋转"
+            className="grid size-8 place-items-center rounded-full hover:bg-background/15 hover:text-background"
+          >
+            <RotateCwSquare className="size-4" />
+          </button>
           <button
             type="button"
             disabled={isLightboxReset(view)}
@@ -515,6 +634,8 @@ export function CaseLightbox({
           src={current.src}
           alt={current.alt}
           view={view}
+          rotation={rotation}
+          rotateFit={rotateFit}
           dragging={dragging}
           onClick={handleImageClick}
           onReady={reflow}
@@ -568,6 +689,8 @@ function LightboxImage({
   src,
   alt,
   view,
+  rotation,
+  rotateFit,
   dragging,
   onClick,
   onReady,
@@ -576,6 +699,10 @@ function LightboxImage({
   src: string
   alt: string
   view: LightboxView
+  /** 顺时针角度，只可能是 0 / 90 / 180 / 270。 */
+  rotation: LightboxRotation
+  /** 旋转 90°/270° 时的适配约束（宽高互换后的上限）。 */
+  rotateFit: CSSProperties
   dragging: boolean
   onClick: () => void
   onReady: () => void
@@ -603,7 +730,12 @@ function LightboxImage({
         }}
         onClick={onClick}
         style={{
-          transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})`,
+          // 旋转放在最右边：CSS 的变换函数从右往左应用，因此这里是「先把图转正、再按
+          // 倍率缩放、最后平移」—— 偏移量的坐标系因此永远是「已旋转后的画面」，与
+          // `measure()` 交换宽高的口径一致。反过来写会让放大后的拖动方向跟着转 90°。
+          transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale}) rotate(${rotation}deg)`,
+          // 旋转 90° 时用交换后的上限，否则转过来的图会比舞台高一截、下缘被裁掉。
+          ...rotateFit,
           // 拖动时必须关掉过渡，否则图片会「追着」指针走，手感像在拉橡皮筋。
           // 淡入单列一条：图解码完成后是从 `opacity-0` 变过来的，不能硬切。
           transition: dragging

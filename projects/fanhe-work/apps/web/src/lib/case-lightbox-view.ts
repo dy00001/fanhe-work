@@ -158,3 +158,68 @@ export function distanceBetween(
 export function formatLightboxZoom(scale: number): string {
   return `${Math.round(scale * 100)}%`
 }
+
+// ---------------------------------------------------------------------------
+// 旋转
+// ---------------------------------------------------------------------------
+//
+// 旋转只改「怎么看」，不碰图片本身：字节、地址、上传时入库的那一份都不变。因此它必须
+// 是纯视图状态 —— 一旦回写到数据里，「旋转一下方便看」就变成了「把客户的图改了」。
+//
+// 四个方向而不是任意角度：看图时想要的是「横图竖过来看」，按 90° 步进。任意角度会带来
+// 一个没有答案的问题 —— 转 37° 之后「适配尺寸」怎么定义，以及要不要记忆那个角度。
+
+/** 允许的四个方向。数组顺序同时是「点右旋会经过的顺序」。 */
+export const LIGHTBOX_ROTATIONS = [0, 90, 180, 270] as const
+
+export type LightboxRotation = (typeof LIGHTBOX_ROTATIONS)[number]
+
+/**
+ * 把任意角度归一到四个方向。
+ *
+ * 不是四的倍数的角度（37°、-45°）就近取整到 90° 的倍数。这个函数存在的理由是
+ * `-90` 与 `360` 都得落到合法值上：调用方传负数是最自然的写法（「左旋就是减 90」），
+ * 而一个 `-90deg` 直接进 CSS 也没问题、进「宽高是否互换」的判断就会算错。
+ */
+export function normalizeLightboxRotation(deg: number): LightboxRotation {
+  if (!Number.isFinite(deg)) return 0
+  const steps = Math.round(deg / 90)
+  return ((((steps * 90) % 360) + 360) % 360) as LightboxRotation
+}
+
+/** 左旋 `-90`、右旋 `+90`。传 0 就是不变。 */
+export function rotateLightbox(deg: LightboxRotation, delta: -90 | 0 | 90): LightboxRotation {
+  return normalizeLightboxRotation(deg + delta)
+}
+
+/** 是否转成了「竖着的」。90° 与 270° 的宽高互换，180° 不换。 */
+export function isQuarterTurned(deg: LightboxRotation): boolean {
+  return deg % 180 !== 0
+}
+
+/**
+ * 一张布局尺寸为 `content` 的图，旋转后在屏幕上占多大。
+ *
+ * 90°/270° 时宽高互换。夹取偏移、算缩放上限都只关心这个尺寸 —— 用未旋转的盒子去算，
+ * 放大后往「错的边」拖会被提前夹住，表现为「右下角怎么都拖不到」。
+ */
+export function lightboxVisualSize(content: LightboxSize, deg: LightboxRotation): LightboxSize {
+  return isQuarterTurned(deg)
+    ? { width: content.height, height: content.width }
+    : { width: content.width, height: content.height }
+}
+
+/**
+ * 旋转后图片在布局上的上限（给 `max-width` / `max-height` 用）。
+ *
+ * `content` 的 `max-w-full / max-h-full` 是按**未旋转**的盒子算的：转 90° 之后，视觉
+ * 宽度来自布局高度、视觉高度来自布局宽度，原来的约束正好相反。不换的话，一张 4:3 的
+ * 横图转过来会比舞台高一截，下缘被 `overflow-hidden` 裁掉（看起来像图坏了）。
+ *
+ * 舞台还没量出来（首帧 `0`）时返回 0，调用方据此回落到 `100%`。
+ */
+export function lightboxFitLimit(stage: LightboxSize, deg: LightboxRotation): LightboxSize {
+  return isQuarterTurned(deg)
+    ? { width: stage.height, height: stage.width }
+    : { width: stage.width, height: stage.height }
+}
