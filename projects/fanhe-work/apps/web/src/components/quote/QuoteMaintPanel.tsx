@@ -1,4 +1,5 @@
-import type { QuoteAccessStateResponse, QuoteMetaResponse } from '@fanhe/shared'
+import { ROLE_CODES, type QuoteAccessStateResponse, type QuoteMetaResponse } from '@fanhe/shared'
+import { KeyRound } from 'lucide-react'
 import { useState } from 'react'
 
 import { minutesUntil } from '../../lib/quote-display'
@@ -8,6 +9,7 @@ import { QuoteCategoryManager } from './maint/QuoteCategoryManager'
 import { QuoteImportPanel } from './maint/QuoteImportPanel'
 import { QuoteProductManager } from './maint/QuoteProductManager'
 import { QuoteRevisionList } from './maint/QuoteRevisionList'
+import { QuoteSecretPanel } from './maint/QuoteSecretPanel'
 
 /**
  * 价格与产品维护台。**这是价格的唯一在线入口。**
@@ -51,6 +53,18 @@ export function QuoteMaintPanel({
   const [tab, setTab] = useState<TabKey>('categories')
   /** 变更记录的重取开关。别的区改完东西，切过去时要看到最新几条。 */
   const [revisionToken, setRevisionToken] = useState(0)
+  /** 「后台编辑口令」那条设置带的展开状态。 */
+  const [secretOpen, setSecretOpen] = useState(false)
+
+  /**
+   * 判据用 `role` 而不是 `direct`。
+   *
+   * 两者在服务端是同一件事（`direct` 就是 `role === 'owner'` 算出来的），但这里要回答
+   * 的问题不是「能不能写价格」，而是「谁是那唯一能设这把锁的人」—— 与
+   * `quote/access.ts` 里 `setAccessSecret` 的判据保持字面一致，将来给 admin 开直写
+   * 权限时也不会顺手把「谁能改口令」一起放宽。
+   */
+  const isOwner = access !== null && access.role === ROLE_CODES.OWNER
 
   const remaining = minutesUntil(access?.unlockedUntil ?? null)
   const badge =
@@ -83,7 +97,7 @@ export function QuoteMaintPanel({
           maxWidth: 'none',
           maxHeight: 'none',
         }}
-        className="grid grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-2xl p-0"
+        className="grid grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-0 overflow-hidden rounded-2xl p-0"
       >
         <div className="flex items-center gap-3 border-b border-border-soft px-5 py-3.5">
           <div>
@@ -99,16 +113,45 @@ export function QuoteMaintPanel({
               分类 · 产品与价格 · 批量导入 · 变更记录
             </DialogDescription>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              onOpenChange(false)
-            }}
-            className="ml-auto inline-flex h-8 items-center rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent"
-          >
-            关闭
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {/* 仅超管可见。别人看到这个按钮只会点开再被拒，等于给了一个坏消息的入口；
+                而且「能改口令」本身就是超管的身份说明，不该出现在别人的界面上。 */}
+            {isOwner && (
+              <button
+                type="button"
+                aria-expanded={secretOpen}
+                onClick={() => setSecretOpen((value) => !value)}
+                className={
+                  secretOpen
+                    ? 'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border bg-secondary px-3 text-[13px] hover:bg-accent'
+                    : 'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent'
+                }
+              >
+                <KeyRound className="size-3.5" />
+                后台编辑口令
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false)
+              }}
+              className="inline-flex h-8 items-center rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent"
+            >
+              关闭
+            </button>
+          </div>
         </div>
+
+        {/* 展开即挂载、收起即卸载：状态（输了一半的口令、上一次的错误）跟着一起清掉，
+            不需要 effect 去重置。 */}
+        {secretOpen && isOwner && (
+          <QuoteSecretPanel
+            hasSecret={access?.hasSecret ?? false}
+            onSaved={onChanged}
+            onClose={() => setSecretOpen(false)}
+          />
+        )}
 
         <div className="flex min-h-0">
           <nav aria-label="维护分区" className="w-[142px] shrink-0 border-r border-border-soft p-2">

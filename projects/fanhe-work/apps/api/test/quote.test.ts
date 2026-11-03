@@ -1408,4 +1408,108 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     assert.equal((response.json() as { error: string }).error, 'wrong_source')
     assert.equal(await prisma.quoteItem.count({ where: { code } }), 1, '被拒绝时不能顺手删掉')
   })
+
+  // ------------------------------------------------- 口令：长度、空格、权限
+
+  /**
+   * 这一节放在最后，因为它会轮换口令、让之前拿到的令牌全部作废。
+   *
+   * 2026-11-03 用户拍板「长度要求 6 位数以上就 OK」—— 原来是 8 位。放宽的同时补上
+   * 两条真实边界：**纯空格不算口令**、**首尾空格两边都忽略**。前者是「6 个空格也能
+   * 通过长度检查」，后者会制造一类「我明明输对了却进不去」的故障，人对着自己记的那
+   * 串字怎么看都是对的。
+   */
+  test('口令长度：5 位被拒，6 位可以通过', async () => {
+    const short = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: 'ab123' },
+    })
+    assert.equal(short.statusCode, 400, short.body)
+    assert.equal((short.json() as { error: string }).error, 'invalid_password_shape')
+    // 中文文案，不是 Fastify 的 `body/password must NOT have fewer than 6 characters`：
+    // 长度下限交给 service 判就是为了这一句。
+    assert.match((short.json() as { message: string }).message, /口令长度需在/)
+
+    const six = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: 'ab1234' },
+    })
+    assert.equal(six.statusCode, 200, six.body)
+    assert.equal((six.json() as { ok: boolean }).ok, true)
+
+    // 设了就要能用：不是「存进去了」就算完。
+    const unlock = await app.inject({
+      method: 'POST',
+      url: '/api/quote/unlock',
+      headers: authed(designerToken),
+      payload: { password: 'ab1234' },
+    })
+    assert.equal(unlock.statusCode, 200, unlock.body)
+  })
+
+  test('纯空格不算口令，哪怕长度够', async () => {
+    const blanks = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: '      ' },
+    })
+    assert.equal(blanks.statusCode, 400, blanks.body)
+    assert.equal((blanks.json() as { error: string }).error, 'invalid_password_shape')
+  })
+
+  test('口令的首尾空格两边都忽略：设置与解锁各带一次，都要能对上', async () => {
+    // 方向一：设置时粘贴带了尾随空格、解锁时手打没带。
+    const setSpaced = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: '  spaced-9  ' },
+    })
+    assert.equal(setSpaced.statusCode, 200, setSpaced.body)
+
+    const unlockClean = await app.inject({
+      method: 'POST',
+      url: '/api/quote/unlock',
+      headers: authed(designerToken),
+      payload: { password: 'spaced-9' },
+    })
+    assert.equal(unlockClean.statusCode, 200, '设置时被 trim 掉，解锁时不该被那两个空格卡住')
+
+    // 方向二（更要紧）：设置时没带空格、解锁时带了。
+    //
+    // 上一版只写了方向一，反例注入「解锁不 trim」时**全绿** —— 因为方向一里解锁输入的
+    // 本来就没有空格，trim 与否结果一样。真正的故障发生在这一侧：人在别处复制口令，
+    // 尾随一个看不见的空格，界面说「口令不正确」，而对着自己记的那串字怎么看都对。
+    const setClean = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: 'plain-77' },
+    })
+    assert.equal(setClean.statusCode, 200, setClean.body)
+
+    const unlockSpaced = await app.inject({
+      method: 'POST',
+      url: '/api/quote/unlock',
+      headers: authed(designerToken),
+      payload: { password: '  plain-77  ' },
+    })
+    assert.equal(unlockSpaced.statusCode, 200, '解锁输入也要 trim，否则粘贴多带一个空格就进不去')
+  })
+
+  test('非 owner 连轮换也做不了', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(designerToken),
+      payload: { password: 'designer-try' },
+    })
+    assert.equal(response.statusCode, 403, response.body)
+    assert.equal((response.json() as { error: string }).error, 'forbidden')
+  })
 })

@@ -73,8 +73,24 @@ export function isDirectOperator(auth: AuthContext): boolean {
   return auth.roleCode === ROLE_CODES.OWNER
 }
 
+/**
+ * 口令的规整：**首尾空格一律去掉**。
+ *
+ * 这是手输 + 复制粘贴得来的一串字，首尾空格肉眼不可见。不规整会长出一类极难自查的
+ * 故障：设口令时粘贴带了一个尾随空格、解锁时手打没带 —— 界面说「口令不正确」，
+ * 而人对着自己记的那串字看，怎么看都是对的。
+ *
+ * 中部空格保留：口令允许是词组，中间的空格是内容的一部分。
+ */
+function normalizePassword(password: string): string {
+  return password.trim()
+}
+
 /** 口令长度。前端也校验一遍（`QUOTE_LIMITS.PASSWORD_MIN`），但服务端这层才是强制。 */
 function checkPasswordShape(password: string): boolean {
+  // 传进来的必须是 `normalizePassword` 之后的值。纯空格 trim 完是空串、长度 0，由下限
+  // 自然挡住 —— 这里**不要**再加一个 `password !== ''`：那是条冗余条件（删掉它也拦得住
+  // 纯空格，反例注入时实测如此），留着会让人以为护栏在这一行，而真正的护栏是 trim。
   return (
     password.length >= QUOTE_LIMITS.PASSWORD_MIN && password.length <= QUOTE_LIMITS.PASSWORD_MAX
   )
@@ -140,13 +156,15 @@ export async function setAccessSecret(
   mode: 'create' | 'rotate',
 ): Promise<QuoteAccessResult<{ version: number }>> {
   if (!isDirectOperator(auth)) return { ok: false, reason: 'forbidden' }
-  if (!checkPasswordShape(password)) return { ok: false, reason: 'invalid_password_shape' }
+
+  const secretPassword = normalizePassword(password)
+  if (!checkPasswordShape(secretPassword)) return { ok: false, reason: 'invalid_password_shape' }
 
   const existing = await readSecret()
   if (mode === 'create' && existing !== null) return { ok: false, reason: 'secret_exists' }
   if (mode === 'rotate' && existing === null) return { ok: false, reason: 'no_secret' }
 
-  const hash = await hashPassword(password)
+  const hash = await hashPassword(secretPassword)
 
   if (existing === null) {
     await prisma.quoteAccessSecret.create({
@@ -199,7 +217,7 @@ export async function unlockWithPassword(
     })
   }
 
-  const matched = await verifyPassword(secret.hash, password)
+  const matched = await verifyPassword(secret.hash, normalizePassword(password))
 
   if (!matched) {
     const failCount = secret.failCount + 1

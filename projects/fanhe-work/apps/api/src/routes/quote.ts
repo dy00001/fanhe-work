@@ -387,6 +387,15 @@ const UNLOCK_BODY_SCHEMA = {
   properties: { password: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.PASSWORD_MAX } },
 } as const
 
+/**
+ * 设置 / 轮换口令的请求体。
+ *
+ * **下限不交给 schema，交给 `checkPasswordShape`。** schema 拦下时响应是 Fastify 的
+ * 默认形状（`body/password must NOT have fewer than 6 characters`）—— 英文、且带着
+ * 字段路径，出现在「设置维护口令」这个弹窗里非常突兀。而 service 层拒绝时给的是
+ * `invalid_password_shape` + 中文「口令长度需在 6–64 位之间」，两者只差一行代码，
+ * 体验差很多。上限仍留在 schema：那是防超长请求体，不需要给人看。
+ */
 const SET_SECRET_BODY_SCHEMA = {
   type: 'object',
   required: ['password'],
@@ -394,7 +403,7 @@ const SET_SECRET_BODY_SCHEMA = {
   properties: {
     password: {
       type: 'string',
-      minLength: QUOTE_LIMITS.PASSWORD_MIN,
+      minLength: 1,
       maxLength: QUOTE_LIMITS.PASSWORD_MAX,
     },
   },
