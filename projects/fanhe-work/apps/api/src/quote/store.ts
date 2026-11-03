@@ -744,6 +744,25 @@ async function nextManualLedgerNo(source: QuoteSource): Promise<string> {
 }
 
 /**
+ * 新产品排在列表最后。
+ *
+ * **不写就会跑到最前面**：`sort_order` 的默认值是 0，而拖过一次的列表是 1、2、3…，
+ * 于是「刚加的一条」会顶在第 0 位 —— 看起来像加错了地方，而且用户没法把它挪回去
+ * （拖也得先找到它）。
+ *
+ * 没拖过的库全是 0，这里返回 1，与其余行（0）一起按条目号排 —— 新加的 M 号本来就
+ * 在最后，所以「没拖过」和「拖过」两种情况下结果都是末尾。
+ */
+async function nextItemSortOrder(source: QuoteSource): Promise<number> {
+  const row = await prisma.quoteItem.findFirst({
+    where: { source },
+    orderBy: { sortOrder: 'desc' },
+    select: { sortOrder: true },
+  })
+  return row === null ? 0 : row.sortOrder + 1
+}
+
+/**
  * 新增产品（维护台上传）。
  *
  * ## 键仍然由五元组算，不接受客户端给
@@ -832,6 +851,7 @@ export async function createItem(
     note: clipText(input.note ?? '', ITEM_COLUMN_MAX.note),
     status: 'active' as const,
     datasetVersion: version,
+    sortOrder: await nextItemSortOrder(input.source),
   }
 
   // 图键用条目自己的 code —— 与 `saveItemImage` 一致，手工图不挂在产品族上，
@@ -984,6 +1004,14 @@ export async function applyImportRows(
   }
 
   const version = await bumpDataset(`批量导入：${source} ${rows.length} 行`)
+  /**
+   * 本批新行的起始序号。
+   *
+   * 加在 `create` 上而不是 `data` 上：`data` 同时用于 `update`，放进去就等于「每次
+   * 导入都把已有行的顺序清一遍」—— 拖过的列表会整片回到默认 0。与 `imageKey` 不在
+   * 更新字段里是同一条道理。
+   */
+  const sortBase = await nextItemSortOrder(source)
   let added = 0
   let changed = 0
   let unchanged = 0
@@ -992,7 +1020,7 @@ export async function applyImportRows(
   for (let offset = 0; offset < prepared.length; offset += CHUNK) {
     const slice = prepared.slice(offset, offset + CHUNK)
     await prisma.$transaction(
-      slice.map((row) => {
+      slice.map((row, indexInSlice) => {
         const before = existing.get(row.code)
         const parsed = parsePriceInput(row.priceText)
         const ledgerNo =
@@ -1030,9 +1058,10 @@ export async function applyImportRows(
         }
 
         // `imageKey` 不在更新字段里：手工绑的图不该被一次导入顶掉。
+        // `sortOrder` 同理，但新行要拿到一个「排在最后」的序号，见上面的 `sortBase`。
         return prisma.quoteItem.upsert({
           where: { code: row.code },
-          create: { code: row.code, ...data },
+          create: { code: row.code, ...data, sortOrder: sortBase + offset + indexInSlice },
           update: data,
         })
       }),

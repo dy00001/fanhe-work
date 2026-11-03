@@ -1554,6 +1554,17 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     write: Record<string, string>
   }> {
     const write = await freshWrite()
+    // 上一轮若中途失败，同名主类会留在库里 —— 直接建会撞名字（409），而后面几个用例
+    // 会连带全红，看起来像「新接口大面积坏了」。先清掉自己上一次的残留。
+    const stale = await prisma.quoteSourceRow.findMany({
+      where: { name: `${TEST_DATA_PREFIX}排序主类` },
+      select: { code: true },
+    })
+    for (const row of stale) {
+      await prisma.quoteItem.deleteMany({ where: { source: row.code } })
+      await prisma.quoteItemImage.deleteMany({ where: { imageKey: { startsWith: row.code } } })
+      await prisma.quoteSourceRow.delete({ where: { code: row.code } })
+    }
     const created = await app.inject({
       method: 'POST',
       url: '/api/quote/sources',
@@ -1645,6 +1656,23 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     // 顺序变化不该 bump 数据集版本：版本号的语义是「你手里的价格还成不成立」，
     // 让它跟着排序变，等于每次拖一下其他端都要重拉 1225 条。
     assert.equal(await version(), versionBefore, '排序不该改数据集版本')
+
+    // 拖过一次之后新增的产品要排在**最后**。不写 sortOrder 的话它拿到默认 0，
+    // 会顶在第 0 位 —— 看起来像加错了地方，而且想把它挪走还得先找到它。
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items',
+      headers: write,
+      payload: {
+        source,
+        category: `${TEST_DATA_PREFIX}排序分类`,
+        name: `${TEST_DATA_PREFIX}排序后新增`,
+        priceText: '1',
+      },
+    })
+    assert.equal(created.statusCode, 200, created.body)
+    const createdCode = (created.json() as { item: { code: string } }).item.code
+    assert.deepEqual(await orderOf(source, [...codes, createdCode]), [b, c, a, createdCode])
 
     await dropSortFixture(source, write)
   })
