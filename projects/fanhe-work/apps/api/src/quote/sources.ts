@@ -29,7 +29,7 @@ import type { QuoteWriteAccess } from './access.js'
  */
 
 export type SourceFailure =
-  'not_found' | 'duplicate' | 'invalid_name' | 'has_items' | 'builtin_locked'
+  'not_found' | 'duplicate' | 'invalid_name' | 'has_items' | 'builtin_locked' | 'invalid_order'
 
 export type SourceResult<T> = { ok: true; value: T } | { ok: false; reason: SourceFailure }
 
@@ -273,4 +273,50 @@ export async function deleteSource(
 
   void operator
   return { ok: true, value: { code, name: row.name } }
+}
+
+/**
+ * 主类重排：顶部那排页签的先后。
+ *
+ * `order` 是**全部**主类 code 的完整顺序 —— 主类最多几十个，一次发得起，所以这里
+ * 不像产品那样要「提到的接在前面」：少一个就意味着有人的页签会消失，直接拒绝。
+ *
+ * **不 bump 数据集版本**：只改了 `sort_order`，价格没变。理由与分类重排同一条。
+ */
+export async function reorderSources(
+  order: readonly string[],
+  operator: Operator,
+): Promise<SourceResult<{ updated: number }>> {
+  const codes: string[] = []
+  const seen = new Set<string>()
+  for (const raw of order) {
+    const code = raw.trim()
+    if (code === '') return { ok: false, reason: 'invalid_order' }
+    if (seen.has(code)) return { ok: false, reason: 'invalid_order' }
+    seen.add(code)
+    codes.push(code)
+  }
+  if (codes.length === 0) return { ok: false, reason: 'invalid_order' }
+
+  await ensureSources()
+  const rows = await prisma.quoteSourceRow.findMany({ select: { code: true, sortOrder: true } })
+  if (rows.length !== codes.length) return { ok: false, reason: 'invalid_order' }
+  const existing = new Set(rows.map((row) => row.code))
+  if (codes.some((code) => !existing.has(code))) return { ok: false, reason: 'not_found' }
+
+  const current = rows.map((row) => row.code)
+  const unchanged = codes.every((code, index) => code === current[index])
+  if (unchanged) {
+    void operator
+    return { ok: true, value: { updated: 0 } }
+  }
+
+  await prisma.$transaction(
+    codes.map((code, index) =>
+      prisma.quoteSourceRow.update({ where: { code }, data: { sortOrder: index } }),
+    ),
+  )
+
+  void operator
+  return { ok: true, value: { updated: codes.length } }
 }

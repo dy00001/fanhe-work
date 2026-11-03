@@ -17,9 +17,12 @@ import {
   loadQuoteCategories,
   loadQuoteImageUrl,
   loadQuoteSources,
+  removeQuoteImage,
+  reorderQuoteItems,
   saveQuotePrice,
   saveQuoteStatus,
   searchQuotes,
+  uploadQuoteImage,
 } from '../../../lib/quote'
 import {
   describeQuoteImageFailure,
@@ -31,6 +34,10 @@ import {
   type PreparedQuoteImage,
 } from '../../../lib/quote-image'
 import { describePrice, describeStatus, formatYuan } from '../../../lib/quote-display'
+import { applyDrop, sameOrder, type DropTarget } from '../../../lib/quote-sort'
+
+import { RowDragHandle } from './RowDragHandle'
+import { useRowDrag } from './use-row-drag'
 
 /**
  * 产品维护：新增、改价、下架 / 上架。
@@ -78,6 +85,13 @@ export function QuoteProductManager({
   const [creating, setCreating] = useState(false)
   /** 哪一条正处于「确认删除」。删除是物理删除，所以要两次点击。 */
   const [deletingCode, setDeletingCode] = useState<string | null>(null)
+  /**
+   * 哪一条的「商品图」面板展开着。
+   *
+   * 与 `editingCode`（改价）互斥：两个面板都占一整行，同时展开会让人分不清哪个
+   * 操作属于哪一条。所以打开一个就收起另一个。
+   */
+  const [imageCode, setImageCode] = useState<string | null>(null)
 
   const canWrite = access !== null && (access.direct || access.unlockedUntil !== null)
 
@@ -196,6 +210,82 @@ export function QuoteProductManager({
     setReason('')
   }
 
+  /**
+   * 换图 / 新增图。**选完就传，没有第二步确认。**
+   *
+   * 图已经在客户端压好（`prepareQuoteImage`），而这一屏是维护台 —— 每一处点了就生效。
+   * 再套一个「确认保存」会让「我把图换错了」变成两件事：图传上去了，但界面说不清
+   * 到底存没存。传完就地刷新，缩略图立刻变。
+   */
+  async function replaceImage(item: QuoteItemDto, prepared: PreparedQuoteImage): Promise<boolean> {
+    return run(async () => {
+      await uploadQuoteImage(item.code, prepared.request)
+      return item.imageKey === null
+        ? `「${item.name}」的商品图已新增`
+        : `「${item.name}」的商品图已更换`
+    })
+  }
+
+  /**
+   * 删图。
+   *
+   * 服务端只清「指向」，不物理删字节（历史报价要能回看当时那张图），所以这条是
+   * **可恢复**的 —— 再传一张就是了。但仍然要两次点击：删完之后列表里那一格变成
+   * 占位，"刚才那张是什么样" 已经没法从界面上看到了。
+   */
+  async function clearImage(item: QuoteItemDto): Promise<boolean> {
+    return run(async () => {
+      await removeQuoteImage(item.code)
+      return `已移除「${item.name}」的商品图`
+    })
+  }
+
+  /**
+   * 保存产品顺序。
+   *
+   * 与分类区同一套：本端先动，再发请求；失败时重取，别让界面停在没落库的顺序上。
+   * 发的只是**这一屏**的条目键（五金 596 条、一屏 200 条），服务端把剩下的接在后面。
+   */
+  async function saveOrder(order: readonly string[]): Promise<void> {
+    setBusy(true)
+    setNotice(null)
+    try {
+      await reorderQuoteItems({ source, order })
+      setNotice({ kind: 'ok', text: '顺序已保存' })
+      onChanged()
+    } catch (cause) {
+      setNotice({
+        kind: 'error',
+        text: cause instanceof ApiError ? cause.message : '顺序没保存上，请重试',
+      })
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * **搜索时不能拖。** 拖的是「命中结果」这一小撮，而顺序是整份写下去的 —— 把筛选出来
+   * 的几条提到最前，等于把没显示的几百条整体挪了位，而那正是用户没打算动的东西。
+   */
+  const canDrag = canWrite && !busy && debounced === '' && rows !== null && rows.length > 1
+  const drag = useRowDrag({
+    enabled: canDrag,
+    onReorder: (target: DropTarget) => {
+      const codes = (rows ?? []).map((row) => row.code)
+      const order = applyDrop(codes, target)
+      if (sameOrder(codes, order)) return
+      // 乐观更新：本地先按新顺序摆好，请求回来之后不再重排（重取会让列表闪一下）。
+      const current = rows ?? []
+      const byCode = new Map(current.map((row) => [row.code, row]))
+      const next = order
+        .map((code) => byCode.get(code))
+        .filter((row): row is QuoteItemDto => row !== undefined)
+      setRows(next)
+      void saveOrder(order)
+    },
+  })
+
   const sourceCategories = categories.filter((row) => row.source === source)
   // 当前选中的主类被删掉时退回第一个 —— 与分类区同一条兜底，不另写一套。
   const sourceName =
@@ -278,8 +368,9 @@ export function QuoteProductManager({
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
+                <Th className="w-7" />
                 <Th className="w-16">条目号</Th>
-                <Th className="w-12">图</Th>
+                <Th className="w-14">图</Th>
                 <Th>名称 / 型号</Th>
                 <Th className="w-[132px]">分类</Th>
                 <Th className="w-[148px]">价格</Th>
@@ -288,18 +379,50 @@ export function QuoteProductManager({
               </tr>
             </thead>
             <tbody>
-              {rows.map((item) => {
+              {rows.map((item, index) => {
                 const price = describePrice(item)
                 const status = describeStatus(item.status)
                 const editing = editingCode === item.code
                 return (
                   <Fragment key={item.code}>
-                    <tr className="align-middle">
+                    <tr
+                      className={`align-middle ${drag.rowClass(index)}`}
+                      {...drag.rowProps(index)}
+                    >
+                      <Td>
+                        <RowDragHandle
+                          label={`拖动「${item.name}」调整顺序`}
+                          enabled={canDrag}
+                          {...drag.handleProps(index)}
+                        />
+                      </Td>
                       <Td className="font-mono text-[11.5px] text-muted-foreground-weak">
                         {item.ledgerNo === '' ? '—' : item.ledgerNo}
                       </Td>
                       <Td>
-                        <ProductThumb item={item} />
+                        {/* 图片格本身是入口：有图点开是「更换 / 删除」，没图点开是「新增」。
+                            做成按钮而不是在格子里放一个小图标，是因为 32px 的格子里再塞
+                            一个按钮就只剩十几像素可点。 */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCode(null)
+                            setDeletingCode(null)
+                            setImageCode(imageCode === item.code ? null : item.code)
+                          }}
+                          aria-expanded={imageCode === item.code}
+                          aria-label={
+                            item.imageKey === null
+                              ? `为「${item.name}」新增商品图`
+                              : `管理「${item.name}」的商品图（更换 / 删除）`
+                          }
+                          className="group relative grid size-8 place-items-center overflow-hidden rounded-[6px] border border-border-soft hover:border-ring"
+                        >
+                          <ProductThumb item={item} />
+                          <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--foreground)_46%,transparent)] opacity-0 transition-opacity group-hover:opacity-100">
+                            <ImagePlus className="size-3.5 text-background" />
+                          </span>
+                        </button>
                       </Td>
                       <Td>
                         <div className="truncate font-medium">{item.name}</div>
@@ -384,8 +507,10 @@ export function QuoteProductManager({
                     </tr>
                     {editing && (
                       <tr>
+                        {/* colSpan 跟着列数：拖动列是这次新加的，漏改会让展开区只铺到
+                            一半，右边留一条白。 */}
                         <td
-                          colSpan={7}
+                          colSpan={8}
                           className="border-b border-border-soft bg-background px-3 py-2"
                         >
                           <div className="flex flex-wrap items-center gap-2">
@@ -426,6 +551,23 @@ export function QuoteProductManager({
                         </td>
                       </tr>
                     )}
+                    {imageCode === item.code && (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          className="border-b border-border-soft bg-background px-3 py-2.5"
+                        >
+                          <ProductImageEditor
+                            item={item}
+                            canWrite={canWrite}
+                            busy={busy}
+                            onUpload={(prepared) => replaceImage(item, prepared)}
+                            onRemove={() => clearImage(item)}
+                            onClose={() => setImageCode(null)}
+                          />
+                        </td>
+                      </tr>
+                    )}
                   </Fragment>
                 )
               })}
@@ -437,6 +579,10 @@ export function QuoteProductManager({
       <div className="mt-2 flex items-center gap-2 text-[11.5px] text-muted-foreground-weak">
         <span>
           共 {total} 条{rows !== null && total > rows.length ? `，显示前 ${rows.length} 条` : ''}
+        </span>
+        {/* 拖拽的门槛要说出来：搜索框里有词时手柄是按不动的，不解释就只是「不好使」。 */}
+        <span className="text-muted-foreground-weak">
+          {debounced === '' ? '按住左侧手柄可拖动排序' : '搜索状态下不能拖动排序，清空搜索后可用'}
         </span>
         {!canWrite && <span className="text-m-amber">维护口令已失效，请重新打开维护台</span>}
         {notice !== null && (
@@ -787,6 +933,9 @@ function NewProductForm({
  *
  * **没有图时不同步 setState**：`react-hooks/set-state-in-effect` 会拦「effect 里
  * 直接写 state」，而这里完全不需要 —— 没图就直接渲染占位，有图才发请求。
+ *
+ * 占位不再是一个「—」：这一格现在是入口（点开可以新增图），而一个横杠看起来像
+ * 「这里什么都没有、也不会有」。虚线框 + 加号是「可以往里放东西」的通用说法。
  */
 function ProductThumb({ item }: { item: QuoteItemDto }) {
   const [url, setUrl] = useState<string | null>(null)
@@ -807,24 +956,200 @@ function ProductThumb({ item }: { item: QuoteItemDto }) {
   if (key === null) {
     return (
       <span
-        aria-label="无图"
-        className="flex size-8 items-center justify-center rounded-[6px] border border-dashed border-border-soft text-[10px] text-muted-foreground-weak"
+        aria-hidden
+        className="grid size-full place-items-center rounded-[5px] border border-dashed border-border text-muted-foreground-weak"
       >
-        —
+        <ImagePlus className="size-3.5" />
       </span>
     )
   }
 
   if (url === null) {
-    return <span className="block size-8 animate-pulse rounded-[6px] bg-accent" aria-hidden />
+    return <span className="block size-full animate-pulse rounded-[5px] bg-accent" aria-hidden />
+  }
+
+  return <img src={url} alt={`「${item.name}」的产品图`} className="size-full object-cover" />
+}
+
+/**
+ * 商品图面板：新增 / 更换 / 删除。
+ *
+ * ## 为什么是行内展开，不是浮层
+ *
+ * 这一格在表格里、表格又在滚动容器里，浮层会被裁掉或者跟着滚动错位；而 Radix 的
+ * Popover 会多一层 portal，11-03 那次「点图片把整个面板关了」正是层级问题。行内
+ * 展开只多一行 DOM，没有这些边界 —— 与「改价」用的是同一个形状。
+ *
+ * ## 为什么选完就传，没有「保存」按钮
+ *
+ * 一条产品只有一张主图（`quote_items.image_key` 是一个字段），所以换图不是「编辑
+ * 一个列表」，而是一次替换。多一个保存步骤就会有人选完图直接关掉面板，然后以为
+ * 传上去了 —— 而界面上什么都没发生，也不报错。
+ *
+ * ## 删除要两次点击
+ *
+ * 服务端只清指向（历史报价还要能回看当时那张图），所以技术上可恢复；但界面上那一格
+ * 变空之后，"刚才那张是什么样" 就没法从列表里看出来了。两次点击的成本很低。
+ */
+function ProductImageEditor({
+  item,
+  canWrite,
+  busy,
+  onUpload,
+  onRemove,
+  onClose,
+}: {
+  item: QuoteItemDto
+  canWrite: boolean
+  busy: boolean
+  onUpload: (prepared: PreparedQuoteImage) => Promise<boolean>
+  onRemove: () => Promise<boolean>
+  onClose: () => void
+}) {
+  const [preparing, setPreparing] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const [note, setNote] = useState<{ tone: 'info' | 'error'; text: string } | null>(null)
+  /** 已选好、正在上传的那一张（压缩后的字节数，用来显示「已压到 xxKB」）。 */
+  const [sending, setSending] = useState<number | null>(null)
+  const [confirming, setConfirming] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const hasImage = item.imageKey !== null
+  const working = preparing || sending !== null || busy
+
+  /**
+   * 选文件 → 压缩 → 直接上传。
+   *
+   * **先清掉上一次的错误提示**：`prepareQuoteImage` 的四种失败（格式 / 解不开 / 太大 /
+   * 编码）用户要做的事完全不同，留着上一条会让人对着旧提示去改新图。
+   */
+  async function accept(file: File): Promise<void> {
+    setNote(null)
+    setFileName(file.name)
+    setPreparing(true)
+    const prepared = await prepareQuoteImage(file)
+    setPreparing(false)
+    if (!prepared.ok) {
+      setNote({ tone: 'error', text: describeQuoteImageFailure(prepared.reason) })
+      return
+    }
+    setSending(prepared.value.byteSize)
+    const ok = await onUpload(prepared.value)
+    setSending(null)
+    if (!ok) setNote({ tone: 'error', text: '上传没有成功，图还是原来那张。可以直接再选一次' })
   }
 
   return (
-    <img
-      src={url}
-      alt={`「${item.name}」的产品图`}
-      className="size-8 rounded-[6px] border border-border-soft object-cover"
-    />
+    <div className="flex items-start gap-3">
+      <div className="grid size-[72px] shrink-0 place-items-center overflow-hidden rounded-[10px] border border-dashed border-border bg-card">
+        {item.imageKey === null ? (
+          <span className="flex flex-col items-center gap-1 text-[10.5px] text-muted-foreground-weak">
+            <ImagePlus className="size-4" />
+            暂无图
+          </span>
+        ) : (
+          <ProductThumb item={item} />
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[12.5px] font-medium">{item.name}</span>
+          <span className="rounded border border-border px-1 text-[10.5px] leading-4 text-muted-foreground-weak">
+            {hasImage ? '已绑图' : '无图'}
+          </span>
+          <span className="text-[11px] text-muted-foreground-weak">
+            一条产品一张主图 · 选完立刻保存
+          </span>
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            disabled={!canWrite || working}
+            onClick={() => fileRef.current?.click()}
+            className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-primary px-2 text-[11.5px] text-primary-foreground disabled:opacity-50"
+          >
+            {preparing || sending !== null ? (
+              <LoaderCircle className="size-3 animate-spin" />
+            ) : (
+              <ImagePlus className="size-3" />
+            )}
+            {hasImage ? '更换图片' : '新增图片'}
+          </button>
+          {/* 没有图时给一个明确「不可用」的按钮，而不是把它藏起来：藏起来之后，人
+              不知道自己是不是漏点了什么。 */}
+          <button
+            type="button"
+            disabled={!canWrite || working || !hasImage}
+            onClick={() => {
+              if (!confirming) {
+                setConfirming(true)
+                return
+              }
+              setConfirming(false)
+              void onRemove()
+            }}
+            className={
+              confirming
+                ? 'inline-flex h-7 items-center gap-1 rounded-[7px] bg-destructive px-2 text-[11.5px] text-destructive-foreground disabled:opacity-50'
+                : 'inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40'
+            }
+          >
+            <Trash2 className="size-3" />
+            {confirming ? '确认删除图片' : '删除图片'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] text-muted-foreground hover:bg-accent"
+          >
+            <X className="size-3" />
+            收起
+          </button>
+        </div>
+
+        <p className="mt-1.5 text-[11px] leading-[18px] text-muted-foreground-weak">
+          支持 JPG / PNG / WebP，原图 ≤ {formatMegabytes(QUOTE_IMAGE_FILE_BYTES_MAX)}。
+          {hasImage
+            ? '换图会覆盖当前这张，旧图留在历史里（历史报价仍能看到当时那张）。'
+            : '这张图会绑定在条目号上，查价面板与报价单都会显示它。'}
+        </p>
+        {preparing && (
+          <p className="mt-1 text-[11px] text-muted-foreground-weak">正在处理图片（压缩）…</p>
+        )}
+        {sending !== null && (
+          <p className="mt-1 text-[11px] text-muted-foreground-weak">
+            上传中…（{fileName}，已压到 {formatKilobytes(sending)}）
+          </p>
+        )}
+        {note !== null && (
+          <p
+            role={note.tone === 'error' ? 'alert' : undefined}
+            className={
+              note.tone === 'error'
+                ? 'mt-1 text-[11px] text-destructive'
+                : 'mt-1 text-[11px] text-m-amber'
+            }
+          >
+            {note.text}
+          </p>
+        )}
+      </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept={QUOTE_IMAGE_ACCEPT}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          // 清空 value：不清的话，连着选同一张图不会再触发 change。
+          event.target.value = ''
+          if (file !== undefined) void accept(file)
+        }}
+      />
+    </div>
   )
 }
 
@@ -837,10 +1162,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+/**
+ * 表头。**粘在滚动容器顶端**：五金 596 条一屏装不下，滚下去之后「价格 / 状态 / 操作」
+ * 三列是哪一列就分不出来了 —— 而这三列里两个能动数据、一个是只读状态。
+ *
+ * 底边用 inset 阴影而不是 `border-b`：`border-collapse` 的表格里，粘性表头的边框会
+ * 跟着内容一起滚走，滚到中间时表头与第一行之间就没有分隔线了。
+ */
+function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
     <th
-      className={`border-b border-border-soft bg-background px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak ${className ?? ''}`}
+      className={`sticky top-0 z-10 bg-background px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak [box-shadow:inset_0_-1px_0_0_var(--border-soft)] ${className ?? ''}`}
     >
       {children}
     </th>

@@ -67,6 +67,8 @@ import type {
   RenameQuoteCategoryRequest,
   RenameQuoteSourceRequest,
   ReorderQuoteCategoriesRequest,
+  ReorderQuoteItemsRequest,
+  ReorderQuoteSourcesRequest,
   SetQuoteItemStatusRequest,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
@@ -1628,6 +1630,39 @@ export function reorderQuoteCategoriesRequest(
   unlockToken: string | null,
 ): Promise<{ updated: number }> {
   return request('/api/quote/categories/order', {
+    method: 'PUT',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/**
+ * 产品重排。发的是「这一屏的新顺序」，服务端把没显示的行接在后面再整段重排。
+ *
+ * 方法用 `PUT`：整份顺序覆盖，重复提交同一份 body 结果一样。`PATCH` 会暗示「挪一位」
+ * 的增量语义，而增量协议在并发下有两种都说得通的解释。
+ */
+export function reorderQuoteItemsRequest(
+  accessToken: string,
+  input: ReorderQuoteItemsRequest,
+  unlockToken: string | null,
+): Promise<{ updated: number }> {
+  return request('/api/quote/items/order', {
+    method: 'PUT',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 主类重排（顶部页签的先后）。同样整份覆盖。 */
+export function reorderQuoteSourcesRequest(
+  accessToken: string,
+  input: ReorderQuoteSourcesRequest,
+  unlockToken: string | null,
+): Promise<{ updated: number }> {
+  return request('/api/quote/sources/order', {
     method: 'PUT',
     body: input,
     accessToken,

@@ -28,6 +28,8 @@ import type {
   RenameQuoteCategoryRequest,
   RenameQuoteSourceRequest,
   ReorderQuoteCategoriesRequest,
+  ReorderQuoteItemsRequest,
+  ReorderQuoteSourcesRequest,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
 } from '@fanhe/shared'
@@ -60,6 +62,8 @@ import {
   renameQuoteCategoryRequest,
   renameQuoteSourceRequest,
   reorderQuoteCategoriesRequest,
+  reorderQuoteItemsRequest,
+  reorderQuoteSourcesRequest,
   setQuoteItemStatusRequest,
   updateQuoteItemRequest,
   uploadQuoteImageRequest,
@@ -305,6 +309,16 @@ export function reorderQuoteCategories(
   )
 }
 
+/**
+ * 产品重排。
+ *
+ * `order` 传**当前列表里的那些条目键**的新顺序，不是全库。五金 596 条一屏只显示
+ * 200 条，前端手里就没有另外那些 —— 服务端负责把它们按原相对次序接在后面。
+ */
+export function reorderQuoteItems(input: ReorderQuoteItemsRequest): Promise<{ updated: number }> {
+  return withAccessToken((token) => reorderQuoteItemsRequest(token, input, getQuoteUnlockToken()))
+}
+
 export function createQuoteItem(input: CreateQuoteItemRequest): Promise<{ version: string }> {
   return withAccessToken((token) => createQuoteItemRequest(token, input, getQuoteUnlockToken()))
 }
@@ -331,6 +345,13 @@ export function deleteQuoteSource(
   input: DeleteQuoteSourceRequest,
 ): Promise<{ code: string; name: string }> {
   return withAccessToken((token) => deleteQuoteSourceRequest(token, input, getQuoteUnlockToken()))
+}
+
+/** 主类重排。`order` 是**全部**主类 code 的完整顺序（主类最多几十个，一次发得完）。 */
+export function reorderQuoteSources(
+  input: ReorderQuoteSourcesRequest,
+): Promise<{ updated: number }> {
+  return withAccessToken((token) => reorderQuoteSourcesRequest(token, input, getQuoteUnlockToken()))
 }
 
 // ---------------------------------------------------------------------------

@@ -24,9 +24,12 @@ import {
   renameQuoteCategory,
   reorderQuoteCategories,
 } from '../../../lib/quote'
+import { applyDrop, sameOrder, type DropTarget } from '../../../lib/quote-sort'
 
 import { QuoteCategoryProducts } from './QuoteCategoryProducts'
 import { QuoteSourceManager } from './QuoteSourceManager'
+import { RowDragHandle } from './RowDragHandle'
+import { useRowDrag } from './use-row-drag'
 
 /**
  * 分类维护：主类、改名、单条合并、多选合并、排序、分类内产品合并。
@@ -45,15 +48,15 @@ import { QuoteSourceManager } from './QuoteSourceManager'
  * 放在同一个按钮里，用户没法确认自己点的是哪一种。所以：分类级的合并在勾选后出现在
  * 列表下方，产品级的合并要点「N 条」展开到那个分类里。
  *
- * ## 排序用上下箭头，不用拖拽
+ * ## 排序：拖动为主，上下箭头保留
  *
- * 拖拽要引一个库、要处理键盘可达性、还要在触屏上另做一套。分类数在 40 上下，
- * 一次挪一位够用；箭头是原生按钮，键盘与读屏都能操作。
+ * 拖动是这次加的（三个列表统一手势）。箭头**没有撤**：HTML5 拖放没有键盘通道，
+ * 而这两个是原生按钮，读屏与键盘都能用。分类数在 40 上下，一次挪一位仍然够用。
  *
  * ## 顺序只写本端，服务端收到的是「完整顺序」
  *
- * 每次上移下移都把整串名字发上去。只发「把 A 移到 B 前面」那种增量协议，在并发
- * 编辑时会得到两种都说得通的解释，而结果是顺序看起来没变。
+ * 每次上移 / 下移 / 拖动都把整串名字发上去。只发「把 A 移到 B 前面」那种增量协议，
+ * 在并发编辑时会得到两种都说得通的解释，而结果是顺序看起来没变。
  */
 export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
   const [sources, setSources] = useState<readonly QuoteSourceDto[] | null>(null)
@@ -136,6 +139,50 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  /**
+   * 保存顺序。
+   *
+   * **失败也要重取**：本端是先改顺序再发请求（不然连续点箭头会跳），所以请求失败时
+   * 界面上停着的是一个没有落库的顺序 —— 下次打开就变回去，而当时看不出任何异常。
+   * 重取一次，让界面回到库里的真实顺序，再给一句失败提示。
+   */
+  async function saveOrder(order: readonly string[]): Promise<void> {
+    setBusy(true)
+    setNotice(null)
+    try {
+      await reorderQuoteCategories({ source: activeCode, order })
+      // 乐观更新之后不动列表：再查一次会让刚拖的一行闪一下。
+      setNotice({ kind: 'ok', text: '顺序已保存' })
+      onChanged()
+    } catch (cause) {
+      setNotice({
+        kind: 'error',
+        text: cause instanceof ApiError ? cause.message : '顺序没保存上，请重试',
+      })
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 拖动落点 → 新顺序 → 落库。原地松手不发请求。 */
+  function dropTo(target: DropTarget): void {
+    const order = applyDrop(names, target)
+    if (sameOrder(names, order)) return
+    // 先把本端顺序换掉：等一个来回才动的列表，连续拖动时会错位。
+    const positionOf = new Map(order.map((name, index) => [name, index]))
+    setItems((current) =>
+      (current ?? []).map((row) =>
+        row.source === activeCode
+          ? { ...row, sortOrder: positionOf.get(row.name) ?? row.sortOrder }
+          : row,
+      ),
+    )
+    void saveOrder(order)
+  }
+
+  const drag = useRowDrag({ enabled: !busy && rows.length > 1, onReorder: dropTo })
+
   function move(index: number, delta: number): void {
     const next = index + delta
     if (next < 0 || next >= rows.length) return
@@ -153,10 +200,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
           : row,
       ),
     )
-    void run(async () => {
-      await reorderQuoteCategories({ source: activeCode, order })
-      return '顺序已保存'
-    })
+    void saveOrder(order)
   }
 
   async function submitRename(): Promise<void> {
@@ -329,7 +373,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
       )}
 
       <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-muted-foreground-weak">
-        <span>{rows.length} 个分类 · 上下箭头调顺序 · 勾选多个可一次合并</span>
+        <span>{rows.length} 个分类 · 按住左侧手柄拖动排序 · 勾选多个可一次合并</span>
         {rows.length > 0 && (
           <button
             type="button"
@@ -354,6 +398,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
+                <Th className="w-7" />
                 <Th className="w-8" />
                 <Th className="w-8">#</Th>
                 <Th>分类名称</Th>
@@ -367,7 +412,14 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                 // Fragment 必须带 key：key 加在内层 `<tr>` 上不算数，React 会为每一行
                 // 打印一条 missing key 警告，而开发时那条警告淹没在控制台里没人看。
                 <Fragment key={row.name}>
-                  <tr className="align-middle">
+                  <tr className={`align-middle ${drag.rowClass(index)}`} {...drag.rowProps(index)}>
+                    <Td>
+                      <RowDragHandle
+                        label={`拖动「${row.name}」调整顺序`}
+                        enabled={!busy && rows.length > 1}
+                        {...drag.handleProps(index)}
+                      />
+                    </Td>
                     <Td>
                       <input
                         type="checkbox"
@@ -523,7 +575,9 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                   </tr>
                   {expanded === row.name && (
                     <tr>
-                      <td colSpan={6} className="p-0">
+                      {/* colSpan 跟着列数走：拖动列是这次新加的，漏改这一处会让展开区
+                          只铺到一半，右边留一条空白。 */}
+                      <td colSpan={7} className="p-0">
                         <QuoteCategoryProducts
                           source={activeCode}
                           category={row.name}
@@ -668,10 +722,17 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
   )
 }
 
+/**
+ * 表头。**粘在滚动容器的顶端**：分类一多就要纵向滚，滚下去之后看不到「这一列是
+ * 产品数还是顺序」，而这两列的宽度都只有几十像素。
+ *
+ * 底边用 `td` 的 inset 阴影补，不用 `border-b`：`border-collapse` 的表格里，粘性
+ * 表头的边框会跟着内容一起滚走，滚到中间时表头与第一行之间就没有分隔线了。
+ */
 function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
     <th
-      className={`border-b border-border-soft bg-background px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak ${className ?? ''}`}
+      className={`sticky top-0 z-10 bg-background px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak [box-shadow:inset_0_-1px_0_0_var(--border-soft)] ${className ?? ''}`}
     >
       {children}
     </th>

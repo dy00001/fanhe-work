@@ -957,11 +957,13 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     priceKind?: string
     priceFen?: number | null
     priceText?: string
+    /** 默认销售主类。排序用例建一个一次性主类，避免动到台账那 571 行的顺序。 */
+    source?: string
   }): Promise<void> {
     await prisma.quoteItem.create({
       data: {
         code: input.code,
-        source: 'sale',
+        source: input.source ?? 'sale',
         category: input.category,
         name: input.name,
         model: '',
@@ -1511,5 +1513,223 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     })
     assert.equal(response.statusCode, 403, response.body)
     assert.equal((response.json() as { error: string }).error, 'forbidden')
+  })
+
+  /**
+   * 拿一张新的解锁票。
+   *
+   * 必须自己取，不能沿用文件顶部那个 `unlockToken`：口令那几组用例（长度、纯空格、
+   * 首尾空格）都改过口令，每次改都会让所有已有令牌作废。直接沿用的话，这一组会
+   * 整片 403，而响应看起来像「新接口没判权」—— 与真正的鉴权失败长得一模一样。
+   */
+  async function freshWrite(): Promise<Record<string, string>> {
+    const rotated = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/access-secret',
+      headers: authed(ownerToken),
+      payload: { password: SECRET_PASSWORD_V2 },
+    })
+    assert.equal(rotated.statusCode, 200, rotated.body)
+    const unlocked = await app.inject({
+      method: 'POST',
+      url: '/api/quote/unlock',
+      headers: authed(designerToken),
+      payload: { password: SECRET_PASSWORD_V2 },
+    })
+    assert.equal(unlocked.statusCode, 200, unlocked.body)
+    unlockToken = (unlocked.json() as { unlockToken: string }).unlockToken
+    return { ...authed(designerToken), 'x-quote-unlock': unlockToken }
+  }
+
+  /**
+   * 产品排序的隔离做法：建一个**一次性主类**再往里塞三条。
+   *
+   * 不用 sale 的理由很具体：重排会把这个主类下的所有行按新下标重写一遍，销售那 571
+   * 条虽然相对顺序不变，但 `sort_order` 会从「全是 0」变成「3..573」—— 测试不该
+   * 留下这种痕迹，而它又不会报错。
+   */
+  async function makeSortFixture(): Promise<{
+    source: string
+    codes: string[]
+    write: Record<string, string>
+  }> {
+    const write = await freshWrite()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources',
+      headers: write,
+      payload: { name: `${TEST_DATA_PREFIX}排序主类`, short: '排序' },
+    })
+    assert.equal(created.statusCode, 200, created.body)
+    const source = (created.json() as { code: string }).code
+
+    const codes = ['a', 'b', 'c'].map((suffix) => `${TEST_DATA_PREFIX}ord_${suffix}`)
+    // 条目号递增：排序的兜底键是 `ledger_no`，三个同号的条目会让「相对次序」变成
+    // 数据库返回顺序，断言会偶发失败。
+    const ledgerNos = ['M501', 'M502', 'M503']
+    for (const [index, code] of codes.entries()) {
+      await seedItem({
+        code,
+        source,
+        category: `${TEST_DATA_PREFIX}排序分类`,
+        name: `${TEST_DATA_PREFIX}排序产品${String(index + 1)}`,
+        ledgerNo: ledgerNos[index] ?? 'M509',
+      })
+    }
+    return { source, codes, write }
+  }
+
+  /** 收尾：条目删掉、主类删掉，别把一次性主类留在库里。 */
+  async function dropSortFixture(source: string, write: Record<string, string>): Promise<void> {
+    await prisma.quoteItem.deleteMany({ where: { source } })
+    const removed = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources/delete',
+      headers: write,
+      payload: { code: source },
+    })
+    assert.equal(removed.statusCode, 200, removed.body)
+  }
+
+  /** 该主类下三条测试条目的当前先后。 */
+  async function orderOf(source: string, codes: readonly string[]): Promise<string[]> {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/quote/search?source=${source}&includeArchived=true&limit=200`,
+      headers: authed(designerToken),
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    const items = (response.json() as { items: { code: string }[] }).items
+    const known = new Set(codes)
+    return items.map((row) => row.code).filter((code) => known.has(code))
+  }
+
+  test('产品排序：只发这一屏的顺序，没提到的行接在后面且相对次序不变', async () => {
+    const { source, codes, write } = await makeSortFixture()
+    const [a, b, c] = codes as [string, string, string]
+
+    assert.deepEqual(await orderOf(source, codes), [a, b, c], '初始顺序应按条目号')
+
+    async function version(): Promise<string> {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/quote/meta',
+        headers: authed(designerToken),
+      })
+      assert.equal(response.statusCode, 200, response.body)
+      return (response.json() as { version: string }).version
+    }
+    const versionBefore = await version()
+
+    // 只发两条 —— 模拟「一屏只显示了一部分」。服务端要把 c 接到前面、a 接在它后面，
+    // 剩下那条（b）保持相对次序排到最后。
+    const moved = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/items/order',
+      headers: write,
+      payload: { source, order: [c, a] },
+    })
+    assert.equal(moved.statusCode, 200, moved.body)
+    assert.deepEqual(await orderOf(source, codes), [c, a, b], '没提到的行必须接在后面')
+
+    // 再发一条：b 提到最前，其余按当前顺序跟在后面。
+    const again = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/items/order',
+      headers: write,
+      payload: { source, order: [b] },
+    })
+    assert.equal(again.statusCode, 200, again.body)
+    assert.deepEqual(await orderOf(source, codes), [b, c, a])
+
+    // 顺序变化不该 bump 数据集版本：版本号的语义是「你手里的价格还成不成立」，
+    // 让它跟着排序变，等于每次拖一下其他端都要重拉 1225 条。
+    assert.equal(await version(), versionBefore, '排序不该改数据集版本')
+
+    await dropSortFixture(source, write)
+  })
+
+  test('产品排序：重复键、空键、不存在的键都整批拒绝', async () => {
+    const { source, codes, write } = await makeSortFixture()
+    const [a] = codes as [string, string, string]
+
+    const duplicated = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/items/order',
+      headers: write,
+      payload: { source, order: [a, a] },
+    })
+    assert.equal(duplicated.statusCode, 400, duplicated.body)
+    assert.equal((duplicated.json() as { error: string }).error, 'invalid_order')
+
+    const missing = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/items/order',
+      headers: write,
+      payload: { source, order: [a, `${TEST_DATA_PREFIX}nope`] },
+    })
+    assert.equal(missing.statusCode, 404, missing.body)
+    assert.equal((missing.json() as { error: string }).error, 'not_found')
+
+    // 少一条就整批拒绝：拖动的语义是「这一整段的新顺序」，少写几条会把后面的位置
+    // 全顶掉，而界面上看不出少了哪一条。所以失败之后顺序必须原样。
+    assert.deepEqual(await orderOf(source, codes), [a, codes[1], codes[2]])
+
+    await dropSortFixture(source, write)
+  })
+
+  test('产品排序：没有令牌不能改（与其余写路径同一条判据）', async () => {
+    const { source, codes, write } = await makeSortFixture()
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/quote/items/order',
+      headers: authed(designerToken),
+      payload: { source, order: [codes[2] ?? '', codes[0] ?? ''] },
+    })
+    assert.equal(response.statusCode, 403, response.body)
+    assert.equal((response.json() as { error: string }).error, 'forbidden')
+
+    // 没带令牌被拒之后，顺序必须一点没动 —— 「拒了但写了一半」是最难发现的一种。
+    assert.deepEqual(await orderOf(source, codes), [codes[0], codes[1], codes[2]])
+
+    await dropSortFixture(source, write)
+  })
+
+  test('主类排序：整份顺序写进去就按它排；少一个就被拒，顺序不变', async () => {
+    const write = await freshWrite()
+    const before = await listSourceCodes()
+    assert.ok(before.length >= 2, '库里至少要有两个主类')
+
+    try {
+      const reversed = [...before].reverse()
+      const ok = await app.inject({
+        method: 'PUT',
+        url: '/api/quote/sources/order',
+        headers: write,
+        payload: { order: reversed },
+      })
+      assert.equal(ok.statusCode, 200, ok.body)
+      assert.deepEqual(await listSourceCodes(), reversed, '页签先后应当按发上去的顺序')
+
+      // 少一个就整批拒绝：主类清单缺一条意味着有人的页签会消失。
+      const partial = await app.inject({
+        method: 'PUT',
+        url: '/api/quote/sources/order',
+        headers: write,
+        payload: { order: reversed.slice(1) },
+      })
+      assert.equal(partial.statusCode, 400, partial.body)
+      assert.equal((partial.json() as { error: string }).error, 'invalid_order')
+      assert.deepEqual(await listSourceCodes(), reversed, '被拒之后顺序不能变')
+    } finally {
+      // 主类顺序是给真人在用的：这个用例结束必须还原，哪怕断言中途失败。
+      const restore = await app.inject({
+        method: 'PUT',
+        url: '/api/quote/sources/order',
+        headers: write,
+        payload: { order: before },
+      })
+      assert.equal(restore.statusCode, 200, restore.body)
+    }
   })
 })

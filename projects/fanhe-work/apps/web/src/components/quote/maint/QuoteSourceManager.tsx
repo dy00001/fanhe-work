@@ -3,7 +3,16 @@ import { Check, LoaderCircle, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 
 import { ApiError } from '../../../lib/api'
-import { createQuoteSource, deleteQuoteSource, renameQuoteSource } from '../../../lib/quote'
+import {
+  createQuoteSource,
+  deleteQuoteSource,
+  renameQuoteSource,
+  reorderQuoteSources,
+} from '../../../lib/quote'
+import { applyDrop, sameOrder, type DropTarget } from '../../../lib/quote-sort'
+
+import { RowDragHandle } from './RowDragHandle'
+import { useRowDrag } from './use-row-drag'
 
 /**
  * 主类（数据来源）管理条。
@@ -56,12 +65,32 @@ export function QuoteSourceManager({
     }
   }
 
+  /**
+   * 拖动排序。落点 → 新顺序 → 整份发上去。
+   *
+   * **不做乐观更新**：这份清单最多几十行，而这个组件是纯受控的（顺序从 props 来）。
+   * 自己再存一份顺序，就要处理「新增 / 删除主类之后那份本地顺序已经过期」—— 那正是
+   * NotesPanel 那个「数据后到、状态空白」的坑。等父级重取，代价是一个来回。
+   */
+  const codes = sources.map((row) => row.code)
+  const drag = useRowDrag({
+    enabled: !busy && sources.length > 1,
+    onReorder: (target: DropTarget) => {
+      const order = applyDrop(codes, target)
+      if (sameOrder(codes, order)) return
+      void run(async () => {
+        await reorderQuoteSources({ order })
+        return '顺序已保存'
+      })
+    },
+  })
+
   return (
     <div className="mb-3 rounded-xl border border-border bg-card p-2.5">
       <div className="mb-2 flex items-center gap-2">
         <span className="text-[12.5px] font-medium">主类管理</span>
         <span className="text-[11px] text-muted-foreground-weak">
-          主类就是顶部那排页签。新增之后立刻出现在页签里，可以往里传产品。
+          主类就是顶部那排页签。按住左侧手柄拖动可调页签先后；新增之后立刻出现在页签里。
         </span>
         <button
           type="button"
@@ -77,7 +106,8 @@ export function QuoteSourceManager({
         <table className="w-full border-collapse text-[12.5px]">
           <thead>
             <tr>
-              <Th className="w-[34%]">名称</Th>
+              <Th className="w-7" />
+              <Th className="w-[32%]">名称</Th>
               <Th className="w-20">短名</Th>
               <Th className="w-16 text-right">在售</Th>
               <Th className="w-16 text-right">已下架</Th>
@@ -85,13 +115,20 @@ export function QuoteSourceManager({
             </tr>
           </thead>
           <tbody>
-            {sources.map((row) => {
+            {sources.map((row, index) => {
               // 单独取出这个局部变量而不是在 JSX 里反复判 `editing !== null`：
               // `editing?.code === row.code` 不会让 TS 窄化 `editing`，后面每处
               // `editing.name` 都要加断言。
               const editingThis = editing !== null && editing.code === row.code ? editing : null
               return (
-                <tr key={row.code}>
+                <tr key={row.code} className={drag.rowClass(index)} {...drag.rowProps(index)}>
+                  <Td>
+                    <RowDragHandle
+                      label={`拖动「${row.name}」调整页签顺序`}
+                      enabled={!busy && sources.length > 1}
+                      {...drag.handleProps(index)}
+                    />
+                  </Td>
                   <Td>
                     {editingThis !== null ? (
                       <input
@@ -279,10 +316,15 @@ export function QuoteSourceManager({
   )
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+/**
+ * 表头。夹在这个 260px 高的滚动区里，滚起来就看不见列名了 —— 而「在售 / 已下架」
+ * 两列都是纯数字，没有表头分不出来。底边用 inset 阴影而不是 `border-b`：
+ * `border-collapse` 下粘性表头的边框会跟着内容滚走。
+ */
+function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
     <th
-      className={`border-b border-border-soft bg-background px-3 py-1.5 text-left text-[11.5px] font-medium text-muted-foreground-weak ${className ?? ''}`}
+      className={`sticky top-0 z-10 bg-background px-3 py-1.5 text-left text-[11.5px] font-medium text-muted-foreground-weak [box-shadow:inset_0_-1px_0_0_var(--border-soft)] ${className ?? ''}`}
     >
       {children}
     </th>

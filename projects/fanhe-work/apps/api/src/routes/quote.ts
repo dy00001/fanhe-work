@@ -19,6 +19,8 @@ import {
   type RenameQuoteCategoryRequest,
   type RenameQuoteSourceRequest,
   type ReorderQuoteCategoriesRequest,
+  type ReorderQuoteItemsRequest,
+  type ReorderQuoteSourcesRequest,
 } from '@fanhe/shared'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
@@ -44,11 +46,13 @@ import {
 import { parseQuoteFile } from '../quote/importer.js'
 import { deleteItem, type ItemDeleteFailure } from '../quote/item-delete.js'
 import { mergeItems, type ItemMergeFailure } from '../quote/item-merge.js'
+import { reorderItems, type ItemOrderFailure } from '../quote/item-order.js'
 import {
   createSource,
   deleteSource,
   listSourceRows,
   renameSource,
+  reorderSources,
   sourceExists,
   type SourceFailure,
 } from '../quote/sources.js'
@@ -165,6 +169,7 @@ const SOURCE_STATUS: Record<SourceFailure, number> = {
   invalid_name: 400,
   has_items: 409,
   builtin_locked: 409,
+  invalid_order: 400,
 }
 
 const SOURCE_MESSAGE: Record<SourceFailure, string> = {
@@ -173,6 +178,7 @@ const SOURCE_MESSAGE: Record<SourceFailure, string> = {
   invalid_name: `主类名称不能为空，也不能超过 ${QUOTE_LIMITS.SOURCE_NAME_MAX} 字`,
   has_items: '这个主类下面还有产品（含已下架）。先把产品删掉或合并到别的主类，再来删主类',
   builtin_locked: '内置主类的标识还被导入器与条目号段引用，不能删除',
+  invalid_order: '主类清单已经变了（多出来或少了一个）。刷新页面后再拖一次',
 }
 
 /** 产品删除的失败映射。 */
@@ -185,6 +191,17 @@ const ITEM_DELETE_STATUS: Record<ItemDeleteFailure, number> = {
 const ITEM_DELETE_MESSAGE: Record<ItemDeleteFailure, string> = {
   not_found: '这条产品已经不在了，可能在另一个窗口里被删掉了。刷新后再试',
   wrong_source: '这条产品不属于当前主类。列表可能还没刷新，刷新页面后再试',
+}
+
+/** 产品重排的失败映射。`not_found` 见 `item-order.ts` 的「整批拒绝」。 */
+const ITEM_ORDER_STATUS: Record<ItemOrderFailure, number> = {
+  invalid_order: 400,
+  not_found: 404,
+}
+
+const ITEM_ORDER_MESSAGE: Record<ItemOrderFailure, string> = {
+  invalid_order: '顺序里出现了空值或重复的条目键。刷新页面后再拖一次',
+  not_found: '有产品已经不在了，或不属于当前主类。刷新页面后再拖一次',
 }
 
 /** 产品合并的失败映射。 */
@@ -263,6 +280,12 @@ function sendItemDeleteFailure(reply: FastifyReply, reason: ItemDeleteFailure): 
   return reply
     .code(ITEM_DELETE_STATUS[reason])
     .send({ error: reason, message: ITEM_DELETE_MESSAGE[reason] })
+}
+
+function sendItemOrderFailure(reply: FastifyReply, reason: ItemOrderFailure): FastifyReply {
+  return reply
+    .code(ITEM_ORDER_STATUS[reason])
+    .send({ error: reason, message: ITEM_ORDER_MESSAGE[reason] })
 }
 
 /** 引用了一个不存在的主类。统一一句话，别让每个接口各编一套。 */
@@ -637,6 +660,47 @@ const DELETE_SOURCE_BODY_SCHEMA = {
   required: ['code'],
   additionalProperties: false,
   properties: { code: SOURCE_FIELD_SCHEMA },
+} as const
+
+/**
+ * 主类重排的 body。
+ *
+ * 上限 50：主类就是顶部那排页签，一百个页签谁也用不了。这个数字只防超长请求体，
+ * 不参与业务判断 —— 真正的判据是「发来的 code 数与库里一致」（见 `reorderSources`）。
+ */
+const REORDER_SOURCES_BODY_SCHEMA = {
+  type: 'object',
+  required: ['order'],
+  additionalProperties: false,
+  properties: {
+    order: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 50,
+      items: SOURCE_FIELD_SCHEMA,
+    },
+  },
+} as const
+
+/**
+ * 产品重排的 body。
+ *
+ * `maxItems` 用 `PAGE_SIZE_MAX`：契约是「这一屏看到的那些条目键的新顺序」，而一屏
+ * 最多就是 200 条。取更大的数字没有意义 —— 服务端也只会收到前端手里有的那些。
+ */
+const REORDER_ITEMS_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'order'],
+  additionalProperties: false,
+  properties: {
+    source: SOURCE_FIELD_SCHEMA,
+    order: {
+      type: 'array',
+      minItems: 1,
+      maxItems: QUOTE_LIMITS.PAGE_SIZE_MAX,
+      items: { type: 'string', minLength: 1, maxLength: 64, pattern: CODE_PATTERN },
+    },
+  },
 } as const
 
 /**
@@ -1025,6 +1089,26 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     },
   )
 
+  /**
+   * 主类重排（页签先后）。
+   *
+   * 用 `PUT` 而不是 `PATCH`：这条接口的语义是「把这串顺序整份写上去」，重复提交同一
+   * 份 body 结果一样。`PATCH` 会让人以为这里支持「挪一位」的增量语义，而增量协议在
+   * 并发编辑下会得到两种都说得通的解释 —— 分类重排（`categories/order`）也是 `PUT`。
+   */
+  app.put<{ Body: ReorderQuoteSourcesRequest }>(
+    '/api/quote/sources/order',
+    { preHandler: requireAuth, schema: { body: REORDER_SOURCES_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await reorderSources(request.body.order, context)
+      if (!result.ok) return sendSourceFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
   // -------------------------------------------------------------------------
   // 维护台：分类
   // -------------------------------------------------------------------------
@@ -1183,6 +1267,29 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
       if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await createItem(request.body, context)
       if (!result.ok) return sendItemFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /**
+   * 产品重排（维护台里拖动产品排出来的先后）。
+   *
+   * 与 `PUT /categories/order` 同一条思路：发的是「这一屏的新顺序」而不是「把 A 挪
+   * 到 B 前面」。差别在于产品一次显示不完（五金 596 条、一屏 200 条），所以服务端
+   * 把没提到的行按原相对次序接在后面再整段重排 —— 细则见 `item-order.ts`。
+   *
+   * 不 bump 数据集版本：价格没变，只是顺序变了。
+   */
+  app.put<{ Body: ReorderQuoteItemsRequest }>(
+    '/api/quote/items/order',
+    { preHandler: requireAuth, schema: { body: REORDER_ITEMS_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
+      const result = await reorderItems(request.body.source, request.body.order, context)
+      if (!result.ok) return sendItemOrderFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
       return result.value
     },

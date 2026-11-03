@@ -296,7 +296,10 @@ export async function searchItems(query: QuoteSearchQuery): Promise<{
       // 以前按「来源 → 分类 → 名称 → 规格」排：同名多行确实会挨在一起，但整体顺序
       // 与台账对不上 —— 销售翻着一张纸质台账问「这一行多少钱」，界面上找不到对应位置。
       // `code` 作为第二键，兜住「还没重导、ledger_no 为空」的旧行（会排在最前）。
-      orderBy: [{ ledgerNo: 'asc' }, { code: 'asc' }],
+      //
+      // `sort_order` 现在排在最前：维护台里拖动过的行按人工顺序走。没拖过的库全是
+      // 0，这一键恒等，顺序完全由后面的条目号决定 —— 与加这一列之前一致。
+      orderBy: [{ sortOrder: 'asc' }, { ledgerNo: 'asc' }, { code: 'asc' }],
       take: query.limit,
       skip: query.offset,
       select: ITEM_SELECT,
