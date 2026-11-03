@@ -2,8 +2,6 @@ import { randomBytes, randomUUID } from 'node:crypto'
 
 import {
   QUOTE_LIMITS,
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_NAMES,
   parsePriceInput,
   type CreateQuoteItemRequest,
   type QuoteDatasetDto,
@@ -127,6 +125,22 @@ const ITEM_SELECT = {
   updatedAt: true,
 } as const
 
+/**
+ * 主类 code → 显示名与短名。**由调用方查一次、传进来**，不在 `toItemDto` 里查。
+ *
+ * `toItemDto` 是同步的、一次调用处理 200 行；让它自己查库会变成 N+1。反过来，
+ * 用 `QUOTE_SOURCE_NAMES[code]` 硬查内置表也不行 —— 自定义主类会得到空串，界面上
+ * 就是一行没有来源名的结果。
+ */
+export async function loadSourceMeta(): Promise<
+  ReadonlyMap<string, { name: string; short: string }>
+> {
+  const rows = await prisma.quoteSourceRow.findMany({
+    select: { code: true, name: true, short: true },
+  })
+  return new Map(rows.map((row) => [row.code, { name: row.name, short: row.short }]))
+}
+
 /** 数据库行 → 契约 DTO。图片相关的两列由调用方补，避免每处都写一遍 join。 */
 function toItemDto(
   row: {
@@ -150,14 +164,19 @@ function toItemDto(
     updatedAt: Date
   },
   image: { imageKey: string; version: string } | null,
+  sourceMeta: ReadonlyMap<string, { name: string; short: string }> = new Map(),
 ): QuoteItemDto {
   // 库里存字符串不存枚举（理由见 schema），边界上转一次类型。取值域由导入器与
   // 路由的 schema 共同保证 —— 任一处出现新值，这里的断言才会被打破。
   const source = row.source as QuoteSource
+  const meta = sourceMeta.get(source)
   return {
     code: row.code,
     source,
-    sourceName: QUOTE_SOURCE_NAMES[source] ?? row.source,
+    sourceName: meta?.name ?? row.source,
+    // 短名缺失时退回 code 而不是空串：浮层那行是「规格 · 出处」，空一格会让人
+    // 以为是渲染漏了，而 code 至少还能跟左栏对上。
+    sourceShort: meta?.short ?? row.source,
     category: row.category,
     name: row.name,
     model: row.model,
@@ -287,12 +306,13 @@ export async function searchItems(query: QuoteSearchQuery): Promise<{
   const images = await loadImageVersions(
     rows.map((row) => row.imageKey).filter((key): key is string => key !== null),
   )
+  const sourceMeta = await loadSourceMeta()
 
   return {
     version: dataset?.version ?? '',
     total,
     items: rows.map((row) =>
-      toItemDto(row, row.imageKey === null ? null : (images.get(row.imageKey) ?? null)),
+      toItemDto(row, row.imageKey === null ? null : (images.get(row.imageKey) ?? null), sourceMeta),
     ),
   }
 }
@@ -339,7 +359,7 @@ export async function getItem(code: string): Promise<{
 
   return {
     version: dataset?.version ?? '',
-    item: toItemDto(row, imageRef),
+    item: toItemDto(row, imageRef, await loadSourceMeta()),
     image,
   }
 }
@@ -358,20 +378,21 @@ export async function getItem(code: string): Promise<{
 export async function listCategories(): Promise<
   readonly { source: QuoteSource; name: string; count: number }[]
 > {
-  const [rows, persisted] = await Promise.all([
+  const [rows, persisted, sources] = await Promise.all([
     prisma.quoteItem.groupBy({
       by: ['source', 'category'],
       where: { status: 'active' },
       _count: { _all: true },
     }),
     prisma.quoteCategory.findMany({ select: { source: true, name: true, sortOrder: true } }),
+    prisma.quoteSourceRow.findMany({ select: { code: true, sortOrder: true } }),
   ])
 
   const orderOf = new Map(persisted.map((row) => [`${row.source}\u001f${row.name}`, row.sortOrder]))
-  const sourceRank = (source: string): number => {
-    const index = QUOTE_SOURCES.indexOf(source as QuoteSource)
-    return index === -1 ? QUOTE_SOURCES.length : index
-  }
+  // 来源的先后从主类表来，不再写死 `['sale','craft','hardware']`：新建的主类不该
+  // 永远排在内置三类之后。表里查不到的（历史遗留的孤儿 source）排最后。
+  const rankOf = new Map(sources.map((row) => [row.code, row.sortOrder]))
+  const sourceRank = (source: string): number => rankOf.get(source) ?? Number.MAX_SAFE_INTEGER
 
   return rows
     .map((row) => ({
@@ -389,11 +410,15 @@ export async function listCategories(): Promise<
 }
 
 export async function getMeta(): Promise<QuoteMetaResponse> {
-  const [dataset, categories, secret, imageCount] = await Promise.all([
+  const [dataset, categories, secret, imageCount, sources] = await Promise.all([
     getLatestDataset(),
     listCategories(),
     prisma.quoteAccessSecret.findFirst({ select: { id: true } }),
     prisma.quoteItemImage.count({ where: { isActive: true } }),
+    prisma.quoteSourceRow.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+      select: { code: true, name: true, short: true },
+    }),
   ])
 
   return {
@@ -402,6 +427,7 @@ export async function getMeta(): Promise<QuoteMetaResponse> {
     imageCount: imageCount,
     importedAt: dataset?.importedAt ?? '',
     categories,
+    sources: sources.map((row) => ({ code: row.code, name: row.name, short: row.short })),
     hasSecret: secret !== null,
   }
 }
@@ -490,7 +516,7 @@ export async function listRevisions(limit: number): Promise<QuoteRevisionListRes
   const codes = [...new Set(rows.map((row) => row.itemCode))]
   const operatorIds = [...new Set(rows.map((row) => row.operatorId))]
 
-  const [items, users] = await Promise.all([
+  const [items, users, sourceMeta] = await Promise.all([
     prisma.quoteItem.findMany({
       where: { code: { in: codes } },
       select: { code: true, name: true },
@@ -499,6 +525,7 @@ export async function listRevisions(limit: number): Promise<QuoteRevisionListRes
       where: { id: { in: operatorIds } },
       select: { id: true, displayName: true },
     }),
+    loadSourceMeta(),
   ])
 
   const nameOf = new Map(items.map((item) => [item.code, item.name]))
@@ -514,8 +541,8 @@ export async function listRevisions(limit: number): Promise<QuoteRevisionListRes
   function subjectOf(code: string): string {
     if (code === 'import') return '批量导入'
     if (code.startsWith('cat:')) {
-      const source = code.slice(4) as QuoteSource
-      return `分类 · ${QUOTE_SOURCE_NAMES[source] ?? source}`
+      const source = code.slice(4)
+      return `分类 · ${sourceMeta.get(source)?.name ?? source}`
     }
     return nameOf.get(code) ?? ''
   }
@@ -653,7 +680,10 @@ export async function updateItemPrice(
     }),
   ])
 
-  const images = await loadImageVersions(updated.imageKey === null ? [] : [updated.imageKey])
+  const [images, sourceMeta] = await Promise.all([
+    loadImageVersions(updated.imageKey === null ? [] : [updated.imageKey]),
+    loadSourceMeta(),
+  ])
   return {
     ok: true,
     value: {
@@ -661,6 +691,7 @@ export async function updateItemPrice(
       item: toItemDto(
         updated,
         updated.imageKey === null ? null : (images.get(updated.imageKey) ?? null),
+        sourceMeta,
       ),
     },
   }
@@ -853,12 +884,19 @@ export async function createItem(
     }),
   ])
 
-  const images = await loadImageVersions(saved.imageKey === null ? [] : [saved.imageKey])
+  const [images, sourceMeta] = await Promise.all([
+    loadImageVersions(saved.imageKey === null ? [] : [saved.imageKey]),
+    loadSourceMeta(),
+  ])
   return {
     ok: true,
     value: {
       version,
-      item: toItemDto(saved, saved.imageKey === null ? null : (images.get(saved.imageKey) ?? null)),
+      item: toItemDto(
+        saved,
+        saved.imageKey === null ? null : (images.get(saved.imageKey) ?? null),
+        sourceMeta,
+      ),
     },
   }
 }
@@ -1058,7 +1096,10 @@ export async function setItemStatus(
     }),
   ])
 
-  const images = await loadImageVersions(updated.imageKey === null ? [] : [updated.imageKey])
+  const [images, sourceMeta] = await Promise.all([
+    loadImageVersions(updated.imageKey === null ? [] : [updated.imageKey]),
+    loadSourceMeta(),
+  ])
   return {
     ok: true,
     value: {
@@ -1066,6 +1107,7 @@ export async function setItemStatus(
       item: toItemDto(
         updated,
         updated.imageKey === null ? null : (images.get(updated.imageKey) ?? null),
+        sourceMeta,
       ),
     },
   }

@@ -1,17 +1,21 @@
 import {
   PERMISSIONS,
   QUOTE_LIMITS,
-  QUOTE_SOURCES,
   QUOTE_ITEM_STATUSES,
   type CreateQuoteCategoryRequest,
   type CreateQuoteItemRequest,
+  type CreateQuoteSourceRequest,
+  type DeleteQuoteSourceRequest,
+  type MergeQuoteCategoriesRequest,
   type MergeQuoteCategoryRequest,
+  type MergeQuoteItemsRequest,
   type QuoteImportApplyRequest,
   type QuoteImportFailure,
   type QuoteImportPreviewRequest,
   type QuoteItemStatus,
   type QuoteSource,
   type RenameQuoteCategoryRequest,
+  type RenameQuoteSourceRequest,
   type ReorderQuoteCategoriesRequest,
 } from '@fanhe/shared'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -28,12 +32,22 @@ import {
 import {
   createCategory,
   listCategoryRows,
+  mergeCategories,
   mergeCategory,
   renameCategory,
   reorderCategories,
   type CategoryFailure,
 } from '../quote/categories.js'
 import { parseQuoteFile } from '../quote/importer.js'
+import { mergeItems, type ItemMergeFailure } from '../quote/item-merge.js'
+import {
+  createSource,
+  deleteSource,
+  listSourceRows,
+  renameSource,
+  sourceExists,
+  type SourceFailure,
+} from '../quote/sources.js'
 import {
   applyImportRows,
   createItem,
@@ -125,6 +139,8 @@ const CATEGORY_STATUS: Record<CategoryFailure, number> = {
   duplicate: 409,
   invalid_name: 400,
   invalid_source: 400,
+  too_few: 400,
+  invalid_target: 400,
 }
 
 const CATEGORY_MESSAGE: Record<CategoryFailure, string> = {
@@ -132,6 +148,42 @@ const CATEGORY_MESSAGE: Record<CategoryFailure, string> = {
   duplicate: '这个分类名已经存在。要合并请用「合并到」，不要用改名',
   invalid_name: `分类名不能为空，也不能超过 ${QUOTE_LIMITS.CATEGORY_NAME_MAX} 字`,
   invalid_source: '来源不合法',
+  too_few: '至少选两个分类才能合并。只改一个名字请用「改名」',
+  invalid_target: '目标分类不能和要合并的分类同名。请换一个名字，或把目标也一起选中',
+}
+
+/** 主类的失败映射。删不掉时用 409：请求没错，是这一类下面还有东西。 */
+const SOURCE_STATUS: Record<SourceFailure, number> = {
+  not_found: 404,
+  duplicate: 409,
+  invalid_name: 400,
+  has_items: 409,
+  builtin_locked: 409,
+}
+
+const SOURCE_MESSAGE: Record<SourceFailure, string> = {
+  not_found: '找不到这个主类',
+  duplicate: '已经有同名的主类了',
+  invalid_name: `主类名称不能为空，也不能超过 ${QUOTE_LIMITS.SOURCE_NAME_MAX} 字`,
+  has_items: '这个主类下面还有产品（含已下架）。产品只能下架、不能物理删除，所以删不掉。',
+  builtin_locked: '内置主类的标识还被导入器与条目号段引用，不能删除',
+}
+
+/** 产品合并的失败映射。 */
+const ITEM_MERGE_STATUS: Record<ItemMergeFailure, number> = {
+  too_few: 400,
+  not_found: 404,
+  cross_category: 400,
+  bad_target: 400,
+  inactive: 400,
+}
+
+const ITEM_MERGE_MESSAGE: Record<ItemMergeFailure, string> = {
+  too_few: '至少选两条产品才能合并',
+  not_found: '有产品已经不在了，请刷新后再试',
+  cross_category: '只能合并同一个分类里的产品。要换分类请用「合并分类」',
+  bad_target: '要保留的那一条不在选中范围里',
+  inactive: '选中范围里含已下架的产品，只能合并还在售的',
 }
 
 /** 批量导入的失败映射。`unsupported` 用 415，`too_large` 用 413。 */
@@ -177,6 +229,24 @@ function sendCategoryFailure(reply: FastifyReply, reason: CategoryFailure): Fast
   return reply
     .code(CATEGORY_STATUS[reason])
     .send({ error: reason, message: CATEGORY_MESSAGE[reason] })
+}
+
+function sendSourceFailure(reply: FastifyReply, reason: SourceFailure): FastifyReply {
+  return reply.code(SOURCE_STATUS[reason]).send({ error: reason, message: SOURCE_MESSAGE[reason] })
+}
+
+function sendItemMergeFailure(reply: FastifyReply, reason: ItemMergeFailure): FastifyReply {
+  return reply
+    .code(ITEM_MERGE_STATUS[reason])
+    .send({ error: reason, message: ITEM_MERGE_MESSAGE[reason] })
+}
+
+/** 引用了一个不存在的主类。统一一句话，别让每个接口各编一套。 */
+function sendMissingSource(reply: FastifyReply): FastifyReply {
+  return reply.code(400).send({
+    error: 'invalid_source',
+    message: '这个主类不存在，可能在另一个窗口里被删掉了。刷新页面后再试',
+  })
 }
 
 function sendImportFailure(
@@ -230,6 +300,23 @@ function readUnlockToken(request: FastifyRequest): string | null {
 
 const CODE_PATTERN = '^[A-Za-z0-9_-]{1,64}$'
 
+/**
+ * 来源字段只校验**形状**，不校验取值。
+ *
+ * 取值域已经从三个字面量变成了 `quote_sources` 表，而 JSON Schema 是编译期常量、
+ * 读不到库。写成 `enum: [...QUOTE_SOURCES]` 的后果很具体：新建一个主类之后，往它
+ * 下面加产品一律 400「source must be equal to one of the allowed values」—— 而那个
+ * 值明明就显示在界面的 tab 上。
+ *
+ * 真实校验在写路径上用 `sourceExists` 做，一处不多、一处不少。
+ */
+const SOURCE_FIELD_SCHEMA = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 16,
+  pattern: '^[a-z0-9_]+$',
+} as const
+
 const CODE_PARAMS_SCHEMA = {
   type: 'object',
   required: ['code'],
@@ -259,7 +346,7 @@ const SEARCH_QUERY_SCHEMA = {
   additionalProperties: false,
   properties: {
     q: { type: 'string', maxLength: QUOTE_LIMITS.QUERY_MAX },
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     category: { type: 'string', maxLength: 80 },
     limit: { type: 'integer', minimum: 1, maximum: QUOTE_LIMITS.PAGE_SIZE_MAX },
     offset: { type: 'integer', minimum: 0, maximum: 100_000 },
@@ -358,7 +445,7 @@ const CREATE_ITEM_BODY_SCHEMA = {
   required: ['source', 'category', 'name'],
   additionalProperties: false,
   properties: {
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     category: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
     name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.ITEM_NAME_MAX },
     model: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_MODEL_MAX },
@@ -383,7 +470,7 @@ const CREATE_CATEGORY_BODY_SCHEMA = {
   required: ['source', 'name'],
   additionalProperties: false,
   properties: {
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
   },
 } as const
@@ -394,7 +481,7 @@ const CATEGORY_PAIR_BODY_SCHEMA = {
   required: ['source', 'from', 'to'],
   additionalProperties: false,
   properties: {
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     from: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
     to: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
   },
@@ -405,7 +492,7 @@ const REORDER_CATEGORIES_BODY_SCHEMA = {
   required: ['source', 'order'],
   additionalProperties: false,
   properties: {
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     order: {
       type: 'array',
       minItems: 1,
@@ -469,13 +556,83 @@ const IMPORT_APPLY_BODY_SCHEMA = {
   additionalProperties: false,
   properties: {
     fileName: { type: 'string', minLength: 1, maxLength: 200 },
-    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    source: SOURCE_FIELD_SCHEMA,
     rows: {
       type: 'array',
       minItems: 1,
       maxItems: QUOTE_LIMITS.IMPORT_ROWS_MAX,
       items: IMPORT_ROW_SCHEMA,
     },
+  },
+} as const
+
+const CREATE_SOURCE_BODY_SCHEMA = {
+  type: 'object',
+  required: ['name'],
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.SOURCE_NAME_MAX },
+    short: { type: 'string', maxLength: QUOTE_LIMITS.SOURCE_SHORT_MAX },
+  },
+} as const
+
+/** 编辑主类。`code` 只用来定位，`name` / `short` 才是可改的字段。 */
+const RENAME_SOURCE_BODY_SCHEMA = {
+  type: 'object',
+  required: ['code', 'name'],
+  additionalProperties: false,
+  properties: {
+    code: SOURCE_FIELD_SCHEMA,
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.SOURCE_NAME_MAX },
+    short: { type: 'string', maxLength: QUOTE_LIMITS.SOURCE_SHORT_MAX },
+  },
+} as const
+
+const DELETE_SOURCE_BODY_SCHEMA = {
+  type: 'object',
+  required: ['code'],
+  additionalProperties: false,
+  properties: { code: SOURCE_FIELD_SCHEMA },
+} as const
+
+/**
+ * 批量合并分类的 body。
+ *
+ * `from` 的 `minItems` 故意写 1 而不是 2：选一个就走「改名」更合适，让服务端返回
+ * `too_few` 并给出那句「至少选两个」，比 schema 抛一条英文校验信息有用得多。
+ */
+const MERGE_CATEGORIES_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'from', 'to'],
+  additionalProperties: false,
+  properties: {
+    source: SOURCE_FIELD_SCHEMA,
+    from: {
+      type: 'array',
+      minItems: 1,
+      maxItems: QUOTE_LIMITS.CATEGORY_COUNT_MAX,
+      items: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    },
+    to: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+  },
+} as const
+
+/** 合并同一个分类里的多条产品。 */
+const MERGE_ITEMS_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'category', 'codes', 'keep'],
+  additionalProperties: false,
+  properties: {
+    source: SOURCE_FIELD_SCHEMA,
+    category: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    codes: {
+      type: 'array',
+      minItems: 1,
+      // 一次合并 200 条是上限：再多就该用批量导入重导，而不是在界面上逐条勾。
+      maxItems: 200,
+      items: { type: 'string', minLength: 1, maxLength: 64, pattern: CODE_PATTERN },
+    },
+    keep: { type: 'string', minLength: 1, maxLength: 64, pattern: CODE_PATTERN },
   },
 } as const
 
@@ -747,6 +904,74 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
   )
 
   // -------------------------------------------------------------------------
+  // 维护台：主类
+  // -------------------------------------------------------------------------
+
+  /**
+   * 主类清单。维护台顶部的 tab 就靠它渲染。
+   *
+   * 走读权限而不是写权限：查价页也要显示来源名，而它拿的是 `meta.categories` 里的
+   * `source`（一个 code），名字只能从这张表对。
+   */
+  app.get('/api/quote/sources', { preHandler: readGuard }, async (_request, reply) => {
+    reply.header('cache-control', 'no-store')
+    return listSourceRows()
+  })
+
+  /** 新增主类。`code` 与条目号前缀由服务端分配。 */
+  app.post<{ Body: CreateQuoteSourceRequest }>(
+    '/api/quote/sources',
+    { preHandler: requireAuth, schema: { body: CREATE_SOURCE_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await createSource(request.body.name, request.body.short, context)
+      if (!result.ok) return sendSourceFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /** 编辑主类。只能改显示名与短名 —— `code` 是每条产品业务键的第 0 段。 */
+  app.patch<{ Body: RenameQuoteSourceRequest }>(
+    '/api/quote/sources',
+    { preHandler: requireAuth, schema: { body: RENAME_SOURCE_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await renameSource(
+        request.body.code,
+        request.body.name,
+        request.body.short,
+        context,
+      )
+      if (!result.ok) return sendSourceFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /**
+   * 删除主类。
+   *
+   * 用 `POST .../delete` 而不是 `DELETE` 带 body：`DELETE` 的请求体在部分代理与
+   * 某些 fetch 实现里会被丢掉（隧道那一层尤其常见），届时服务端读到空对象、报一条
+   * 「code 必填」，看起来像接口坏了。
+   */
+  app.post<{ Body: DeleteQuoteSourceRequest }>(
+    '/api/quote/sources/delete',
+    { preHandler: requireAuth, schema: { body: DELETE_SOURCE_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await deleteSource(request.body.code, context)
+      if (!result.ok) return sendSourceFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  // -------------------------------------------------------------------------
   // 维护台：分类
   // -------------------------------------------------------------------------
 
@@ -767,6 +992,7 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await createCategory(request.body.source, request.body.name, context)
       if (!result.ok) return sendCategoryFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
@@ -781,6 +1007,7 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await renameCategory(
         request.body.source,
         request.body.from,
@@ -800,7 +1027,33 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await mergeCategory(
+        request.body.source,
+        request.body.from,
+        request.body.to,
+        context,
+      )
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /**
+   * 多选合并：把选中的多个分类并成一项。
+   *
+   * 与单条合并分开成两条路由而不是给旧的加一个 `from[]`：单条那个已经被「行内合并」
+   * 用着，改形状等于同时改两处的调用约定，而这里的失败语义也不同（少了 `too_few`）。
+   */
+  app.post<{ Body: MergeQuoteCategoriesRequest }>(
+    '/api/quote/categories/merge-many',
+    { preHandler: requireAuth, schema: { body: MERGE_CATEGORIES_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
+      const result = await mergeCategories(
         request.body.source,
         request.body.from,
         request.body.to,
@@ -819,6 +1072,7 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await reorderCategories(request.body.source, request.body.order, context)
       if (!result.ok) return sendCategoryFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
@@ -849,8 +1103,29 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await createItem(request.body, context)
       if (!result.ok) return sendItemFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /**
+   * 把同一个分类里的多条产品折叠成一条。
+   *
+   * 和上面的「新增产品」分开，和 `PATCH /items/:code` 也分开：这条会**同时改** N 条
+   * 条目的状态，而那两个接口各只碰一条。混在一个接口里，判权与审计粒度都不对了。
+   */
+  app.post<{ Body: MergeQuoteItemsRequest }>(
+    '/api/quote/items/merge',
+    { preHandler: requireAuth, schema: { body: MERGE_ITEMS_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
+      const result = await mergeItems(request.body, context)
+      if (!result.ok) return sendItemMergeFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
       return result.value
     },
@@ -907,6 +1182,7 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
 
       // 只挑十个业务字段。确认页回传的行里带着 `sourceLine` / `warnings`，那是给
       // 人看的，进库会让 `quote_items` 多出两列没人读的数据。

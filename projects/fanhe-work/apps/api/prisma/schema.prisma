@@ -1377,6 +1377,57 @@ model QuoteDataset {
   @@map("quote_datasets")
 }
 
+/// 主类（数据来源）。界面上是维护台顶部那排 tab：「销售查价系统 / 板式工艺收费 /
+/// 诺米百隆五金」。
+///
+/// ## 为什么这张表不能省
+///
+/// 早先来源是 `QUOTE_SOURCES` 里写死的三个字面量。要让人自己加一类（比如「石材
+/// 外协」），就得有地方存它的显示名、短名、条目号前缀与排列顺序 —— 而且**必须是
+/// 库，不能是代码**：新增一类是业务动作，不该跟着发一次版本。
+///
+/// ## `code` 一旦写定就不可改
+///
+/// 它进三处：`quote_items.source`、条目的业务键 `code`（`buildQuoteItemCode` 拿它
+/// 当第 0 段）、审计与图片绑定。改它等于把这一类下每一条产品的主键全部换掉 ——
+/// 历史报价、图、审计会同时失联，而且**不会报错**。所以编辑只开放显示名与短名，
+/// `code` 与 `ledger_prefix` 创建时定死。
+///
+/// ## 删除的前提是「这一类下面什么都没有」
+///
+/// 条目只会转 archived、不会物理删，所以「清空」在界面里做不到。于是 `deletable`
+/// 的真实判据是 active + archived 都为 0 —— 对内置三类来说这永远不成立，它们删不掉。
+/// 这是有意的：`sale` 还牵着导入器的文件名猜测、`A/B/C` 前缀与 meta 分组。
+model QuoteSourceRow {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// 稳定标识。内置三类是 sale / craft / hardware；新建的形如 `c7k2m9`。
+  /// 纯小写 ASCII、最长 16 —— 它要进 URL 路径，也要进业务键。
+  code String @unique @db.VarChar(16)
+
+  /// 显示名，最长 40。台账里最长的「诺米/百隆五金」是 7 个字。
+  name String @db.VarChar(40)
+
+  /// 短名。只用在空间不够的地方（首页卡底部那行、结果浮层每行末尾）。
+  short String @db.VarChar(8)
+
+  /// 条目号前缀，如 `A`。台账里的「第几行」靠它跟纸质表对号。
+  /// **与 code 一样不可改**：改了以后历史条目号全是错的。
+  ledgerPrefix String @map("ledger_prefix") @db.VarChar(2)
+
+  /// 顶部 tab 的顺序。新建的排最后。
+  sortOrder Int @default(0) @map("sort_order")
+
+  /// 内置三类为 true。目前只用于展示与提示措辞，不影响权限。
+  builtin Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([sortOrder])
+  @@map("quote_sources")
+}
+
 /// 分类。**只负责「顺序」与「有哪些分类」两件事**，不复制条目上的分类值。
 ///
 /// 分类的真值仍然是 `quote_items.category`：搜索、筛选、导入全按那一列走。这张表

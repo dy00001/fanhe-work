@@ -1,15 +1,14 @@
 import {
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_NAMES,
   type QuoteImportPreviewResponse,
   type QuoteImportPreviewRow,
   type QuoteSource,
+  type QuoteSourceDto,
 } from '@fanhe/shared'
 import { CheckCircle2, FileUp, LoaderCircle, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ApiError } from '../../../lib/api'
-import { applyQuoteImport, previewQuoteImport } from '../../../lib/quote'
+import { applyQuoteImport, loadQuoteSources, previewQuoteImport } from '../../../lib/quote'
 
 /**
  * 批量导入：选文件 → 识别 → 逐条核对 → 确认导入。
@@ -38,6 +37,7 @@ export function QuoteImportPanel({ onChanged }: { onChanged: () => void }) {
   const [preview, setPreview] = useState<QuoteImportPreviewResponse | null>(null)
   const [rows, setRows] = useState<QuoteImportPreviewRow[]>([])
   const [source, setSource] = useState<QuoteSource>('sale')
+  const [sources, setSources] = useState<readonly QuoteSourceDto[]>([])
   const [phase, setPhase] = useState<'idle' | 'parsing' | 'confirming' | 'applying'>('idle')
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<{
@@ -46,6 +46,13 @@ export function QuoteImportPanel({ onChanged }: { onChanged: () => void }) {
     unchanged: number
     total: number
   } | null>(null)
+
+  // 来源下拉必须是活的：新建一个主类之后要能往它下面导产品。
+  useEffect(() => {
+    void loadQuoteSources()
+      .then((result) => setSources(result.items))
+      .catch(() => setSources([]))
+  }, [])
 
   async function pick(file: File): Promise<void> {
     setPhase('parsing')
@@ -182,9 +189,9 @@ export function QuoteImportPanel({ onChanged }: { onChanged: () => void }) {
                 className="h-7 rounded-[7px] border border-border bg-card px-1.5 text-[12px]"
                 aria-label="导入到哪个来源"
               >
-                {QUOTE_SOURCES.map((value) => (
-                  <option key={value} value={value}>
-                    {QUOTE_SOURCE_NAMES[value]}
+                {sources.map((row) => (
+                  <option key={row.code} value={row.code}>
+                    {row.name}
                   </option>
                 ))}
               </select>
@@ -297,7 +304,8 @@ export function QuoteImportPanel({ onChanged }: { onChanged: () => void }) {
 
           <div className="mt-2 flex items-center gap-2">
             <span className="text-[11.5px] text-muted-foreground-weak">
-              将导入 {rows.length} 行到「{QUOTE_SOURCE_NAMES[source]}」
+              将导入 {rows.length} 行到「
+              {sources.find((row) => row.code === source)?.name ?? source}」
             </span>
             <button
               type="button"

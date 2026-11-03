@@ -1,29 +1,47 @@
+import type { QuoteCategoryDto, QuoteSourceDto } from '@fanhe/shared'
 import {
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_NAMES,
-  type QuoteCategoryDto,
-  type QuoteSource,
-} from '@fanhe/shared'
-import { ArrowDown, ArrowUp, Check, LoaderCircle, Pencil, Plus, X } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+  ArrowDown,
+  ArrowUp,
+  Check,
+  GitMerge,
+  LoaderCircle,
+  Pencil,
+  Plus,
+  Settings2,
+  X,
+} from 'lucide-react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 
 import { ApiError } from '../../../lib/api'
 import {
   createQuoteCategory,
   loadQuoteCategories,
+  loadQuoteSources,
+  mergeQuoteCategories,
   mergeQuoteCategory,
   renameQuoteCategory,
   reorderQuoteCategories,
 } from '../../../lib/quote'
 
+import { QuoteCategoryProducts } from './QuoteCategoryProducts'
+import { QuoteSourceManager } from './QuoteSourceManager'
+
 /**
- * 分类维护：改名、合并、新建、排序。
+ * 分类维护：主类、改名、单条合并、多选合并、排序、分类内产品合并。
  *
  * ## 为什么合并用行内展开，不再套一层对话框
  *
  * 这一屏本身已经是 Radix Dialog 里的内容。再开一个 Dialog 就是「对话框套对话框」，
- * 层级、Esc、焦点归还三件事都要重新对一遍 —— 而 11-03 那轮灯箱问题正是这么来的。
- * 行内展开只多一行 DOM，没有这些边界。
+ * 层级、Esc、焦点归还三件事都要重新对一遍 —— 而 11-03 那轮灯箱问题正是这么来的
+ * （点图片把整个面板关了）。行内展开只多一行 DOM，没有这些边界。
+ *
+ * ## 两种合并是两件事，入口必须分开
+ *
+ * - **合并分类**：把一个分类下的产品整体改挂到另一个分类，分类少一个、产品数不变。
+ * - **合并产品**：把同一个分类里的几条产品收成一条，分类不变、产品数变少。
+ *
+ * 放在同一个按钮里，用户没法确认自己点的是哪一种。所以：分类级的合并在勾选后出现在
+ * 列表下方，产品级的合并要点「N 条」展开到那个分类里。
  *
  * ## 排序用上下箭头，不用拖拽
  *
@@ -36,7 +54,8 @@ import {
  * 编辑时会得到两种都说得通的解释，而结果是顺序看起来没变。
  */
 export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
-  const [source, setSource] = useState<QuoteSource>('sale')
+  const [sources, setSources] = useState<readonly QuoteSourceDto[] | null>(null)
+  const [source, setSource] = useState('sale')
   const [items, setItems] = useState<QuoteCategoryDto[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -46,8 +65,15 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
   const [merging, setMerging] = useState<{ from: string; to: string } | null>(null)
   const [newName, setNewName] = useState('')
 
+  /** 分类多选。批量合并就靠它。 */
+  const [picked, setPicked] = useState<readonly string[]>([])
+  const [mergeTo, setMergeTo] = useState('')
+  /** 展开了哪个分类的产品列表（同一时间只展开一个，避免几十个请求一起发）。 */
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [managingSources, setManagingSources] = useState(false)
+
   /**
-   * 重取分类清单。
+   * 重取分类与主类清单。
    *
    * `refresh` 返回 Promise（写操作后要 `await` 它，确保列表在提示出现之前已经新了），
    * `reload` 是它的一层 void 包装，专门给 effect 用。
@@ -58,9 +84,10 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
    */
   const refresh = useCallback(
     (): Promise<void> =>
-      loadQuoteCategories()
-        .then((result) => {
-          setItems([...result.items])
+      Promise.all([loadQuoteCategories(), loadQuoteSources()])
+        .then(([categories, sourceList]) => {
+          setItems([...categories.items])
+          setSources(sourceList.items)
           setError(null)
         })
         .catch((cause: unknown) => {
@@ -76,7 +103,14 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
 
   useEffect(reload, [reload])
 
-  const rows = (items ?? []).filter((row) => row.source === source)
+  // 主类被删掉之后，当前选中的那个可能已经不存在了 —— 渲染时退回到第一个。
+  // 不用 effect 同步：那样会多一帧「空列表」，而且 `set-state-in-effect` 会拦。
+  const activeCode =
+    sources !== null && sources.some((row) => row.code === source)
+      ? source
+      : (sources?.[0]?.code ?? source)
+
+  const rows = (items ?? []).filter((row) => row.source === activeCode)
   const names = rows.map((row) => row.name)
 
   /** 写操作的统一包装：置忙、清提示、失败给一句人话。 */
@@ -110,13 +144,13 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     const reordered = new Map(order.map((name, position) => [name, position]))
     setItems((current) =>
       (current ?? []).map((row) =>
-        row.source === source
+        row.source === activeCode
           ? { ...row, sortOrder: reordered.get(row.name) ?? row.sortOrder }
           : row,
       ),
     )
     void run(async () => {
-      await reorderQuoteCategories({ source, order })
+      await reorderQuoteCategories({ source: activeCode, order })
       return '顺序已保存'
     })
   }
@@ -131,7 +165,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     const from = editing.name
     setEditing(null)
     await run(async () => {
-      const result = await renameQuoteCategory({ source, from, to })
+      const result = await renameQuoteCategory({ source: activeCode, from, to })
       return `已改名，${result.moved} 条产品跟着改了`
     })
   }
@@ -141,8 +175,26 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     const { from, to } = merging
     setMerging(null)
     await run(async () => {
-      const result = await mergeQuoteCategory({ source, from, to })
+      const result = await mergeQuoteCategory({ source: activeCode, from, to })
       return `已把「${from}」合并到「${to}」，${result.moved} 条产品`
+    })
+  }
+
+  /**
+   * 多选合并。
+   *
+   * 目标名默认是「第一个选中的分类」，这正好覆盖最常见的诉求：把 B、C 并进 A，名字
+   * 还用 A。想统一成一个新名字就直接在输入框里改。
+   */
+  async function submitMergeMany(): Promise<void> {
+    const to = mergeTo.trim()
+    if (picked.length < 2 || to === '') return
+    await run(async () => {
+      const result = await mergeQuoteCategories({ source: activeCode, from: picked, to })
+      setPicked([])
+      setMergeTo('')
+      setExpanded(null)
+      return `已把 ${result.from.length} 个分类合并为「${result.to}」，共 ${result.moved} 条产品`
     })
   }
 
@@ -151,37 +203,109 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     if (name === '') return
     setNewName('')
     await run(async () => {
-      await createQuoteCategory({ source, name })
+      await createQuoteCategory({ source: activeCode, name })
       return `已新建分类「${name}」`
     })
   }
 
+  function togglePick(name: string): void {
+    setPicked((current) => {
+      const next = current.includes(name)
+        ? current.filter((value) => value !== name)
+        : [...current, name]
+      // 目标名跟着选中项走：取消掉当前目标时退到下一个，全取消就清空。
+      setMergeTo((previous) => (next.includes(previous) ? previous : (next[0] ?? '')))
+      return next
+    })
+  }
+
+  function togglePickAll(): void {
+    if (picked.length === rows.length) {
+      setPicked([])
+      setMergeTo('')
+      return
+    }
+    const all = rows.map((row) => row.name)
+    setPicked(all)
+    setMergeTo((previous) => (all.includes(previous) ? previous : (all[0] ?? '')))
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 来源切换。三个来源的分类是各自独立的顺序，所以先选来源再排。 */}
-      <div className="mb-3 flex items-center gap-1.5">
-        {QUOTE_SOURCES.map((value) => (
+      {/* 主类页签。来源的先后从服务端来，新建的主类排在最后。 */}
+      <div className="mb-2 flex items-center gap-1.5">
+        {(sources ?? []).map((row) => (
           <button
-            key={value}
+            key={row.code}
             type="button"
-            aria-pressed={source === value}
+            aria-pressed={activeCode === row.code}
             onClick={() => {
-              setSource(value)
+              setSource(row.code)
               setEditing(null)
               setMerging(null)
+              setPicked([])
+              setMergeTo('')
+              setExpanded(null)
             }}
             className={
-              source === value
-                ? 'inline-flex h-8 items-center rounded-[9px] bg-secondary px-3 text-[13px] font-medium'
-                : 'inline-flex h-8 items-center rounded-[9px] px-3 text-[13px] text-muted-foreground hover:bg-accent'
+              activeCode === row.code
+                ? 'inline-flex h-8 items-center gap-1.5 rounded-[9px] bg-secondary px-3 text-[13px] font-medium'
+                : 'inline-flex h-8 items-center gap-1.5 rounded-[9px] px-3 text-[13px] text-muted-foreground hover:bg-accent'
             }
           >
-            {QUOTE_SOURCE_NAMES[value]}
+            {row.name}
+            <span className="text-[11px] text-muted-foreground-weak tabular-nums">
+              {row.itemCount}
+            </span>
           </button>
         ))}
-        <span className="ml-auto text-[11.5px] text-muted-foreground-weak">
-          {rows.length} 个分类 · 上下箭头调顺序
-        </span>
+        {sources === null && <span className="text-[12px] text-muted-foreground">读取主类…</span>}
+        <button
+          type="button"
+          onClick={() => setManagingSources((value) => !value)}
+          className={
+            managingSources
+              ? 'ml-auto inline-flex h-8 items-center gap-1 rounded-[9px] bg-secondary px-3 text-[12.5px]'
+              : 'ml-auto inline-flex h-8 items-center gap-1 rounded-[9px] border border-border px-3 text-[12.5px] text-muted-foreground hover:bg-accent'
+          }
+        >
+          <Settings2 className="size-3.5" />
+          管理主类
+        </button>
+      </div>
+
+      {managingSources && (
+        <QuoteSourceManager
+          sources={sources ?? []}
+          activeCode={activeCode}
+          onSelect={(code) => {
+            setSource(code)
+            setPicked([])
+            setMergeTo('')
+            setExpanded(null)
+          }}
+          onResult={(kind, text) => {
+            setNotice({ kind, text })
+            if (kind === 'ok') {
+              void refresh()
+              onChanged()
+            }
+          }}
+          onClose={() => setManagingSources(false)}
+        />
+      )}
+
+      <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-muted-foreground-weak">
+        <span>{rows.length} 个分类 · 上下箭头调顺序 · 勾选多个可一次合并</span>
+        {rows.length > 0 && (
+          <button
+            type="button"
+            onClick={togglePickAll}
+            className="ml-auto inline-flex h-6 items-center rounded-[6px] px-1.5 text-[11px] hover:bg-accent"
+          >
+            {picked.length === rows.length ? '取消全选' : '全选'}
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-border">
@@ -191,13 +315,14 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
           <p className="p-4 text-[12.5px] text-muted-foreground">读取中…</p>
         ) : rows.length === 0 ? (
           <p className="p-4 text-[12.5px] text-muted-foreground">
-            这个来源还没有分类。在下面新建一个，或先导入产品。
+            这个主类还没有分类。在下面新建一个，或先导入产品。
           </p>
         ) : (
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
-                <Th className="w-10">#</Th>
+                <Th className="w-8" />
+                <Th className="w-8">#</Th>
                 <Th>分类名称</Th>
                 <Th className="w-16 text-right">产品</Th>
                 <Th className="w-[132px]">顺序</Th>
@@ -206,113 +331,153 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
             </thead>
             <tbody>
               {rows.map((row, index) => (
-                <tr key={row.name} className="align-middle">
-                  <Td className="text-muted-foreground-weak tabular-nums">{index + 1}</Td>
-                  <Td>
-                    {editing?.name === row.name ? (
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          autoFocus
-                          value={editing.draft}
-                          onChange={(event) =>
-                            setEditing({ name: row.name, draft: event.target.value })
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') void submitRename()
-                            if (event.key === 'Escape') setEditing(null)
-                          }}
-                          className="h-7 min-w-0 flex-1 rounded-[7px] border border-ring bg-card px-2 text-[12.5px] outline-none"
-                          aria-label="分类新名称"
-                        />
+                // Fragment 必须带 key：key 加在内层 `<tr>` 上不算数，React 会为每一行
+                // 打印一条 missing key 警告，而开发时那条警告淹没在控制台里没人看。
+                <Fragment key={row.name}>
+                  <tr className="align-middle">
+                    <Td>
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(row.name)}
+                        onChange={() => togglePick(row.name)}
+                        aria-label={`选择分类「${row.name}」`}
+                        className="size-3.5 accent-[var(--primary)]"
+                      />
+                    </Td>
+                    <Td className="text-muted-foreground-weak tabular-nums">{index + 1}</Td>
+                    <Td>
+                      {editing?.name === row.name ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            value={editing.draft}
+                            onChange={(event) =>
+                              setEditing({ name: row.name, draft: event.target.value })
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') void submitRename()
+                              if (event.key === 'Escape') setEditing(null)
+                            }}
+                            className="h-7 min-w-0 flex-1 rounded-[7px] border border-ring bg-card px-2 text-[12.5px] outline-none"
+                            aria-label="分类新名称"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void submitRename()}
+                            className="grid size-7 place-items-center rounded-[7px] text-m-teal hover:bg-accent"
+                            aria-label="保存名称"
+                          >
+                            <Check className="size-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditing(null)}
+                            className="grid size-7 place-items-center rounded-[7px] text-muted-foreground hover:bg-accent"
+                            aria-label="取消改名"
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate">{row.name}</span>
+                          {!row.persisted && (
+                            <span className="shrink-0 rounded border border-border px-1 text-[10.5px] leading-4 text-muted-foreground-weak">
+                              未排序
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </Td>
+                    <Td className="text-right">
+                      {/* 产品数是可以点的：点开就是「在这个分类里合并产品」。 */}
+                      <button
+                        type="button"
+                        onClick={() => setExpanded(expanded === row.name ? null : row.name)}
+                        className="inline-flex h-6 items-center rounded-[6px] px-1.5 text-muted-foreground tabular-nums hover:bg-accent hover:text-foreground"
+                        aria-expanded={expanded === row.name}
+                      >
+                        {row.count} 条
+                      </button>
+                    </Td>
+                    <Td>
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => void submitRename()}
-                          className="grid size-7 place-items-center rounded-[7px] text-m-teal hover:bg-accent"
-                          aria-label="保存名称"
+                          disabled={busy || index === 0}
+                          onClick={() => move(index, -1)}
+                          className="grid size-7 place-items-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent disabled:opacity-40"
+                          aria-label={`上移「${row.name}」`}
                         >
-                          <Check className="size-3.5" />
+                          <ArrowUp className="size-3.5" />
                         </button>
                         <button
                           type="button"
-                          onClick={() => setEditing(null)}
-                          className="grid size-7 place-items-center rounded-[7px] text-muted-foreground hover:bg-accent"
-                          aria-label="取消改名"
+                          disabled={busy || index === rows.length - 1}
+                          onClick={() => move(index, 1)}
+                          className="grid size-7 place-items-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent disabled:opacity-40"
+                          aria-label={`下移「${row.name}」`}
                         >
-                          <X className="size-3.5" />
+                          <ArrowDown className="size-3.5" />
                         </button>
                       </div>
-                    ) : (
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate">{row.name}</span>
-                        {!row.persisted && (
-                          <span className="shrink-0 rounded border border-border px-1 text-[10.5px] leading-4 text-muted-foreground-weak">
-                            未排序
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </Td>
-                  <Td className="text-right text-muted-foreground tabular-nums">{row.count}</Td>
-                  <Td>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={busy || index === 0}
-                        onClick={() => move(index, -1)}
-                        className="grid size-7 place-items-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent disabled:opacity-40"
-                        aria-label={`上移「${row.name}」`}
-                      >
-                        <ArrowUp className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || index === rows.length - 1}
-                        onClick={() => move(index, 1)}
-                        className="grid size-7 place-items-center rounded-[7px] border border-border text-muted-foreground hover:bg-accent disabled:opacity-40"
-                        aria-label={`下移「${row.name}」`}
-                      >
-                        <ArrowDown className="size-3.5" />
-                      </button>
-                    </div>
-                  </Td>
-                  <Td>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setMerging(null)
-                          setEditing({ name: row.name, draft: row.name })
-                        }}
-                        className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
-                      >
-                        <Pencil className="size-3" />
-                        改名
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || rows.length < 2}
-                        onClick={() => {
-                          setEditing(null)
-                          setMerging({
-                            from: row.name,
-                            to: rows.find((other) => other.name !== row.name)?.name ?? '',
-                          })
-                        }}
-                        className="inline-flex h-7 items-center rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
-                      >
-                        合并
-                      </button>
-                    </div>
-                  </Td>
-                </tr>
+                    </Td>
+                    <Td>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            setMerging(null)
+                            setEditing({ name: row.name, draft: row.name })
+                          }}
+                          className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
+                        >
+                          <Pencil className="size-3" />
+                          改名
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || rows.length < 2}
+                          onClick={() => {
+                            setEditing(null)
+                            setMerging({
+                              from: row.name,
+                              to: rows.find((other) => other.name !== row.name)?.name ?? '',
+                            })
+                          }}
+                          className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
+                        >
+                          <GitMerge className="size-3" />
+                          合并
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                  {expanded === row.name && (
+                    <tr>
+                      <td colSpan={6} className="p-0">
+                        <QuoteCategoryProducts
+                          source={activeCode}
+                          category={row.name}
+                          onResult={(kind, text) => setNotice({ kind, text })}
+                          onChanged={() => {
+                            void refresh()
+                            onChanged()
+                          }}
+                          onClose={() => setExpanded(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         )}
       </div>
 
-      {/* 合并的目标选择。展开在列表下方而不是行内：行内会被表格的列宽挤成一条。 */}
+      {/* 分类级合并的目标选择。展开在列表下方而不是行内：行内会被表格的列宽挤成一条。 */}
       {merging !== null && (
         <div className="mt-2 flex items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--m-amber)_30%,var(--border))] bg-[color-mix(in_srgb,var(--m-amber)_6%,transparent)] px-3 py-2">
           <span className="text-[12.5px]">
@@ -351,6 +516,49 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
           >
             取消
           </button>
+        </div>
+      )}
+
+      {/* 多选合并。勾不到两个时整条不出现 —— 一个永远点不了的按钮只会让人问为什么。 */}
+      {picked.length >= 2 && (
+        <div className="mt-2 rounded-xl border border-[color-mix(in_srgb,var(--m-purple)_30%,var(--border))] bg-[color-mix(in_srgb,var(--m-purple)_6%,transparent)] px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[12.5px]">
+              把选中的 <b className="font-medium">{picked.length}</b> 个分类合并为
+            </span>
+            <input
+              value={mergeTo}
+              onChange={(event) => setMergeTo(event.target.value)}
+              maxLength={80}
+              placeholder="目标分类名，可改成新名字"
+              aria-label="批量合并的目标分类名"
+              className="h-8 min-w-0 flex-1 rounded-[8px] border border-border bg-card px-2 text-[12.5px] outline-none focus:border-ring"
+            />
+            <button
+              type="button"
+              disabled={busy || mergeTo.trim() === ''}
+              onClick={() => void submitMergeMany()}
+              className="inline-flex h-8 items-center gap-1 rounded-[9px] bg-primary px-3 text-[12.5px] text-primary-foreground disabled:opacity-50"
+            >
+              {busy ? <LoaderCircle className="size-3.5 animate-spin" /> : null}
+              合并所选
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPicked([])
+                setMergeTo('')
+              }}
+              className="inline-flex h-8 items-center rounded-[9px] border border-border px-2.5 text-[12.5px]"
+            >
+              取消
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground-weak">
+            已选：{picked.join('、')}。合并后这 {picked.length} 个分类的产品全部改挂到「
+            {mergeTo.trim() === '' ? '目标' : mergeTo.trim()}」，其余名字消失；
+            产品一条都不会删，名字也不会被改。
+          </p>
         </div>
       )}
 
@@ -393,7 +601,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
   )
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
     <th
       className={`border-b border-border-soft bg-background px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak ${className ?? ''}`}
@@ -403,7 +611,7 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
   )
 }
 
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
+function Td({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
     <td className={`border-b border-border-soft px-3 py-1.5 ${className ?? ''}`}>{children}</td>
   )

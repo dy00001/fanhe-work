@@ -290,6 +290,10 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       where: { imageKey: { startsWith: TEST_DATA_PREFIX } },
     })
     await prisma.quoteItem.deleteMany({ where: { code: { startsWith: TEST_DATA_PREFIX } } })
+    // 本轮新建的分类行与主类行。分类表没有外键约束，条目删掉之后这些行会一直留着，
+    // 下次打开维护台就会多出几个空分类。
+    await prisma.quoteCategory.deleteMany({ where: { name: { startsWith: TEST_DATA_PREFIX } } })
+    await prisma.quoteSourceRow.deleteMany({ where: { name: { startsWith: TEST_DATA_PREFIX } } })
     await purgeManualItems()
     // 只删本轮新建的数据集版本：库里那一条是导入台账写的。
     await prisma.quoteDataset.deleteMany({
@@ -917,5 +921,349 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       headers: authed(ownerToken),
     })
     assert.notEqual((meta.json() as { version: string }).version, versionAfterOwnerEdit)
+  })
+
+  // ------------------------------------------------------- 主类与两种合并
+
+  /**
+   * 重新解锁。
+   *
+   * 上一组用例最后改了维护口令，按设计**所有旧令牌当场作废** —— 这正是那条用例
+   * 要证明的事。所以这里的每一次写都必须换一个新令牌，否则拿到的是 403，而 403
+   * 看起来像「权限没配好」，会把人引到完全错误的地方去查。
+   */
+  test('重新解锁：上一组用例改过口令，旧令牌已作废', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/unlock',
+      headers: authed(designerToken),
+      payload: { password: SECRET_PASSWORD_V2 },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    unlockToken = (response.json() as { unlockToken: string }).unlockToken
+  })
+
+  /**
+   * 造一条测试条目。
+   *
+   * `ledgerNo` 由调用方给且必须递减有序：产品合并的「继承哪一条」是按条目号取第一条
+   * 有价的，三个空串会让那个规则退化成「数据库返回顺序」—— 断言就会偶发失败。
+   */
+  async function seedItem(input: {
+    code: string
+    category: string
+    name: string
+    ledgerNo: string
+    priceKind?: string
+    priceFen?: number | null
+    priceText?: string
+  }): Promise<void> {
+    await prisma.quoteItem.create({
+      data: {
+        code: input.code,
+        source: 'sale',
+        category: input.category,
+        name: input.name,
+        model: '',
+        spec: '',
+        ledgerNo: input.ledgerNo,
+        unit: '㎡',
+        unitRaw: '㎡',
+        priceKind: input.priceKind ?? 'amount',
+        priceFen: input.priceFen === undefined ? 10_000 : input.priceFen,
+        priceText: input.priceText ?? '100',
+        status: 'active',
+        datasetVersion: 'zztest',
+      },
+    })
+  }
+
+  async function listSourceCodes(): Promise<string[]> {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/quote/sources',
+      headers: authed(designerToken),
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    return (response.json() as { items: { code: string }[] }).items.map((row) => row.code)
+  }
+
+  test('主类：新建 → 改名 → 删除，列表实时跟着变', async () => {
+    const write = { ...authed(designerToken), 'x-quote-unlock': unlockToken }
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources',
+      headers: write,
+      payload: { name: `${TEST_DATA_PREFIX}石材外协`, short: '石材' },
+    })
+    assert.equal(created.statusCode, 200, created.body)
+    const made = created.json() as {
+      code: string
+      name: string
+      ledgerPrefix: string
+      deletable: boolean
+    }
+    // code 要进 URL 路径与每一条产品的业务键，只能是纯小写 ASCII。
+    assert.match(made.code, /^[a-z0-9]{1,16}$/, '生成的主类标识进不了 URL 就全盘不能用')
+    assert.equal(made.deletable, true, '刚建的空主类必须可删 —— 否则这个功能等于不可用')
+    assert.equal(made.ledgerPrefix.length <= 2, true, '条目号前缀是 2 个字符的列')
+
+    assert.ok(
+      (await listSourceCodes()).includes(made.code),
+      '新建的主类没进列表，界面上就是「点了新建但没出现」',
+    )
+
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: '/api/quote/sources',
+      headers: write,
+      payload: { code: made.code, name: `${TEST_DATA_PREFIX}石材外协改`, short: '石改' },
+    })
+    assert.equal(renamed.statusCode, 200, renamed.body)
+    assert.equal((renamed.json() as { name: string }).name, `${TEST_DATA_PREFIX}石材外协改`)
+
+    const removed = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources/delete',
+      headers: write,
+      payload: { code: made.code },
+    })
+    assert.equal(removed.statusCode, 200, removed.body)
+    assert.ok(
+      !(await listSourceCodes()).includes(made.code),
+      '删掉的主类还在列表里 —— 界面刷新一次它就又出现了',
+    )
+  })
+
+  test('主类：内置那三类下面有产品，删不掉且说明原因', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources/delete',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: { code: 'sale' },
+    })
+    // 409 而不是 403：请求没错，是这个主类下面还有东西。
+    assert.equal(response.statusCode, 409, response.body)
+    assert.equal((response.json() as { error: string }).error, 'has_items')
+  })
+
+  /**
+   * 这一条是整个「主类搬进库」功能的判官。
+   *
+   * `source` 字段在 JSON Schema 里只校验形状（`^[a-z0-9_]+$`），取值域查库。谁把它
+   * 改回 `enum: [...QUOTE_SOURCES]`，新建的主类就再也装不了产品，报的是
+   * 「must be equal to one of the allowed values」—— 而那个值明明就印在界面的
+   * tab 上。这种改动 typecheck 与 lint 都拦不住，只有真发一次写请求才看得见。
+   */
+  test('新建的主类能装产品、名字跟着下发；乱填的来源在写路径上被拒', async () => {
+    const write = { ...authed(designerToken), 'x-quote-unlock': unlockToken }
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources',
+      headers: write,
+      payload: { name: `${TEST_DATA_PREFIX}岩板外协`, short: '岩板' },
+    })
+    assert.equal(created.statusCode, 200, created.body)
+    const code = (created.json() as { code: string }).code
+
+    const added = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items',
+      headers: write,
+      payload: {
+        source: code,
+        category: `${TEST_DATA_PREFIX}岩板台面`,
+        name: 'zzq 岩板台面',
+        priceText: '398',
+      },
+    })
+    assert.equal(added.statusCode, 200, added.body)
+
+    const searched = await app.inject({
+      method: 'GET',
+      url: `/api/quote/search?source=${code}`,
+      headers: authed(designerToken),
+    })
+    assert.equal(searched.statusCode, 200, searched.body)
+    const found = (searched.json() as { items: { sourceName: string; sourceShort: string }[] })
+      .items
+    assert.equal(found.length, 1, '新建主类下的产品查不到 —— 这个主类等于摆设')
+    // 结果浮层那行「规格 · 出处」要的是真名与短名，不是 code。
+    assert.equal(found[0]?.sourceName, `${TEST_DATA_PREFIX}岩板外协`)
+    assert.equal(found[0]?.sourceShort, '岩板')
+
+    // 形状对、库里没有：不能悄悄写进去，否则查价页永远筛不出这一条。
+    const ghost = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items',
+      headers: write,
+      payload: {
+        source: 'nope404',
+        category: `${TEST_DATA_PREFIX}柜体`,
+        name: 'zzq 幽灵产品',
+        priceText: '1',
+      },
+    })
+    assert.equal(ghost.statusCode, 400, ghost.body)
+    assert.equal((ghost.json() as { error: string }).error, 'invalid_source')
+
+    // 下架之后 `itemCount` 归零，但那一行还在库里、还挂着历史报价单的条目号。
+    // 判据只看 itemCount 就会把这个主类判成可删，删完历史报价单上的编号查不到
+    // 任何东西，而且不会有任何报错。
+    const off = await app.inject({
+      method: 'POST',
+      url: `/api/quote/items/${(added.json() as { item: { code: string } }).item.code}/status`,
+      headers: write,
+      payload: { status: 'archived', reason: '下架' },
+    })
+    assert.equal(off.statusCode, 200, off.body)
+
+    const sources = await app.inject({
+      method: 'GET',
+      url: '/api/quote/sources',
+      headers: authed(designerToken),
+    })
+    const row = (
+      sources.json() as {
+        items: { code: string; itemCount: number; archivedCount: number; deletable: boolean }[]
+      }
+    ).items.find((entry) => entry.code === code)
+    assert.equal(row?.itemCount, 0, '下架后不该还算在售')
+    assert.equal(row?.archivedCount, 1)
+    assert.equal(row?.deletable, false, '只剩已下架条目的主类不可删 —— 条目没被物理删过')
+
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/api/quote/sources/delete',
+      headers: write,
+      payload: { code },
+    })
+    assert.equal(refused.statusCode, 409, refused.body)
+    assert.equal((refused.json() as { error: string }).error, 'has_items')
+  })
+
+  test('分类多选合并：选中的三个并成一个，产品一条不少', async () => {
+    const catA = `${TEST_DATA_PREFIX}多选甲`
+    const catB = `${TEST_DATA_PREFIX}多选乙`
+    const catC = `${TEST_DATA_PREFIX}多选丙`
+    const target = `${TEST_DATA_PREFIX}多选合`
+    const codes = [`${TEST_DATA_PREFIX}mm1`, `${TEST_DATA_PREFIX}mm2`, `${TEST_DATA_PREFIX}mm3`]
+
+    await seedItem({ code: codes[0] ?? '', category: catA, name: 'zzq 多选一', ledgerNo: 'M101' })
+    await seedItem({ code: codes[1] ?? '', category: catB, name: 'zzq 多选二', ledgerNo: 'M102' })
+    await seedItem({ code: codes[2] ?? '', category: catC, name: 'zzq 多选三', ledgerNo: 'M103' })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories/merge-many',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: { source: 'sale', from: [catA, catB, catC], to: target },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    const body = response.json() as { moved: number; to: string; from: string[] }
+    assert.equal(body.moved, 3, '三条产品都该被挪过来')
+    assert.equal(body.to, target)
+
+    const moved = await prisma.quoteItem.findMany({
+      where: { code: { in: codes } },
+      select: { category: true },
+    })
+    assert.equal(moved.length, 3, '产品被删掉了 —— 合并只该改挂，不该删行')
+    assert.ok(
+      moved.every((row) => row.category === target),
+      '还有条目留在旧分类名上：筛选栏按新名列出、点进去却是空的',
+    )
+
+    const left = await prisma.quoteCategory.findMany({
+      where: { source: 'sale', name: { in: [catA, catB, catC] } },
+    })
+    assert.equal(left.length, 0, '合并后源分类还留在表里，列表上会看到三个空壳')
+  })
+
+  test('分类多选合并：只选一个被判 too_few，不做静默改名', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories/merge-many',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: { source: 'sale', from: [`${TEST_DATA_PREFIX}多选合`], to: 'x' },
+    })
+    assert.equal(response.statusCode, 400, response.body)
+    assert.equal((response.json() as { error: string }).error, 'too_few')
+  })
+
+  test('产品合并：保留一条、其余下架，价格从被合并条继承', async () => {
+    const category = `${TEST_DATA_PREFIX}产品合并`
+    const keep = `${TEST_DATA_PREFIX}mi1`
+    const other1 = `${TEST_DATA_PREFIX}mi2`
+    const other2 = `${TEST_DATA_PREFIX}mi3`
+
+    await seedItem({
+      code: keep,
+      category,
+      name: 'zzq 合并保留条',
+      ledgerNo: 'M201',
+      priceKind: 'empty',
+      priceFen: null,
+      priceText: '',
+    })
+    await seedItem({
+      code: other1,
+      category,
+      name: 'zzq 合并甲',
+      ledgerNo: 'M202',
+      priceFen: 12_800,
+      priceText: '128',
+    })
+    await seedItem({
+      code: other2,
+      category,
+      name: 'zzq 合并乙',
+      ledgerNo: 'M203',
+      priceFen: 9_900,
+      priceText: '99',
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items/merge',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: { source: 'sale', category, codes: [keep, other1, other2], keep },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    const body = response.json() as { archived: number; inherited: string[]; kept: string }
+    assert.equal(body.archived, 2)
+    assert.equal(body.kept, keep)
+    assert.ok(
+      body.inherited.includes('价格'),
+      '保留条本来没价，应该从被合并条继承 —— 不继承的话合并等于把价弄丢了',
+    )
+
+    const rows = await prisma.quoteItem.findMany({
+      where: { code: { in: [keep, other1, other2] } },
+      select: { code: true, status: true, priceFen: true },
+    })
+    assert.equal(rows.length, 3, '合并只能下架、不能物理删除 —— 历史报价单上的编号还要能查到东西')
+    const kept = rows.find((row) => row.code === keep)
+    assert.equal(kept?.status, 'active')
+    assert.equal(kept?.priceFen, 12_800, '继承该取条目号最小的那条有价的')
+    assert.equal(rows.filter((row) => row.status === 'archived').length, 2)
+  })
+
+  test('产品合并：跨分类被拒，不会顺手改分类', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items/merge',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: {
+        source: 'sale',
+        category: `${TEST_DATA_PREFIX}产品合并`,
+        codes: [`${TEST_DATA_PREFIX}mi1`, `${TEST_DATA_PREFIX}mm1`],
+        keep: `${TEST_DATA_PREFIX}mi1`,
+      },
+    })
+    assert.equal(response.statusCode, 400, response.body)
+    assert.equal((response.json() as { error: string }).error, 'cross_category')
   })
 })

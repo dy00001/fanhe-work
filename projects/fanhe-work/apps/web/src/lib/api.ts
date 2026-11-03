@@ -50,11 +50,20 @@ import type {
   QuoteRevisionListResponse,
   QuoteSearchResponse,
   QuoteSource,
+  QuoteSourceDto,
+  QuoteSourceListResponse,
   QuoteUnlockResponse,
   CreateQuoteCategoryRequest,
   CreateQuoteItemRequest,
+  CreateQuoteSourceRequest,
+  DeleteQuoteSourceRequest,
+  MergeQuoteCategoriesRequest,
+  MergeQuoteCategoriesResponse,
   MergeQuoteCategoryRequest,
+  MergeQuoteItemsRequest,
+  MergeQuoteItemsResponse,
   RenameQuoteCategoryRequest,
+  RenameQuoteSourceRequest,
   ReorderQuoteCategoriesRequest,
   SetQuoteItemStatusRequest,
   UpdateQuoteItemRequest,
@@ -1451,6 +1460,81 @@ export function quoteCategoriesRequest(accessToken: string): Promise<QuoteCatego
   return request<QuoteCategoryListResponse>('/api/quote/categories', {
     method: 'GET',
     accessToken,
+  })
+}
+
+/** 主类清单。同样是读接口：查价页要显示来源名，不该为它要口令。 */
+export function quoteSourcesRequest(accessToken: string): Promise<QuoteSourceListResponse> {
+  return request<QuoteSourceListResponse>('/api/quote/sources', {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function createQuoteSourceRequest(
+  accessToken: string,
+  input: CreateQuoteSourceRequest,
+  unlockToken: string | null,
+): Promise<QuoteSourceDto> {
+  return request<QuoteSourceDto>('/api/quote/sources', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+export function renameQuoteSourceRequest(
+  accessToken: string,
+  input: RenameQuoteSourceRequest,
+  unlockToken: string | null,
+): Promise<{ code: string; name: string; short: string }> {
+  return request('/api/quote/sources', {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+export function deleteQuoteSourceRequest(
+  accessToken: string,
+  input: DeleteQuoteSourceRequest,
+  unlockToken: string | null,
+): Promise<{ code: string; name: string }> {
+  return request('/api/quote/sources/delete', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 多选合并分类。与单条合并分开一条路由，失败语义不同（多了 `too_few`）。 */
+export function mergeQuoteCategoriesRequest(
+  accessToken: string,
+  input: MergeQuoteCategoriesRequest,
+  unlockToken: string | null,
+): Promise<MergeQuoteCategoriesResponse> {
+  return request<MergeQuoteCategoriesResponse>('/api/quote/categories/merge-many', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 把同一分类里的多条产品折叠成一条。 */
+export function mergeQuoteItemsRequest(
+  accessToken: string,
+  input: MergeQuoteItemsRequest,
+  unlockToken: string | null,
+): Promise<MergeQuoteItemsResponse> {
+  return request<MergeQuoteItemsResponse>('/api/quote/items/merge', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
   })
 }
 

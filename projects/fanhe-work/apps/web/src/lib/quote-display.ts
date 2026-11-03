@@ -106,6 +106,30 @@ export function describeBindType(bindType: QuoteBindType): string {
   return BIND_LABELS[bindType]
 }
 
+/**
+ * 来源那个 6px 圆点的颜色。
+ *
+ * 早先是一张写死的 `{ sale: 青, craft: 褐, hardware: 蓝 }`。主类能自建之后，那张表
+ * 对新来源返回 `undefined` —— 圆点变成**透明**，看起来像少画了一个点，而且不报错。
+ *
+ * 改成按 code 取模分配：同样的 code 永远同一个颜色，新建的第十个主类也有颜色
+ * （与第三个同色，可接受 —— 圆点是辅助，名字才是判据）。
+ */
+const SOURCE_DOT_COLORS = [
+  'var(--m-teal)',
+  'var(--m-amber)',
+  'var(--m-blue)',
+  'var(--m-purple)',
+] as const
+
+export function quoteSourceColor(code: string): string {
+  let hash = 0
+  for (let index = 0; index < code.length; index += 1) {
+    hash = (hash * 31 + code.charCodeAt(index)) % 100_000
+  }
+  return SOURCE_DOT_COLORS[hash % SOURCE_DOT_COLORS.length] ?? 'var(--m-neutral)'
+}
+
 /** 状态角标。`active` 不显示 —— 绝大多数行都是在售，标出来只是噪声。 */
 export function describeStatus(status: QuoteItemStatus): string | null {
   return status === 'archived' ? '已停用' : null

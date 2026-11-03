@@ -1,7 +1,13 @@
 import type {
   CreateQuoteCategoryRequest,
   CreateQuoteItemRequest,
+  CreateQuoteSourceRequest,
+  DeleteQuoteSourceRequest,
+  MergeQuoteCategoriesRequest,
+  MergeQuoteCategoriesResponse,
   MergeQuoteCategoryRequest,
+  MergeQuoteItemsRequest,
+  MergeQuoteItemsResponse,
   QuoteAccessStateResponse,
   QuoteCategoryListResponse,
   QuoteImageMutationResponse,
@@ -15,7 +21,10 @@ import type {
   QuoteMetaResponse,
   QuoteRevisionListResponse,
   QuoteSearchResponse,
+  QuoteSourceDto,
+  QuoteSourceListResponse,
   RenameQuoteCategoryRequest,
+  RenameQuoteSourceRequest,
   ReorderQuoteCategoriesRequest,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
@@ -25,7 +34,11 @@ import { ApiError } from './api'
 import {
   createQuoteCategoryRequest,
   createQuoteItemRequest,
+  createQuoteSourceRequest,
+  deleteQuoteSourceRequest,
+  mergeQuoteCategoriesRequest,
   mergeQuoteCategoryRequest,
+  mergeQuoteItemsRequest,
   quoteAccessStateRequest,
   quoteCategoriesRequest,
   quoteImageRequest,
@@ -36,10 +49,12 @@ import {
   quoteRevisionsRequest,
   quoteSearchRequest,
   quoteSecretRequest,
+  quoteSourcesRequest,
   quoteStatsRequest,
   quoteUnlockRequest,
   removeQuoteImageRequest,
   renameQuoteCategoryRequest,
+  renameQuoteSourceRequest,
   reorderQuoteCategoriesRequest,
   setQuoteItemStatusRequest,
   updateQuoteItemRequest,
@@ -288,6 +303,46 @@ export function reorderQuoteCategories(
 
 export function createQuoteItem(input: CreateQuoteItemRequest): Promise<{ version: string }> {
   return withAccessToken((token) => createQuoteItemRequest(token, input, getQuoteUnlockToken()))
+}
+
+// ---------------------------------------------------------------------------
+// 主类（数据来源）
+// ---------------------------------------------------------------------------
+
+export function loadQuoteSources(): Promise<QuoteSourceListResponse> {
+  return withAccessToken((token) => quoteSourcesRequest(token))
+}
+
+export function createQuoteSource(input: CreateQuoteSourceRequest): Promise<QuoteSourceDto> {
+  return withAccessToken((token) => createQuoteSourceRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function renameQuoteSource(
+  input: RenameQuoteSourceRequest,
+): Promise<{ code: string; name: string; short: string }> {
+  return withAccessToken((token) => renameQuoteSourceRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function deleteQuoteSource(
+  input: DeleteQuoteSourceRequest,
+): Promise<{ code: string; name: string }> {
+  return withAccessToken((token) => deleteQuoteSourceRequest(token, input, getQuoteUnlockToken()))
+}
+
+// ---------------------------------------------------------------------------
+// 合并（分类多选 / 分类内产品）
+// ---------------------------------------------------------------------------
+
+export function mergeQuoteCategories(
+  input: MergeQuoteCategoriesRequest,
+): Promise<MergeQuoteCategoriesResponse> {
+  return withAccessToken((token) =>
+    mergeQuoteCategoriesRequest(token, input, getQuoteUnlockToken()),
+  )
+}
+
+export function mergeQuoteItems(input: MergeQuoteItemsRequest): Promise<MergeQuoteItemsResponse> {
+  return withAccessToken((token) => mergeQuoteItemsRequest(token, input, getQuoteUnlockToken()))
 }
 
 /**

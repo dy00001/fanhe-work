@@ -1,11 +1,7 @@
-import {
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_NAMES,
-  type QuoteMetaResponse,
-  type QuoteSource,
-} from '@fanhe/shared'
+import type { QuoteMetaResponse, QuoteSource } from '@fanhe/shared'
 import { useMemo } from 'react'
 
+import { quoteSourceColor } from '../../lib/quote-display'
 import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
 
@@ -15,37 +11,32 @@ import { Skeleton } from '../ui/skeleton'
  * 尺寸与排版照抄：宽 212、右侧一条分隔线、内边距 12/10；分组标题 11px、字距 .04em；
  * 每条 13px、内边距 6/8、圆角 8，条数右对齐并用等宽数字。
  *
+ * ## 来源与颜色都从 `meta.sources` 来，不写死三值表
+ *
+ * 主类可以自建之后，两张写死的表各有各的坏法：
+ * `SOURCE_COLOR: Record<QuoteSource, string>` 对新来源是 `undefined` —— 圆点变透明，
+ * 看着像少画一个，不报错；而 `QUOTE_SOURCES` 只含内置三类，自建主类**根本不会出现
+ * 在筛选栏里**，人只会以为「新建的主类没生效」。
+ *
  * ## 条数从 `meta.categories` 聚合，不另开统计接口
  *
- * `/quote/meta` 已经返回 `{ source, name, count }` 的完整清单，来源合计就是把 count
- * 按 source 加总。为三个数字再发一次请求，只会多一个「两边对不上」的机会，而这类
- * 不一致只在筛选之后才看得出来。
+ * 为几个数字再发一次请求，只会多一个「两边对不上」的机会，而这类不一致只在筛选
+ * 之后才看得出来。
  *
  * ## 它不持有状态
  *
  * 这一栏只是「当前筛选条件」的另一种呈现。条件留在 `QuotePanel` 里，因为换条件要
  * 连带把分页归零并触发一次检索。子组件自己存一份，两处会漂开，表现是「点了左栏
  * 但列表没动」。
- *
- * ## 来源前面那个 6px 圆点
- *
- * 静态稿用它把「柜体青 / 工艺褐 / 五金蓝」带到筛选栏里，与表格里的来源标签同色。
- * 只靠文字的话，左栏与右表要来回对两次才确认是不是同一个来源。
  */
-const SOURCE_COLOR: Record<QuoteSource, string> = {
-  sale: 'var(--m-teal)',
-  craft: 'var(--m-amber)',
-  hardware: 'var(--m-blue)',
-}
-
 type FilterCounts = {
   total: number
-  bySource: Record<QuoteSource, number>
+  bySource: Map<string, number>
 }
 
 const EMPTY_COUNTS: FilterCounts = {
   total: 0,
-  bySource: { sale: 0, craft: 0, hardware: 0 },
+  bySource: new Map(),
 }
 
 export function QuoteFilters({
@@ -65,8 +56,10 @@ export function QuoteFilters({
 }) {
   const counts = useMemo<FilterCounts>(() => {
     if (meta === null) return EMPTY_COUNTS
-    const bySource: Record<QuoteSource, number> = { sale: 0, craft: 0, hardware: 0 }
-    for (const entry of meta.categories) bySource[entry.source] += entry.count
+    const bySource = new Map<string, number>()
+    for (const entry of meta.categories) {
+      bySource.set(entry.source, (bySource.get(entry.source) ?? 0) + entry.count)
+    }
     return { total: meta.itemCount, bySource }
   }, [meta])
 
@@ -75,6 +68,12 @@ export function QuoteFilters({
     if (meta === null) return []
     return meta.categories.filter((entry) => (source === null ? true : entry.source === source))
   }, [meta, source])
+
+  /** 分类行上的 `title` 要写「哪个来源 · 哪个分类」，名字同样只能来自 meta。 */
+  const sourceNames = useMemo(
+    () => new Map((meta?.sources ?? []).map((entry) => [entry.code, entry.name])),
+    [meta],
+  )
 
   const categoryTotal = useMemo(
     () => categories.reduce((sum, entry) => sum + entry.count, 0),
@@ -101,15 +100,15 @@ export function QuoteFilters({
               onSource(null)
             }}
           />
-          {QUOTE_SOURCES.map((value) => (
+          {(meta.sources ?? []).map((entry) => (
             <FilterItem
-              key={value}
-              active={source === value}
-              label={QUOTE_SOURCE_NAMES[value]}
-              count={counts.bySource[value]}
-              dot={SOURCE_COLOR[value]}
+              key={entry.code}
+              active={source === entry.code}
+              label={entry.name}
+              count={counts.bySource.get(entry.code) ?? 0}
+              dot={quoteSourceColor(entry.code)}
               onClick={() => {
-                onSource(value)
+                onSource(entry.code)
               }}
             />
           ))}
@@ -131,7 +130,7 @@ export function QuoteFilters({
               active={category === entry.name}
               label={entry.name}
               count={entry.count}
-              title={`${QUOTE_SOURCE_NAMES[entry.source]} · ${entry.name}`}
+              title={`${sourceNames.get(entry.source) ?? entry.source} · ${entry.name}`}
               onClick={() => {
                 onCategory(entry.name)
               }}

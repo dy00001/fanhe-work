@@ -30,11 +30,32 @@ export type QuotePriceKind = (typeof QUOTE_PRICE_KINDS)[number]
 export const QUOTE_ITEM_STATUSES = ['active', 'archived'] as const
 export type QuoteItemStatus = (typeof QUOTE_ITEM_STATUSES)[number]
 
-/** 数据来源。三份台账各自一种，界面上按来源分栏。 */
+/**
+ * 内置来源。三份台账各自一种。
+ *
+ * **它不再是来源的全集** —— 维护台可以新增主类（见 `quote_sources` 表），新增出来
+ * 的 code 形如 `c7k2m9`，不在这里。这个常量现在的用途只剩三个：
+ * 「哪些是内置」「导入器按文件名猜来源时能猜哪几个」「没有主类表时的兜底顺序」。
+ * 判断一个来源合不合法要查库，不能用 `includes`。
+ */
 export const QUOTE_SOURCES = ['sale', 'craft', 'hardware'] as const
-export type QuoteSource = (typeof QUOTE_SOURCES)[number]
 
-export const QUOTE_SOURCE_NAMES: Record<QuoteSource, string> = {
+/**
+ * 来源标识。
+ *
+ * `string & {}` 是故意留的：纯 `string` 会丢掉内置三值的自动补全与拼写检查，纯联合
+ * 又会把动态新增的主类判成类型错误。两者相交是 TypeScript 里唯一能同时做到的办法。
+ */
+export type QuoteSource = (typeof QUOTE_SOURCES)[number] | (string & {})
+
+/**
+ * 内置三类的显示名。
+ *
+ * **不要用它渲染自定义主类** —— 那边查不到会得到 `undefined`，界面上就是一块空白。
+ * 任何要显示来源名的地方都用接口给的 `sourceName`（`QuoteItemDto.sourceName` /
+ * `QuoteSourceDto.name`），那是唯一来源。
+ */
+export const QUOTE_SOURCE_NAMES: Record<(typeof QUOTE_SOURCES)[number], string> = {
   sale: '销售查价系统',
   craft: '板式工艺收费',
   hardware: '诺米/百隆五金',
@@ -47,7 +68,7 @@ export const QUOTE_SOURCE_NAMES: Record<QuoteSource, string> = {
  * 短名与全名的关系是「这一类是什么」对「这张表叫什么」，不是缩写 —— 所以
  * `hardware` 是「五金」而不是「诺米」：五金里同时有诺米和百隆两家。
  */
-export const QUOTE_SOURCE_SHORT: Record<QuoteSource, string> = {
+export const QUOTE_SOURCE_SHORT: Record<(typeof QUOTE_SOURCES)[number], string> = {
   sale: '柜体',
   craft: '工艺',
   hardware: '五金',
@@ -87,6 +108,12 @@ export const QUOTE_LIMITS = {
   THUMB_WIDTH: 320,
   /** 分类名长度上限。与 `quote_items.category` 的列宽一致。 */
   CATEGORY_NAME_MAX: 80,
+  /** 主类显示名上限。与 `quote_sources.name` 的列宽一致。 */
+  SOURCE_NAME_MAX: 40,
+  /** 主类短名上限。首页卡底部那行只有几个字的位置。 */
+  SOURCE_SHORT_MAX: 8,
+  /** 一个主类下最多多少个分类。超了排序接口的 `maxItems` 也会拒。 */
+  CATEGORY_COUNT_MAX: 300,
   /** 产品名长度上限。与 `quote_items.name` 的列宽一致。 */
   ITEM_NAME_MAX: 200,
   /**
@@ -128,6 +155,14 @@ export type QuoteItemDto = {
   code: string
   source: QuoteSource
   sourceName: string
+  /**
+   * 来源短名（「柜体 / 工艺 / 五金」）。
+   *
+   * 单独给一个字段而不是让前端查 `QUOTE_SOURCE_SHORT`：那张表只有内置三类，自建
+   * 主类取出来是 `undefined`，渲染成一行末尾的空缺 —— 而结果浮层那行是「规格 ·
+   * 出处」，缺了出处就分不清这条是三份台账里的哪一份。
+   */
+  sourceShort: string
   category: string
   name: string
   /** 型号。柜体类 571 条没有型号，这里是空串而不是 null。 */
@@ -193,6 +228,14 @@ export type QuoteDatasetDto = {
 export type QuoteMetaResponse = QuoteDatasetDto & {
   /** 分类清单带条数，供筛选下拉。按来源分组，前端不再自己算。 */
   categories: readonly { source: QuoteSource; name: string; count: number }[]
+  /**
+   * 主类清单（code / 显示名 / 短名），按 `sort_order` 排好。
+   *
+   * 放进 meta 而不是让前端另发一次 `/api/quote/sources`：左栏一挂载就要这几个名字，
+   * 多一个请求就多一次「名字还没到、先渲染成 code」的闪烁。这也是查价页能显示
+   * 自建主类的唯一途径 —— 前端不能再查 `QUOTE_SOURCE_NAMES`，那张表只有内置三类。
+   */
+  sources: readonly { code: QuoteSource; name: string; short: string }[]
   /** 是否已经设过维护口令。没设过时 owner 要先进「设置口令」。 */
   hasSecret: boolean
 }
@@ -318,6 +361,65 @@ export type QuoteImageMutationResponse = {
 }
 
 // ---------------------------------------------------------------------------
+// 维护台：主类（数据来源）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一个主类在维护台里的样子。
+ *
+ * ## 为什么把 `deletable` 由服务端算好
+ *
+ * 「能不能删」不是前端能算的：它取决于这一类下还有多少条**含已下架**的条目，而
+ * 维护台的产品列表默认只拉在售的。前端自己按 `itemCount === 0` 判，会出现「看着
+ * 空的、点了删除却被拒」，或者更糟——放行了一个还有 200 条 archived 的主类。
+ *
+ * ## 为什么 `code` 与 `ledgerPrefix` 没有 editable 开关
+ *
+ * 它们根本不可改。`code` 是每一条产品业务键的第 0 段，改了等于把这一类下每一条的
+ * 主键全换掉，历史报价、图片绑定、审计同时失联且不报错。编辑只开放 `name` / `short`。
+ */
+export type QuoteSourceDto = {
+  code: string
+  name: string
+  /** 短名。「柜体 / 工艺 / 五金」，只用在空间不够的地方。 */
+  short: string
+  /** 条目号前缀，如 `A`。新建产品时按它续号。 */
+  ledgerPrefix: string
+  sortOrder: number
+  builtin: boolean
+  /** 在售条数。 */
+  itemCount: number
+  /** 已下架条数。删除判据要把它算进去 —— 下架不等于删掉。 */
+  archivedCount: number
+  /** 删得掉：条目为 0 且不是内置。直接用服务端给的，不要自己判。 */
+  deletable: boolean
+  /** 删不掉时给一句人话，说清是「还有 N 条」还是「内置主类」。 */
+  deleteBlockedReason: string
+}
+
+export type QuoteSourceListResponse = {
+  items: readonly QuoteSourceDto[]
+}
+
+/** 新建主类。`code` 由服务端生成，不接受客户端指定。 */
+export type CreateQuoteSourceRequest = {
+  name: string
+  /** 留空则从名字里取前两个字，再不行用 `主类N`。 */
+  short?: string
+}
+
+/** 编辑主类。只能改显示名与短名。 */
+export type RenameQuoteSourceRequest = {
+  code: string
+  name: string
+  short?: string
+}
+
+export type DeleteQuoteSourceRequest = {
+  code: string
+}
+
+// ---------------------------------------------------------------------------
 // 维护台：分类、产品、批量导入
 // ---------------------------------------------------------------------------
 
@@ -358,6 +460,30 @@ export type MergeQuoteCategoryRequest = {
   source: QuoteSource
   from: string
   to: string
+}
+
+/**
+ * 批量合并：把 `from` 里列出的**多个**分类一起并到 `to`。
+ *
+ * 与单条合并的区别只有一处，但是要紧的一处：**要么全成，要么一条不动**。分量调用
+ * 单条合并时，第三个名字要是刚好被人删了，前两个已经合过去了 —— 界面刷新后看起来
+ * 「合并了一部分」，而操作员只会以为自己点错了。
+ *
+ * `from` 少于 2 个不算合并（那是改名），服务端返回 `too_few`。
+ */
+export type MergeQuoteCategoriesRequest = {
+  source: QuoteSource
+  from: readonly string[]
+  /** 目标名。可以是一个已有分类（并进去），也可以是一个全新的名字（并成一项）。 */
+  to: string
+}
+
+export type MergeQuoteCategoriesResponse = {
+  version: string
+  to: string
+  from: readonly string[]
+  /** 一共挪了多少条产品。 */
+  moved: number
 }
 
 /** 新建空分类。用于「先建分类，再往里传产品」。 */
@@ -402,6 +528,40 @@ export type CreateQuoteItemRequest = {
    * 两样都在，要么一行都没有，前端只需要区分成功 / 失败两种结果。
    */
   image?: UploadQuoteImageRequest
+}
+
+/**
+ * 把同一个分类里的多条产品折叠成一条。
+ *
+ * ## 保留哪一条，是操作员选的，不是「第一条」
+ *
+ * 默认取第一条看着省事，但台账里同一个分类下的条往往只有一条带价格、一条带图。
+ * 折叠时保留错的那条，结果是「价格没了、图也没了」，而列表上只剩一行，看不出少了
+ * 什么。所以 `keep` 必须由人明确指定，且必须在 `codes` 里。
+ *
+ * ## 被折叠的行不删
+ *
+ * 转 `archived`，物理行留在库里。历史报价单上那条编号还指得到它，审计也能回答
+ * 「这行为什么查不到了」。想恢复，用 `PUT /items/:code/status` 单独上架即可。
+ */
+export type MergeQuoteItemsRequest = {
+  source: QuoteSource
+  /** 必须与所有 `codes` 所属分类一致。跨分类合并本质是改分类，不是合并。 */
+  category: string
+  /** 参与折叠的条目键，至少 2 条。 */
+  codes: readonly string[]
+  /** 保留哪一条。必须出现在 `codes` 里。 */
+  keep: string
+}
+
+export type MergeQuoteItemsResponse = {
+  version: string
+  /** 保留下来的条目键。 */
+  kept: string
+  /** 转成 archived 的条数。 */
+  archived: number
+  /** 从被折叠行里补到保留行上的东西，逐项给人看（`价格` / `商品图`）。 */
+  inherited: readonly string[]
 }
 
 /** 批量导入里的一行。字段与 `CreateQuoteItemRequest` 对齐，少一个来源（整批一个来源）。 */

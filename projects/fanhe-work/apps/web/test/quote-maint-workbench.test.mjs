@@ -39,19 +39,23 @@ const MAINT = readCode(MAINT_PATH)
 test('分类区：改名、合并、排序各自接到对应的写接口', () => {
   // 改名与合并是两个动作，不是「合并 = 改名到目标」的复用：合并要把目标分类的
   // 顺序位置也接管过来，改名不该动顺序。接口分开才不会在一次改动里互相污染。
+  //
+  // `source: activeCode` 而不是 `source`：主类可以被删掉，当前选中的那个可能已经
+  // 不在清单里。`activeCode` 是渲染时算出的兜底值，直接用 `source` 会往一个不存在
+  // 的主类里写数据。
   assert.match(
     CATEGORY,
-    /renameQuoteCategory\(\{\s*source,\s*from,\s*to\s*\}\)/,
+    /renameQuoteCategory\(\{\s*source:\s*activeCode,\s*from,\s*to\s*\}\)/,
     '分类区没有调改名接口（或者参数名被改了）',
   )
   assert.match(
     CATEGORY,
-    /mergeQuoteCategory\(\{\s*source,\s*from,\s*to\s*\}\)/,
-    '分类区没有调合并接口',
+    /mergeQuoteCategory\(\{\s*source:\s*activeCode,\s*from,\s*to\s*\}\)/,
+    '分类区没有调单条合并接口',
   )
   assert.match(
     CATEGORY,
-    /reorderQuoteCategories\(\{\s*source,\s*order\s*\}\)/,
+    /reorderQuoteCategories\(\{\s*source:\s*activeCode,\s*order\s*\}\)/,
     '分类区没有调排序接口',
   )
 

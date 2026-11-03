@@ -1,11 +1,10 @@
 import {
   QUOTE_LIMITS,
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_NAMES,
   type QuoteAccessStateResponse,
   type QuoteCategoryDto,
   type QuoteItemDto,
   type QuoteSource,
+  type QuoteSourceDto,
   type UploadQuoteImageRequest,
 } from '@fanhe/shared'
 import { ImagePlus, LoaderCircle, Plus, Search, X } from 'lucide-react'
@@ -16,6 +15,7 @@ import {
   createQuoteItem,
   loadQuoteCategories,
   loadQuoteImageUrl,
+  loadQuoteSources,
   saveQuotePrice,
   saveQuoteStatus,
   searchQuotes,
@@ -66,6 +66,11 @@ export function QuoteProductManager({
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
 
   const [categories, setCategories] = useState<QuoteCategoryDto[]>([])
+  /**
+   * 主类清单。**不能再用 `QUOTE_SOURCES` 硬编码** —— 新建的主类不会出现在那里，
+   * 于是「新建了石材外协，却没法往里加产品」。
+   */
+  const [sources, setSources] = useState<readonly QuoteSourceDto[]>([])
   const [editingCode, setEditingCode] = useState<string | null>(null)
   const [priceDraft, setPriceDraft] = useState('')
   const [reason, setReason] = useState('')
@@ -113,6 +118,9 @@ export function QuoteProductManager({
     void loadQuoteCategories()
       .then((result) => setCategories([...result.items]))
       .catch(() => setCategories([]))
+    void loadQuoteSources()
+      .then((result) => setSources(result.items))
+      .catch(() => setSources([]))
   }, [])
 
   /**
@@ -169,26 +177,29 @@ export function QuoteProductManager({
   }
 
   const sourceCategories = categories.filter((row) => row.source === source)
+  // 当前选中的主类被删掉时退回第一个 —— 与分类区同一条兜底，不另写一套。
+  const sourceName =
+    sources.find((row) => row.code === source)?.name ?? sources[0]?.name ?? '当前主类'
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
-        {QUOTE_SOURCES.map((value) => (
+        {sources.map((row) => (
           <button
-            key={value}
+            key={row.code}
             type="button"
-            aria-pressed={source === value}
+            aria-pressed={source === row.code}
             onClick={() => {
-              setSource(value)
+              setSource(row.code)
               setEditingCode(null)
             }}
             className={
-              source === value
+              source === row.code
                 ? 'inline-flex h-8 items-center rounded-[9px] bg-secondary px-3 text-[13px] font-medium'
                 : 'inline-flex h-8 items-center rounded-[9px] px-3 text-[13px] text-muted-foreground hover:bg-accent'
             }
           >
-            {QUOTE_SOURCE_NAMES[value]}
+            {row.name}
           </button>
         ))}
 
@@ -218,6 +229,7 @@ export function QuoteProductManager({
       {creating && (
         <NewProductForm
           source={source}
+          sourceName={sourceName}
           categories={sourceCategories.map((row) => row.name)}
           busy={busy}
           onCancel={() => setCreating(false)}
@@ -418,12 +430,15 @@ export function QuoteProductManager({
  */
 function NewProductForm({
   source,
+  sourceName,
   categories,
   busy,
   onCancel,
   onSubmit,
 }: {
   source: QuoteSource
+  /** 主类显示名。从主类表来，不能查 `QUOTE_SOURCE_NAMES` —— 自定义主类在那里是空的。 */
+  sourceName: string
   categories: readonly string[]
   busy: boolean
   onCancel: () => void
@@ -501,7 +516,7 @@ function NewProductForm({
 
   return (
     <div className="mb-3 rounded-xl border border-border bg-background p-3">
-      <div className="mb-2 text-[12.5px] font-medium">新增产品 · {QUOTE_SOURCE_NAMES[source]}</div>
+      <div className="mb-2 text-[12.5px] font-medium">新增产品 · {sourceName}</div>
       <div className="grid grid-cols-3 gap-2">
         <Field label="分类（必填）">
           <input

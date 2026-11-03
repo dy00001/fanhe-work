@@ -1,15 +1,10 @@
-import {
-  QUOTE_SOURCES,
-  QUOTE_SOURCE_SHORT,
-  type QuoteItemDto,
-  type QuoteSource,
-} from '@fanhe/shared'
+import type { QuoteItemDto } from '@fanhe/shared'
 import { CornerDownLeft, Search } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { loadQuoteImageUrl, loadQuoteMeta, searchQuotes } from '../../lib/quote'
-import { describePrice, splitHighlight } from '../../lib/quote-display'
+import { describePrice, quoteSourceColor, splitHighlight } from '../../lib/quote-display'
 
 import { QuoteLightbox } from './QuoteLightbox'
 import { QuoteThumb } from './QuoteThumb'
@@ -33,17 +28,13 @@ import { QuoteThumb } from './QuoteThumb'
 const POP_WIDTH = 560
 const POP_MAX_ROWS = 7
 
-const SOURCE_COLOR: Record<QuoteSource, string> = {
-  sale: 'var(--m-teal)',
-  craft: 'var(--m-amber)',
-  hardware: 'var(--m-blue)',
-}
-
 export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
 
   const [total, setTotal] = useState<number | null>(null)
+  /** 主类短名。底部那行「柜体 · 工艺 · 五金」，来源是 meta.sources。 */
+  const [sourceShorts, setSourceShorts] = useState<readonly string[]>([])
   const [keyword, setKeyword] = useState('')
   const [open, setOpen] = useState(false)
   const [rows, setRows] = useState<readonly QuoteItemDto[]>([])
@@ -73,7 +64,11 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
     let alive = true
     loadQuoteMeta()
       .then((meta) => {
-        if (alive) setTotal(meta.itemCount)
+        if (!alive) return
+        setTotal(meta.itemCount)
+        // 底部那行「柜体 · 工艺 · 五金」也来自主类表：新增一类之后这里跟着多一个词，
+        // 而不是永远念着内置那三个。
+        setSourceShorts((meta.sources ?? []).map((entry) => entry.short))
       })
       .catch(() => {
         if (alive) setTotal(0)
@@ -241,7 +236,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
               <b className="font-medium text-muted-foreground">{total ?? '…'}</b> 条
             </span>
             <span className="size-1 rounded-full bg-muted-foreground-weak opacity-60" />
-            <span>{QUOTE_SOURCES.map((source) => QUOTE_SOURCE_SHORT[source]).join(' · ')}</span>
+            <span>{sourceShorts.length === 0 ? '—' : sourceShorts.join(' · ')}</span>
           </div>
         </div>
       </div>
@@ -295,7 +290,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
                     >
                       <span
                         aria-hidden="true"
-                        style={{ background: SOURCE_COLOR[item.source] }}
+                        style={{ background: quoteSourceColor(item.source) }}
                         className="mt-0.5 size-1.5 shrink-0 rounded-full"
                       />
                       {item.hasImage && (
@@ -334,7 +329,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
                             </>
                           )}
                           <i className="text-border not-italic">·</i>
-                          {QUOTE_SOURCE_SHORT[item.source]}
+                          {item.sourceShort}
                         </span>
                       </span>
                       <span className="shrink-0 text-right whitespace-nowrap tabular-nums">

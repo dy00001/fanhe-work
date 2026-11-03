@@ -33,7 +33,15 @@ import { bumpDataset } from './store.js'
  * 个前缀翻成「分类 · 销售查价系统」再显示 —— 见 `store.ts` 的 `listRevisions`。
  */
 
-export type CategoryFailure = 'not_found' | 'duplicate' | 'invalid_name' | 'invalid_source'
+export type CategoryFailure =
+  | 'not_found'
+  | 'duplicate'
+  | 'invalid_name'
+  | 'invalid_source'
+  /** 批量合并时选了不到两个分类 —— 那不是合并，是改名。 */
+  | 'too_few'
+  /** 目标名出现在源列表里，或者保留条不在候选里。 */
+  | 'invalid_target'
 
 export type CategoryResult<T> = { ok: true; value: T } | { ok: false; reason: CategoryFailure }
 
@@ -55,7 +63,7 @@ function categoryRef(source: QuoteSource): string {
  * 让它们从维护台上消失，而人正要在那里给它们排序。
  */
 export async function listCategoryRows(): Promise<QuoteCategoryListResponse> {
-  const [groups, persisted, dataset] = await Promise.all([
+  const [groups, persisted, dataset, sourceRows] = await Promise.all([
     prisma.quoteItem.groupBy({
       by: ['source', 'category'],
       where: { status: 'active' },
@@ -66,6 +74,9 @@ export async function listCategoryRows(): Promise<QuoteCategoryListResponse> {
       orderBy: { importedAt: 'desc' },
       select: { version: true },
     }),
+    // 来源的先后从主类表来。写死 `['sale','craft','hardware']` 的话，新建的主类
+    // 会排到所有内置来源之后 —— 而人是按自己建它的顺序找它的。
+    prisma.quoteSourceRow.findMany({ select: { code: true, sortOrder: true } }),
   ])
 
   const counts = new Map(
@@ -95,11 +106,8 @@ export async function listCategoryRows(): Promise<QuoteCategoryListResponse> {
     })
   }
 
-  const sourceRank = (source: string): number => {
-    const order: readonly string[] = ['sale', 'craft', 'hardware']
-    const index = order.indexOf(source)
-    return index === -1 ? order.length : index
-  }
+  const rankOf = new Map(sourceRows.map((row) => [row.code, row.sortOrder]))
+  const sourceRank = (source: string): number => rankOf.get(source) ?? Number.MAX_SAFE_INTEGER
 
   const items = [...rows.values()].sort((a, b) => {
     if (a.source !== b.source) return sourceRank(a.source) - sourceRank(b.source)
@@ -217,10 +225,80 @@ export async function renameCategory(
 }
 
 /**
- * 合并：把 `from` 下的条目改挂到 `to`，删掉 `from` 行。
+ * 合并的唯一写入实现：把 `fromList` 下所有条目改挂到 `to`，删掉这些行。
+ *
+ * 单条与批量都走这里，两者的差别只在入口校验（批量要求至少两个源、且不能把目标
+ * 自己也列进去）。写两份实现的话，迟早有一处忘了删 `from` 行 —— 那一行会一直挂在
+ * 维护台列表里，看起来像合并没生效。
+ *
+ * 顺序：`to` 已存在就保持它的位置；否则取源里最小的那个 `sort_order`，这样合并
+ * 之后列表不会跳。
+ */
+async function applyMerge(
+  source: QuoteSource,
+  fromList: readonly string[],
+  to: string,
+  operator: Operator,
+  reason: string,
+): Promise<{ version: string; moved: number }> {
+  const [fromRows, toRow, groups] = await Promise.all([
+    prisma.quoteCategory.findMany({
+      where: { source, name: { in: [...fromList] } },
+      select: { name: true, sortOrder: true },
+    }),
+    prisma.quoteCategory.findUnique({ where: { source_name: { source, name: to } } }),
+    prisma.quoteItem.groupBy({
+      by: ['category'],
+      where: { source, category: { in: [...fromList] } },
+      _count: { _all: true },
+    }),
+  ])
+
+  const moved = groups.reduce((sum, group) => sum + group._count._all, 0)
+  const version = await bumpDataset(`${reason}：${source} ${fromList.join('、')} → ${to}`)
+  const sortOrder =
+    toRow?.sortOrder ??
+    (fromRows.length === 0
+      ? await nextSortOrder(source)
+      : Math.min(...fromRows.map((row) => row.sortOrder)))
+
+  // `old_value` 只有 400 字。批量合并十个分类时名字加起来会超，宁可截断也不能让
+  // 整条事务因为「字符串太长」失败 —— psql 那里是硬报错，不是静默截断。
+  const oldValue = fromList.join('、').slice(0, 400)
+
+  await prisma.$transaction([
+    prisma.quoteItem.updateMany({
+      where: { source, category: { in: [...fromList] } },
+      data: { category: to, datasetVersion: version },
+    }),
+    toRow === null
+      ? prisma.quoteCategory.create({ data: { source, name: to, sortOrder } })
+      : prisma.quoteCategory.update({
+          where: { source_name: { source, name: to } },
+          data: { sortOrder },
+        }),
+    prisma.quoteCategory.deleteMany({ where: { source, name: { in: [...fromList] } } }),
+    prisma.quoteRevision.create({
+      data: {
+        itemCode: categoryRef(source),
+        field: 'category',
+        oldValue,
+        newValue: to,
+        operatorId: operator.userId,
+        unlockSessionId: operator.access.unlockSessionId,
+        reason,
+      },
+    }),
+  ])
+
+  return { version, moved }
+}
+
+/**
+ * 单个合并：把 `from` 下的条目改挂到 `to`，删掉 `from` 行。
  *
  * `to` 不存在时自动创建 —— 这正是「自定义分类 + 合并」的组合用法：先把要保留的名字
- * 建出来，再把别的并进去。顺序取 `from` 原来的位置，这样合并之后列表不会跳。
+ * 建出来，再把别的并进去。
  */
 export async function mergeCategory(
   source: QuoteSource,
@@ -231,46 +309,81 @@ export async function mergeCategory(
   const from = normalizeName(rawFrom)
   const to = normalizeName(rawTo)
   if (to === '') return { ok: false, reason: 'invalid_name' }
-  if (from === to) return { ok: false, reason: 'invalid_name' }
+  if (from === to) return { ok: false, reason: 'invalid_target' }
 
-  const [fromRow, toRow, moved] = await Promise.all([
+  const [fromRow, moved] = await Promise.all([
     prisma.quoteCategory.findUnique({ where: { source_name: { source, name: from } } }),
-    prisma.quoteCategory.findUnique({ where: { source_name: { source, name: to } } }),
     prisma.quoteItem.count({ where: { source, category: from } }),
   ])
   if (fromRow === null && moved === 0) return { ok: false, reason: 'not_found' }
 
-  const version = await bumpDataset(`分类合并：${source} ${from} → ${to}`)
-  const sortOrder = toRow?.sortOrder ?? fromRow?.sortOrder ?? (await nextSortOrder(source))
+  const result = await applyMerge(source, [from], to, operator, '分类合并')
+  return { ok: true, value: { version: result.version, from, to, moved: result.moved } }
+}
 
-  await prisma.$transaction([
-    prisma.quoteItem.updateMany({
-      where: { source, category: from },
-      data: { category: to, datasetVersion: version },
+/**
+ * 批量合并：多个分类并成一项。
+ *
+ * ## 为什么整体拒绝、不做部分成功
+ *
+ * 三个源里有一个已经被别人删了，最自然的实现是「合了能合的，跳过找不到的」。但界面
+ * 上看到的是「合并完成」，列表里还剩一个同名分类 —— 操作员只会以为自己点错了，再合
+ * 一次，于是又多一条审计。宁可整批失败并指明是哪个名字没了。
+ *
+ * ## 目标名可以是一个全新的名字，也可以就是选中的其中一个
+ *
+ * 「把 A、B、C 并成 D」是常见诉求（三个旧叫法统一成一个新叫法）。而「A、B、C 合并，
+ * 名字保留 A」同样常见 —— 所以 `to` **允许出现在源列表里**，它在写入时会从源列表里
+ * 剔除：留下的那个就是目标自己，不能「把 A 并到 A」。
+ *
+ * 早期版本把「目标在源里」判成 `invalid_target`，结果是想保留原名的用户必须先把 A
+ * 排除、再手打一遍 A，而手打的名字只要差一个全角空格，就会建出一个看着一样的重复分类。
+ */
+export async function mergeCategories(
+  source: QuoteSource,
+  rawFrom: readonly string[],
+  rawTo: string,
+  operator: Operator,
+): Promise<CategoryResult<{ version: string; to: string; from: string[]; moved: number }>> {
+  const to = normalizeName(rawTo)
+  if (to === '') return { ok: false, reason: 'invalid_name' }
+
+  // 去重之后再数：前端多选里有重复项时不该报「太少」。
+  const picked: string[] = []
+  for (const raw of rawFrom) {
+    const name = normalizeName(raw)
+    if (name === '') return { ok: false, reason: 'invalid_name' }
+    if (!picked.includes(name)) picked.push(name)
+  }
+  if (picked.length < 2) return { ok: false, reason: 'too_few' }
+
+  // 目标自己不出现在 updateMany 的 `in` 里。它本来就是结果，再「并到它自己」是空操作；
+  // 但它必须留在 `picked` 里，否则「A、B 合并、保留 A」会被判成只有一个源。
+  const from = picked.filter((name) => name !== to)
+  if (from.length === 0) return { ok: false, reason: 'too_few' }
+
+  // 逐个核实在不在。既没有分类行、也没有条目 = 这个名字不存在。
+  const [rows, groups] = await Promise.all([
+    prisma.quoteCategory.findMany({
+      where: { source, name: { in: picked } },
+      select: { name: true },
     }),
-    toRow === null
-      ? prisma.quoteCategory.create({ data: { source, name: to, sortOrder } })
-      : prisma.quoteCategory.update({
-          where: { source_name: { source, name: to } },
-          data: { sortOrder },
-        }),
-    ...(fromRow === null
-      ? []
-      : [prisma.quoteCategory.delete({ where: { source_name: { source, name: from } } })]),
-    prisma.quoteRevision.create({
-      data: {
-        itemCode: categoryRef(source),
-        field: 'category',
-        oldValue: from,
-        newValue: to,
-        operatorId: operator.userId,
-        unlockSessionId: operator.access.unlockSessionId,
-        reason: '分类合并',
-      },
+    prisma.quoteItem.groupBy({
+      by: ['category'],
+      where: { source, category: { in: picked } },
+      _count: { _all: true },
     }),
   ])
+  const known = new Set<string>([...rows.map((row) => row.name), ...groups.map((g) => g.category)])
+  const missing = picked.find((name) => !known.has(name))
+  if (missing !== undefined) {
+    // 用 `not_found` 而不是自定义 reason：前端本来就在处理这个码，多一个码要多一处
+    // 文案映射，而这里能说的和「找不到分类」是同一句话。
+    return { ok: false, reason: 'not_found' }
+  }
 
-  return { ok: true, value: { version, from, to, moved } }
+  const result = await applyMerge(source, from, to, operator, '分类合并（多选）')
+  return { ok: true, value: { version: result.version, to, from, moved: result.moved } }
 }
 
 /**
