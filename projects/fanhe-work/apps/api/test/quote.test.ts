@@ -1760,4 +1760,59 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       assert.equal(restore.statusCode, 200, restore.body)
     }
   })
+  // -------------------------------------------------------------------------
+  // 批量导入：上传那一段的传输契约
+  // -------------------------------------------------------------------------
+
+  /**
+   * 2026-11-03 用户报「上传之后显示服务器超时」。根因是请求体用 JSON + base64 送：
+   * 12.25MB 的台账变成 17MB，走公网时传完就撞上客户端超时，而服务端的 413 还没
+   * 机会回话。这一组钉住新契约：原始字节 + 文件名走头。
+   *
+   * 钉它的意义在于「老客户端」与「新服务端」的错配上：如果哪天有人把 JSON 那条
+   * 路悄悄加回来，一个 12MB 的文件又会开始传 17MB，而界面上只会写「服务器超时」。
+   */
+  test('导入识别：收原始字节、文件名走头、JSON 请求体被明确拒绝', async () => {
+    const write = await freshWrite()
+    const csv = Buffer.from('分类,名称,规格,单价,单位\n甲,乙,丙,100,㎡\n', 'utf-8')
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/quote/import/preview',
+      headers: {
+        ...write,
+        'content-type': 'application/octet-stream',
+        // 中文名必须 URL 编码：HTTP 头按 Latin-1 传，直接塞会被截成乱码。
+        'x-quote-file-name': encodeURIComponent('测试台账.csv'),
+      },
+      payload: csv,
+    })
+    assert.equal(ok.statusCode, 200, ok.body)
+    const preview = ok.json() as { fileName: string; format: string; rows: unknown[] }
+    assert.equal(preview.format, 'csv')
+    assert.equal(preview.fileName, '测试台账.csv', '文件名没有被正确解码，确认页会显示一串 %E4')
+    assert.ok(preview.rows.length > 0, '识别结果为空')
+
+    // 少了文件名就没法选识别器。退回默认值等于「拿 PDF 解析器去解 xlsx」，
+    // 最后给出的会是一句与真实原因无关的「抽不出可读文字」。
+    const nameless = await app.inject({
+      method: 'POST',
+      url: '/api/quote/import/preview',
+      headers: { ...write, 'content-type': 'application/octet-stream' },
+      payload: csv,
+    })
+    assert.equal(nameless.statusCode, 400, nameless.body)
+    assert.equal((nameless.json() as { error: string }).error, 'bad_file_name')
+
+    // 旧客户端会把 `{ fileName, data }` 发过来。这里必须**明确拒绝**，而不是
+    // 拿一个空 Buffer 去解析 —— 后者会走到「文件是空的」，与真实原因差得很远。
+    const legacy = await app.inject({
+      method: 'POST',
+      url: '/api/quote/import/preview',
+      headers: { ...write, 'content-type': 'application/json' },
+      payload: { fileName: 'a.csv', data: Buffer.from('a,b\n1,2\n').toString('base64') },
+    })
+    assert.equal(legacy.statusCode, 400, legacy.body)
+    assert.equal((legacy.json() as { error: string }).error, 'empty_file')
+  })
 })

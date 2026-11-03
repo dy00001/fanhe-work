@@ -141,8 +141,18 @@ export const QUOTE_LIMITS = {
   ITEM_PRICE_TEXT_MAX: 200,
   ITEM_PRICING_MODE_MAX: 40,
   ITEM_MATERIALS_MAX: 300,
-  /** 批量导入单份文件的上限。台账 xlsx 约 300KB，8MB 足够覆盖带图的表。 */
-  IMPORT_FILE_BYTES_MAX: 8 * 1024 * 1024,
+  /**
+   * 批量导入单份文件的上限。
+   *
+   * 从 8MB 提到 20MB（2026-11-03）。原来的判断是「台账 xlsx 约 300KB，8MB 足够」，
+   * 那条判断没见过实物：五金那份《诺米拉篮价格表.xlsx》是 **12.25MB**（每一行都带
+   * 产品图），从上线起就一直在门槛外 —— 而界面上给出的反馈是「服务器超时」，
+   * 因为客户端把 12MB 编成 base64 之后仍然照传，传完才在服务端被拒。
+   *
+   * 20MB 是「覆盖真实台账 + 留一倍余量」：解析 12.25MB 的实测耗时是 135ms（见
+   * docs/QUOTE-IMPORT-UPLOAD-2026-11-03.md），成本几乎全在传输入口，不在解析。
+   */
+  IMPORT_FILE_BYTES_MAX: 20 * 1024 * 1024,
   /**
    * 一次最多识别多少行。
    *
@@ -692,12 +702,16 @@ export type QuoteImportPreviewResponse = {
   detectedColumns: readonly string[]
 }
 
-export type QuoteImportPreviewRequest = {
-  fileName: string
-  /** 纯 base64，不带 `data:` 前缀。 */
-  data: string
-}
-
+/**
+ * 识别请求**没有请求体类型**。
+ *
+ * 2026-11-03 之前这里是 `{ fileName, data: base64 }`。它有两个问题：base64 让
+ * 传输量多 40%，而这条链路唯一的慢变量就是传输；并且 JSON 字符串在中途不产生
+ * 任何事件，界面上只能给一个转圈，给不出百分比。
+ *
+ * 现在请求体是文件的原始字节（`application/octet-stream`），文件名走
+ * `x-quote-file-name` 头，响应类型仍是 `QuoteImportPreviewResponse`。
+ */
 export type QuoteImportApplyRequest = {
   fileName: string
   source: QuoteSource

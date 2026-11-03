@@ -13,7 +13,6 @@ import {
   type MergeQuoteItemsRequest,
   type QuoteImportApplyRequest,
   type QuoteImportFailure,
-  type QuoteImportPreviewRequest,
   type QuoteItemStatus,
   type QuoteSource,
   type RenameQuoteCategoryRequest,
@@ -345,6 +344,28 @@ function readUnlockToken(request: FastifyRequest): string | null {
   return null
 }
 
+/**
+ * 从请求头取导入的文件名。
+ *
+ * 返回 `null` 的三种情况都要当成错误，而不是退回到一个默认名：文件名决定用哪个
+ * 识别器，猜一个就等于「用 PDF 解析器去解 xlsx」，最后给出一句「这份文件里抽不出
+ * 可读文字」，与真实原因（请求少了头）毫无关系。
+ */
+function readImportFileName(raw: string | string[] | undefined): string | null {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (typeof value !== 'string' || value === '') return null
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(value).trim()
+  } catch {
+    // `%` 后面跟了非法序列，`decodeURIComponent` 会抛 URIError。头是客户端拼的，
+    // 不能假定它一定合法。
+    return null
+  }
+  if (decoded.length === 0 || decoded.length > IMPORT_FILE_NAME_MAX) return null
+  return decoded
+}
+
 const CODE_PATTERN = '^[A-Za-z0-9_-]{1,64}$'
 
 /**
@@ -569,20 +590,19 @@ const REORDER_CATEGORIES_BODY_SCHEMA = {
   },
 } as const
 
-const IMPORT_PREVIEW_BODY_SCHEMA = {
-  type: 'object',
-  required: ['fileName', 'data'],
-  additionalProperties: false,
-  properties: {
-    fileName: { type: 'string', minLength: 1, maxLength: 200 },
-    // base64 膨胀是固定的 4/3，留一点余量。真正的字节数校验在解析器里按解码后长度做。
-    data: {
-      type: 'string',
-      minLength: 1,
-      maxLength: Math.ceil(QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX * 1.4),
-    },
-  },
-} as const
+/**
+ * 文件名走请求头，不走请求体。
+ *
+ * 请求体是文件的原始字节，放不下第二个字段；而文件名是**选识别器**的唯一依据
+ * （`.pdf` 与 `.xlsx` 两条完全不同的解析路径），不能省。
+ *
+ * 必须 URL 编码：HTTP 头按 Latin-1 传输，中文文件名直接塞进去会变成乱码，而
+ * 乱码之后的扩展名匹配不上，用户看到的是「只认 Excel、CSV 与 PDF」。
+ */
+const IMPORT_FILE_NAME_HEADER = 'x-quote-file-name'
+
+/** 文件名长度上限。`parseQuoteFile` 只用扩展名，但不能让一个 1MB 的头进日志。 */
+const IMPORT_FILE_NAME_MAX = 200
 
 const IMPORT_ROW_SCHEMA = {
   type: 'object',
@@ -756,6 +776,29 @@ const MERGE_ITEMS_BODY_SCHEMA = {
 
 export function registerQuoteRoutes(app: FastifyInstance): void {
   const readGuard = [requireAuth, requirePermission(PERMISSIONS.PERSONAL_QUOTE_READ)]
+
+  /**
+   * 「原样收字节」的请求体解析器，只给批量导入用。
+   *
+   * Fastify 默认只认 JSON 与表单，`application/octet-stream` 会直接 415。挂在这里
+   * 而不是 `app.ts`：它唯一的消费者是本文件里的导入预览路由，离它最近的注释才
+   * 不会跟实现漂开。
+   *
+   * `bodyLimit` 必须给：Fastify 的全局默认是 1MB，而「原样收字节」如果没有上限，
+   * 就等于开了一个「一个请求把进程内存吃光」的入口。这里给到文件上限再多 1MB，
+   * 多出来的是 HTTP 层的余量。
+   *
+   * 注册是实例级的，因此其它路由也会认 octet-stream。这是有意的：拒绝的代价是
+   * 「换了个 content-type 就 415」，而多认一种内容类型不会改变任何现有路由的行为
+   * （它们读的是 `request.body` 里的 JSON 字段，Buffer 进来只会得到一个校验错误）。
+   */
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX + 1024 * 1024 },
+    (_request, body, done) => {
+      done(null, body)
+    },
+  )
 
   /** 数据集版本、分类清单、有没有设过口令。一次拿全，界面挂载时只发这一个请求。 */
   app.get('/api/quote/meta', { preHandler: readGuard }, async (_request, reply) => {
@@ -1348,26 +1391,65 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
    * 之所以要把「识别」与「导入」拆成两个接口：识别一定会出错（合并单元格、跨行备注、
    * 表头前多一行标题），而导入是不可逆的。操作员在中间那一步逐条核对、改完再提交，
    * 是这条链路唯一的安全阀。
+   *
+   * ## 请求体是原始字节，`{ fileName, data: base64 }` 已经去掉
+   *
+   * 2026-11-03 用户报「上传之后显示服务器超时」。实测下来解析不是瓶颈：五金那份
+   * 《诺米拉篮价格表.xlsx》12.25MB，`parseQuoteFile` 只用 135ms。时间全花在**传输**
+   * 上，而 base64 让 12MB 变成 17MB（+40%），并且把前端唯一能拿到的进度信息
+   * （已上传多少字节）一起丢掉了 —— JSON 里的字符串在中途是没有事件的。
+   *
+   * 换成 `application/octet-stream` 之后：同样的文件传 12MB，浏览器拿到
+   * `xhr.upload.onprogress`，界面能画真实百分比。文件名走
+   * `x-quote-file-name` 头（见 `IMPORT_FILE_NAME_HEADER`）。
    */
-  app.post<{ Body: QuoteImportPreviewRequest }>(
+  app.post(
     '/api/quote/import/preview',
     {
       preHandler: requireAuth,
-      schema: { body: IMPORT_PREVIEW_BODY_SCHEMA },
-      // base64 是 4/3 膨胀，8MB 的文件约 11MB。这条路由单独放开，其他路由仍是默认值。
-      bodyLimit: 12 * 1024 * 1024,
+      // 原始字节没有 JSON schema 可校验，大小与文件名在下面按值判。
+      bodyLimit: QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX + 1024 * 1024,
     },
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply
 
-      const bytes = new Uint8Array(Buffer.from(request.body.data, 'base64'))
-      const parsed = parseQuoteFile(request.body.fileName, bytes)
+      const body = request.body
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        return reply.code(400).send({
+          error: 'empty_file',
+          message: '请求体里没有文件内容（需用 application/octet-stream 直接发字节）',
+        })
+      }
+
+      const fileName = readImportFileName(request.headers[IMPORT_FILE_NAME_HEADER])
+      if (fileName === null) {
+        return reply.code(400).send({
+          error: 'bad_file_name',
+          message: `缺少文件名（${IMPORT_FILE_NAME_HEADER}），无法判断该用哪个识别器`,
+        })
+      }
+
+      const startedAt = Date.now()
+      const bytes = new Uint8Array(body)
+      const parsed = parseQuoteFile(fileName, bytes)
       if (!parsed.ok) return sendImportFailure(reply, parsed.reason, parsed.message)
+
+      // 这条日志是给下一次「又超时了」用的。把「收了多少字节」与「解析花了多久」
+      // 分开记，下次不必再从界面上一句笼统的错误往回猜是哪一段慢。
+      request.log.info(
+        {
+          bytes: body.length,
+          fileName,
+          parseMs: Date.now() - startedAt,
+          rows: parsed.value.rows.length,
+        },
+        'quote import preview',
+      )
 
       reply.header('cache-control', 'no-store')
       return {
-        fileName: request.body.fileName,
+        fileName,
         format: parsed.value.format,
         total: parsed.value.rows.length,
         rows: parsed.value.rows.slice(0, QUOTE_LIMITS.IMPORT_PREVIEW_ROWS),

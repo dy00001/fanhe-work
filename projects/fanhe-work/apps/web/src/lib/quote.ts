@@ -15,7 +15,6 @@ import type {
   QuoteImageMutationResponse,
   QuoteImportApplyRequest,
   QuoteImportApplyResponse,
-  QuoteImportPreviewResponse,
   QuoteItemDto,
   QuoteItemResponse,
   QuoteItemStatus,
@@ -49,7 +48,6 @@ import {
   quoteCategoriesRequest,
   quoteImageRequest,
   quoteImportApplyRequest,
-  quoteImportPreviewRequest,
   quoteItemRequest,
   quoteMetaRequest,
   quoteRevisionsRequest,
@@ -390,29 +388,13 @@ export function deleteQuoteItem(input: DeleteQuoteItemRequest): Promise<{
   return withAccessToken((token) => deleteQuoteItemRequest(token, input, getQuoteUnlockToken()))
 }
 
-/**
- * File → 纯 base64。
+/*
+ * **识别（上传）这一段不在这里。**
  *
- * **不能写 `btoa(String.fromCharCode(...bytes))`**：8MB 的文件展开成 800 万个参数，
- * 直接 `RangeError: Maximum call stack size exceeded`。按 32KB 分块拼。
+ * 它必须用 XHR 才能拿到上传进度，而这一层是 `fetch` 的封装；两条路径混在一个
+ * 函数里，结果就是「有的请求有进度、有的没有」，而调用方看不出区别。识别放在
+ * `quote-import-upload.ts`（传输）与 `quote-import-task.ts`（任务状态）两处。
  */
-async function fileToBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  let binary = ''
-  const CHUNK = 0x8000
-  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK))
-  }
-  return btoa(binary)
-}
-
-/** 识别文件，**一行都不写库**。结果给确认页。 */
-export async function previewQuoteImport(file: File): Promise<QuoteImportPreviewResponse> {
-  const data = await fileToBase64(file)
-  return withAccessToken((token) =>
-    quoteImportPreviewRequest(token, { fileName: file.name, data }, getQuoteUnlockToken()),
-  )
-}
 
 export function applyQuoteImport(
   input: QuoteImportApplyRequest,

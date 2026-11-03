@@ -42,8 +42,6 @@ import type {
   QuoteImageMutationResponse,
   QuoteImportApplyRequest,
   QuoteImportApplyResponse,
-  QuoteImportPreviewRequest,
-  QuoteImportPreviewResponse,
   QuoteItemResponse,
   QuoteLedgerStatsDto,
   QuoteMetaResponse,
@@ -183,6 +181,33 @@ type RequestOptions = {
    * 与 `signal` 互斥：两者都表达「什么时候放弃等待」，同时给会互相覆盖。
    */
   timeoutMs?: number
+}
+
+/**
+ * 拼出完整的接口地址。
+ *
+ * 只给「不走 `request()`」的路径用 —— 目前是批量导入的上传：它必须用 XHR 才能拿到
+ * `upload.onprogress`，而 `fetch` 至今没有上传进度。这一层仍然只负责拼地址，
+ * 不认识令牌（令牌由调用方塞进头里）。
+ */
+export function apiEndpoint(path: string): string {
+  return `${API_BASE_URL}${path}`
+}
+
+/**
+ * 把一次非 2xx 响应收敛成 `ApiError`。
+ *
+ * `request()` 与 XHR 那条上传路径必须给出**同一套**错误文案。各写一份的结果是
+ * 「上传失败提示英文的 Payload Too Large，其它接口提示中文」，而用户会以为是两个
+ * 不同的问题。
+ */
+export function toApiError(status: number, bodyText: string, retryAfterHeader?: string): ApiError {
+  const { code, message } = readErrorPayload(parseJson(bodyText), status)
+  const retryAfterSeconds =
+    retryAfterHeader === undefined || Number.isNaN(Number(retryAfterHeader))
+      ? null
+      : Number(retryAfterHeader)
+  return new ApiError(status, code, message, retryAfterSeconds)
 }
 
 /**
@@ -1075,11 +1100,17 @@ export function createCaseUploadsRequest(
   })
 }
 
-export function deleteCaseUploadRequest(
+/**
+ * 删除一张图。**上传图与内置图同一条路径。**
+ *
+ * 旧路径是 `/api/cases/uploads/:itemId`，服务端只认上传图，内置图（`cabinet-1`）进去
+ * 一律 404 —— 这就是「已有图片删不掉」的直接原因。现在统一到 `/api/cases/items/`。
+ */
+export function deleteCaseItemRequest(
   accessToken: string,
   itemId: string,
 ): Promise<CaseLibraryResponse> {
-  return request<CaseLibraryResponse>(`/api/cases/uploads/${encodeURIComponent(itemId)}`, {
+  return request<CaseLibraryResponse>(`/api/cases/items/${encodeURIComponent(itemId)}`, {
     method: 'DELETE',
     accessToken,
   })
@@ -1685,21 +1716,6 @@ export function createQuoteItemRequest(
 }
 
 /** 识别文件，**不写库**。 */
-export function quoteImportPreviewRequest(
-  accessToken: string,
-  input: QuoteImportPreviewRequest,
-  unlockToken: string | null,
-): Promise<QuoteImportPreviewResponse> {
-  return request<QuoteImportPreviewResponse>('/api/quote/import/preview', {
-    method: 'POST',
-    body: input,
-    accessToken,
-    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
-    // 8MB 的 xlsx 转 base64 是 11MB，还要在服务端解压解析。默认 30 秒在旧机器上不够。
-    timeoutMs: 90_000,
-  })
-}
-
 export function quoteImportApplyRequest(
   accessToken: string,
   input: QuoteImportApplyRequest,

@@ -35,6 +35,9 @@ const PRODUCT = readCode(new URL('QuoteProductManager.tsx', MAINT_DIR))
 const IMPORT = readCode(new URL('QuoteImportPanel.tsx', MAINT_DIR))
 const REVISION = readCode(new URL('QuoteRevisionList.tsx', MAINT_DIR))
 const MAINT = readCode(MAINT_PATH)
+const TASK = readCode(new URL('../src/lib/quote-import-task.ts', import.meta.url))
+const UPLOAD = readCode(new URL('../src/lib/quote-import-upload.ts', import.meta.url))
+const DISPLAY = readCode(new URL('../src/lib/quote-import-display.ts', import.meta.url))
 
 test('分类区：改名、合并、排序各自接到对应的写接口', () => {
   // 改名与合并是两个动作，不是「合并 = 改名到目标」的复用：合并要把目标分类的
@@ -103,41 +106,75 @@ test('产品区：新增、改价、上下架三个动作，改价复用原接�
 })
 
 test('导入区：识别与写库是两个动作，中间那张草稿表可编辑', () => {
-  // 识别只出现一次，且必须在 `pick` 里；写库只出现一次，且必须在 `submit` 里。
-  // 两者混在一起（例如 pick 里顺带 apply）就等于「选错文件 = 灌一批错行」。
-  const pickBody = IMPORT.slice(
-    IMPORT.indexOf('async function pick'),
-    IMPORT.indexOf('function patchRow'),
-  )
-  // `patchRow` 在 `submit` **前面**，所以这里不能拿它当右边界（会切出空串，断言假绿）。
-  // 用「下一个顶层 function」当边界。
-  const submitStart = IMPORT.indexOf('async function submit')
-  const submitBody = IMPORT.slice(submitStart, IMPORT.indexOf('\nfunction ', submitStart))
-
-  assert.ok(pickBody.includes('previewQuoteImport('), '选文件之后没有调识别接口')
+  // 识别只经由 `startImportUpload`，写库只经由 `submitImportTask`；两个动作都在
+  // `lib/quote-import-task.ts` 里，面板只负责画。混在一起（例如选文件时顺带写库）
+  // 就等于「选错文件 = 灌一批错行」，且不可逆。
+  assert.ok(IMPORT.includes('startImportUpload(file)'), '选文件之后没有调识别')
   assert.ok(
-    !pickBody.includes('applyQuoteImport('),
-    '识别这一步就在写库了。识别一定会错（合并单元格、备注带逗号、PDF 列靠猜），' +
-      '而导入不可逆 —— 中间那张可编辑草稿表是唯一的安全阀。',
+    !IMPORT.includes('applyQuoteImport('),
+    '面板自己调了写库接口。写库必须只在「确认导入」之后发生。',
   )
-  assert.ok(submitBody.includes('applyQuoteImport('), '「确认导入」没有调写库接口')
+  assert.ok(IMPORT.includes('submitImportTask()'), '「确认导入」没有接写库')
 
   assert.equal(
-    IMPORT.split('applyQuoteImport(').length - 1,
+    TASK.split('applyQuoteImport(').length - 1,
     1,
     '写库接口出现了不止一处。只要有一处在识别路径上，选错文件就会被直接写进库。',
   )
 
-  // 草稿表必须能改：`patchRow` 是唯一入口，且分类 / 名称 / 价格都接了它。
+  // 草稿表必须能改：`patchImportRow` 是唯一入口，且分类 / 名称 / 价格都接了它。
   for (const field of ['category', 'name', 'priceText', 'model', 'spec', 'unit']) {
     assert.ok(
-      IMPORT.includes(`patchRow(index, { ${field}: value })`),
+      IMPORT.includes(`patchImportRow(index, { ${field}: value })`),
       `草稿表的「${field}」列不可编辑。识别错的行只能删掉重导，而删掉就丢了这一行。`,
     )
   }
+  assert.ok(IMPORT.includes('removeImportRow(index)'), '草稿表没有删行入口')
 
   // 逐行显示源行号：核对时人要能回到原文件那一行。
   assert.ok(IMPORT.includes('row.sourceLine'), '草稿表没有显示源文件行号，核对时无从对照')
+})
+
+test('导入区：任务状态在组件外，切页面不中断也不丢结果', () => {
+  // 2026-11-03 的现场：上传途中切到别的页面，回来是一片空白。原因是 preview / rows
+  // 这些都挂在组件的 useState 上，组件卸载就跟着走 —— 而请求还在飞，结果没人接。
+  assert.ok(!IMPORT.includes('useState<QuoteImportPreview'), '面板又把识别结果放回组件状态了')
+  assert.ok(IMPORT.includes('useSyncExternalStore('), '面板没有订阅外部任务状态')
+
+  // 状态必须活在模块级：`let state` 在模块作用域，且这个文件里不许出现 useState
+  // （一旦出现，说明有第二份状态，两份迟早会不一致）。
+  assert.ok(TASK.includes('let state: QuoteImportState'), '任务状态不在模块级')
+  assert.ok(!TASK.includes('useState'), '任务模块里出现了组件状态，说明有两份真相')
+
+  // 超限文件必须**一个字节都不发**。旧实现照传 17MB 之后才被服务端拒掉，最终界面
+  // 上写的是「服务器超时」，与真实原因（文件太大）毫无关系。
+  assert.ok(TASK.includes('validateImportFile(file)'), '选文件时没有前置校验')
+  assert.ok(
+    TASK.indexOf('validateImportFile(file)') < TASK.indexOf('uploadQuoteImportFile('),
+    '前置校验在发请求之后，等于没有',
+  )
+  assert.ok(
+    DISPLAY.includes('QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX'),
+    '前置校验没有用共享上限常量，两边会漂开',
+  )
+
+  // 上传用原始字节 + XHR：这是拿到真实百分比的唯一办法，也顺手去掉 base64 的 40% 膨胀。
+  assert.ok(UPLOAD.includes('upload.onprogress'), '上传没有接进度事件，界面只能转圈')
+  assert.ok(
+    UPLOAD.includes('application/octet-stream'),
+    '上传用的还是 JSON + base64，体积多 40% 且没有进度',
+  )
+  assert.ok(
+    UPLOAD.includes("'x-quote-file-name'"),
+    '文件名没有走请求头。服务端靠扩展名选识别器，缺了就只能回 400。',
+  )
+  assert.ok(IMPORT.includes('role="progressbar"'), '上传/识别期间没有画进度条')
+
+  // 「识别中」那一段不许编百分比：服务端一次请求一个结果，中间没有刻度。
+  assert.ok(
+    IMPORT.includes("phase === 'uploading' && percent !== null"),
+    '识别阶段也画了确定态百分比。给不出来的数字就是假进度。',
+  )
 })
 
 test('变更记录面板仍在，且别的区改完能刷新它', () => {
@@ -170,7 +207,6 @@ test('每个写操作都带口令头，读接口不带', () => {
     'mergeQuoteCategoryRequest',
     'reorderQuoteCategoriesRequest',
     'createQuoteItemRequest',
-    'quoteImportPreviewRequest',
     'quoteImportApplyRequest',
   ]) {
     const start = api.indexOf(`export function ${fn}(`)
@@ -183,6 +219,13 @@ test('每个写操作都带口令头，读接口不带', () => {
       `${fn} 没有带 x-quote-unlock。不带就是「口令过期了也照写」，而界面上看不出区别。`,
     )
   }
+
+  // 导入的上传那条不走 `request()`（要用 XHR 拿进度），口令头在它自己的模块里。
+  assert.ok(
+    UPLOAD.includes("'x-quote-unlock'"),
+    '上传没有带 x-quote-unlock。口令过期时会得到 403，而界面拿不到原因。',
+  )
+  assert.ok(UPLOAD.includes('authorization'), '上传没有带 authorization，服务端只会回 401。')
 
   // 分类清单是唯一例外：它挂在读权限上，看目录不该要口令。
   const readStart = api.indexOf('export function quoteCategoriesRequest(')
