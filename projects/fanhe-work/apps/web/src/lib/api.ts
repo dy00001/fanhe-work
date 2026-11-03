@@ -40,7 +40,9 @@ import type {
   QuoteAccessStateResponse,
   QuoteImageMutationResponse,
   QuoteItemResponse,
+  QuoteLedgerStatsDto,
   QuoteMetaResponse,
+  QuoteRevisionListResponse,
   QuoteSearchResponse,
   QuoteSource,
   QuoteUnlockResponse,
@@ -1315,6 +1317,21 @@ export function quoteMetaRequest(accessToken: string): Promise<QuoteMetaResponse
 
 export function quoteItemRequest(accessToken: string, code: string): Promise<QuoteItemResponse> {
   return request<QuoteItemResponse>(`/api/quote/items/${encodeURIComponent(code)}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function quoteStatsRequest(accessToken: string): Promise<QuoteLedgerStatsDto> {
+  return request<QuoteLedgerStatsDto>('/api/quote/stats', { method: 'GET', accessToken })
+}
+
+export function quoteRevisionsRequest(
+  accessToken: string,
+  limit: number,
+): Promise<QuoteRevisionListResponse> {
+  const search = new URLSearchParams({ limit: String(limit) })
+  return request<QuoteRevisionListResponse>(`/api/quote/revisions?${search.toString()}`, {
     method: 'GET',
     accessToken,
   })

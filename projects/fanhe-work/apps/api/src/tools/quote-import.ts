@@ -44,6 +44,12 @@ type DatasetItem = {
   name: string
   model: string
   spec: string
+  /** 条目号（`A001` / `B001` / `C001`）。由 build_dataset.py 按来源编号。 */
+  ledgerNo: string
+  /** 计价方式。只有销售表有，工艺/五金是空串。 */
+  pricingMode: string
+  /** 可选花色。只有 15 条木皮类有值。 */
+  materials: string
   unit: string
   unitRaw: string
   priceKind: string
@@ -88,6 +94,9 @@ const COLUMN_MAX = {
   priceText: 200,
   note: 400,
   code: 64,
+  ledgerNo: 12,
+  pricingMode: 40,
+  materials: 300,
 } as const
 
 const KNOWN_PRICE_KINDS = new Set<string>(QUOTE_PRICE_KINDS)
@@ -238,6 +247,9 @@ async function main(): Promise<void> {
           name: clip(item.name, COLUMN_MAX.name),
           model: clip(item.model, COLUMN_MAX.model),
           spec: clip(item.spec, COLUMN_MAX.spec),
+          ledgerNo: clip(item.ledgerNo ?? '', COLUMN_MAX.ledgerNo),
+          pricingMode: clip(item.pricingMode ?? '', COLUMN_MAX.pricingMode),
+          materials: clip(item.materials ?? '', COLUMN_MAX.materials),
           unit: clip(item.unit, COLUMN_MAX.unit),
           unitRaw: clip(item.unitRaw, COLUMN_MAX.unitRaw),
           priceKind: item.priceKind,
@@ -336,10 +348,27 @@ async function main(): Promise<void> {
     imagesWritten += 1
   }
 
-  // ---- 条目 → 图：只补空 ----
+  // ---- 条目 → 图：按台账回写，但不动手工图 ----
   //
-  // 已经指向某张图的条目不动。exact 情形的键恒等于 code，family 情形的键在同族内
-  // 不变 —— 也就是说「补空」之后不会再变，不需要每轮重设。
+  // 早期这里是「只补空」（`where: { code, imageKey: null }`）。它确实保证了手工换的
+  // 图不被顶掉，但副作用是**台账撤销绑定后库里还留着旧图** —— 条目的 `imageKey`
+  // 永远回不到 null，于是维护面板上「同产品继承」比台账多几条、「无图」少几条，
+  // 而且没有任何报错。
+  //
+  // 现在按台账真值回写，唯一例外是「当前指向的是手工上传的图」：那张图台账里没有，
+  // 导入不该覆盖它。`uploadedBy` 非空就是手工（导进来的图这一列恒为 null）。
+  const manualKeys = new Set(
+    activeImages.filter((row) => row.uploadedBy !== null).map((row) => row.imageKey),
+  )
+  const currentKeys = new Map(
+    (
+      await prisma.quoteItem.findMany({
+        where: { imageKey: { not: null } },
+        select: { code: true, imageKey: true },
+      })
+    ).map((row) => [row.code, row.imageKey]),
+  )
+  let bindingsWritten = 0
   for (const item of dataset.items) {
     const code = codeOf.get(`${item.rawKey}\u001f${item.occurrence}`)!
     const target =
@@ -351,17 +380,29 @@ async function main(): Promise<void> {
           name: item.name,
         }),
       )
-    const imageKey = target?.imageKey ?? null
-    if (imageKey === null) continue
-    await prisma.quoteItem.updateMany({
-      where: { code, imageKey: null },
-      data: { imageKey },
-    })
+    const nextKey = target?.imageKey ?? null
+    const currentKey = currentKeys.get(code) ?? null
+    if (currentKey !== null && manualKeys.has(currentKey)) continue
+    if (currentKey === nextKey) continue
+    await prisma.quoteItem.update({ where: { code }, data: { imageKey: nextKey } })
+    bindingsWritten += 1
   }
 
-  await prisma.quoteDataset.create({
-    data: {
+  // 版本号是内容指纹，同一份台账重复导入得到同一个版本。**因此这里必须是 upsert
+  // 而不是 create**：`--force` 重导同一份数据时，create 会撞 `version` 唯一键并把
+  // 整个导入停在最后一步（前面的条目和图都已经写好了，看起来像「导了一半」）。
+  await prisma.quoteDataset.upsert({
+    where: { version },
+    create: {
       version,
+      itemCount: dataset.items.length,
+      imageCount: imageTargets.size,
+      addedCount: added,
+      changedCount: changed,
+      archivedCount: archived.count,
+      sourceNote: clip(dataset.sourceNote ?? '', 300),
+    },
+    update: {
       itemCount: dataset.items.length,
       imageCount: imageTargets.size,
       addedCount: added,
@@ -376,6 +417,9 @@ async function main(): Promise<void> {
     `条目 ${dataset.items.length}：新增 ${added} / 变更 ${changed} / 归档 ${archived.count}`,
   )
   console.log(`图片 ${imageTargets.size}：写入 ${imagesWritten} / 跳过 ${imagesSkipped}`)
+  if (bindingsWritten > 0) {
+    console.log(`条目↔图绑定按台账回写 ${bindingsWritten} 条（手工图不动）`)
+  }
   if (bindingMisses > 0) {
     console.warn(`有 ${bindingMisses} 张图找不到对应的条目 —— 业务键规则可能被改过。`)
   }

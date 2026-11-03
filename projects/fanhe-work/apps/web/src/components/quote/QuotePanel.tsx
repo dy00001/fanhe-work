@@ -69,8 +69,8 @@ import { QuoteResultTable } from './QuoteResultTable'
  * ## 一次取满一页，没有翻页器
  *
  * 静态稿的 `LIMIT = 200`、超出时页脚写「请输入更精确的关键字」。这里照同一形态，
- * 只是把 200 换成接口的单页上限（{@link QUOTE_LIMITS.PAGE_SIZE_MAX}）—— 翻页器是
- * 参考页里没有的控件，自己加一个就不叫一比一了。
+ * 上限直接用接口的 {@link QUOTE_LIMITS.PAGE_SIZE_MAX}（同为 200）—— 翻页器是参考页里
+ * 没有的控件，自己加一个就不叫一比一了。
  */
 const LIMIT = QUOTE_LIMITS.PAGE_SIZE_MAX
 
@@ -490,7 +490,12 @@ export function QuotePanel({
         style={{
           position: 'fixed',
           inset: 0,
-          zIndex: 80,
+          /* 46，不是 80。面板要盖住侧栏（侧栏最高 z-45），但**必须低于 Radix 对话框的
+             z-50** —— 价格维护面板与口令门都是 Dialog，遮罩压在它们上面时，对话框
+             确实打开了（DOM 里有、焦点也在里面），只是整块被盖住，屏幕上什么都看不见。
+             静态稿没有这个问题：它所有 overlay 都是同一个 z，靠 DOM 顺序决定前后。
+             这条是 2026-11-03 现场踩到的。 */
+          zIndex: 46,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

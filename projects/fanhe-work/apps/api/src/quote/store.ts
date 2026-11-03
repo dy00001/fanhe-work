@@ -8,8 +8,11 @@ import {
   type QuoteImageDto,
   type QuoteItemDto,
   type QuoteItemStatus,
+  type QuoteLedgerStatsDto,
   type QuoteMetaResponse,
   type QuotePriceKind,
+  type QuoteRevisionDto,
+  type QuoteRevisionListResponse,
   type QuoteSource,
   type QuoteBindType,
 } from '@fanhe/shared'
@@ -87,6 +90,33 @@ async function bumpDataset(note: string): Promise<string> {
   return version
 }
 
+/**
+ * 条目列白名单。列表、详情、改价回写、状态回写四处共用同一份。
+ *
+ * 以前这四个 `select` 各抄一遍，加一个字段要改四处，漏一处的表现是「详情页有、
+ * 列表里空」或者「改完价那一次的响应少一个字段」—— 都不报错。
+ */
+const ITEM_SELECT = {
+  code: true,
+  source: true,
+  category: true,
+  name: true,
+  model: true,
+  spec: true,
+  ledgerNo: true,
+  pricingMode: true,
+  materials: true,
+  unit: true,
+  unitRaw: true,
+  priceKind: true,
+  priceFen: true,
+  priceText: true,
+  note: true,
+  status: true,
+  imageKey: true,
+  updatedAt: true,
+} as const
+
 /** 数据库行 → 契约 DTO。图片相关的两列由调用方补，避免每处都写一遍 join。 */
 function toItemDto(
   row: {
@@ -96,6 +126,9 @@ function toItemDto(
     name: string
     model: string
     spec: string
+    ledgerNo: string
+    pricingMode: string
+    materials: string
     unit: string
     unitRaw: string
     priceKind: string
@@ -119,6 +152,9 @@ function toItemDto(
     name: row.name,
     model: row.model,
     spec: row.spec,
+    ledgerNo: row.ledgerNo,
+    pricingMode: row.pricingMode,
+    materials: row.materials,
     unit: row.unit,
     unitRaw: row.unitRaw,
     priceKind: row.priceKind as QuotePriceKind,
@@ -225,26 +261,16 @@ export async function searchItems(query: QuoteSearchQuery): Promise<{
       where,
       // 排序按「来源 → 分类 → 名称 → 规格」：同名多行（拉篮按宽度分行）必须排在
       // 一起，否则搜出来的结果看起来像随机顺序。
-      orderBy: [{ source: 'asc' }, { category: 'asc' }, { name: 'asc' }, { spec: 'asc' }],
+      // 按条目号排 = 按台账顺序。前缀 A/B/C 的字母序恰好就是销售 → 工艺 → 五金，
+      // 所以单键就够，不用再叠 `source`。
+      //
+      // 以前按「来源 → 分类 → 名称 → 规格」排：同名多行确实会挨在一起，但整体顺序
+      // 与台账对不上 —— 销售翻着一张纸质台账问「这一行多少钱」，界面上找不到对应位置。
+      // `code` 作为第二键，兜住「还没重导、ledger_no 为空」的旧行（会排在最前）。
+      orderBy: [{ ledgerNo: 'asc' }, { code: 'asc' }],
       take: query.limit,
       skip: query.offset,
-      select: {
-        code: true,
-        source: true,
-        category: true,
-        name: true,
-        model: true,
-        spec: true,
-        unit: true,
-        unitRaw: true,
-        priceKind: true,
-        priceFen: true,
-        priceText: true,
-        note: true,
-        status: true,
-        imageKey: true,
-        updatedAt: true,
-      },
+      select: ITEM_SELECT,
     }),
   ])
 
@@ -271,23 +297,7 @@ export async function getItem(code: string): Promise<{
     getLatestDataset(),
     prisma.quoteItem.findUnique({
       where: { code },
-      select: {
-        code: true,
-        source: true,
-        category: true,
-        name: true,
-        model: true,
-        spec: true,
-        unit: true,
-        unitRaw: true,
-        priceKind: true,
-        priceFen: true,
-        priceText: true,
-        note: true,
-        status: true,
-        imageKey: true,
-        updatedAt: true,
-      },
+      select: ITEM_SELECT,
     }),
   ])
   if (row === null) return null
@@ -360,6 +370,119 @@ export async function getMeta(): Promise<QuoteMetaResponse> {
     categories,
     hasSecret: secret !== null,
   }
+}
+
+/**
+ * 台账现状统计。价格维护面板第 4 节那排 Pill 用它。
+ *
+ * ## 为什么不能读导入时写的那份 counts
+ *
+ * `quote_datasets` 里确实有一份 `imageBindExact` / `imageBindFamily`，但那是**导入
+ * 那一刻**的快照。界面上传图、换图、解绑、停用都不经过导入器，快照立刻过期 ——
+ * 而这一排数字存在的意义恰恰是回答「现在图绑得怎么样」。给一个导入当天的旧值，
+ * 比给空更糟：它看起来是对的。
+ *
+ * ## 三条 groupBy，不用逐条查
+ *
+ * 条目侧按 `source + imageKey` 分组，图侧按 `imageKey + bindType` 分组，两边在内存
+ * 里对一次。1225 条的规模下这就是三次索引扫描；逐条查会变成 1225 次。
+ */
+export async function getLedgerStats(): Promise<QuoteLedgerStatsDto> {
+  const [itemGroups, imageGroups] = await Promise.all([
+    prisma.quoteItem.groupBy({
+      by: ['source', 'imageKey'],
+      where: { status: 'active' },
+      _count: { _all: true },
+    }),
+    prisma.quoteItemImage.groupBy({
+      by: ['imageKey', 'bindType'],
+      where: { isActive: true },
+      _count: { _all: true },
+    }),
+  ])
+
+  // imageKey → 绑定档位。同一个 key 理论上只会有一个档位（同一张图不可能既是
+  // exact 又是 family），真出现多档时取先到的那个 —— 这只是兜底，不是正常路径。
+  const bindOf = new Map<string, string>()
+  for (const group of imageGroups) {
+    if (!bindOf.has(group.imageKey)) bindOf.set(group.imageKey, group.bindType)
+  }
+
+  let exact = 0
+  let family = 0
+  let manual = 0
+  let noImage = 0
+  const referenced = new Set<string>()
+
+  for (const group of itemGroups) {
+    const count = group._count._all
+    if (group.imageKey === null) {
+      // 销售与工艺本来就不配图（629 条），把它们算进「无图」会让分母失去意义。
+      if (group.source === 'hardware') noImage += count
+      continue
+    }
+    referenced.add(group.imageKey)
+    const bind = bindOf.get(group.imageKey)
+    if (bind === 'exact') exact += count
+    else if (bind === 'family') family += count
+    else if (bind === 'manual') manual += count
+  }
+
+  // 有图、但一条条目都没指向它 —— 换图或停用之后留下的孤儿。这些图不该被清掉
+  // （审计要能回看），但数量得让人看见，否则会一直悄悄涨。
+  let unbound = 0
+  for (const key of bindOf.keys()) {
+    if (!referenced.has(key)) unbound += 1
+  }
+
+  return { exact, family, manual, noImage, imageFiles: bindOf.size, unbound }
+}
+
+/**
+ * 最近的改价 / 停用 / 换图记录。价格维护面板第 6 节用它。
+ *
+ * 表里只存了 `itemCode` 与 `operatorId`，没有外键关系 —— 条目被归档、账号被删之后
+ * 这两列仍然指向不存在的行。所以这里用两条 `IN` 补齐显示名，缺了就退回 code 与
+ * 「未知」，**不做内连接**：内连接会让「条目已归档」的那条记录从审计里消失，而
+ * 审计最不该丢掉的就是这类记录。
+ */
+export async function listRevisions(limit: number): Promise<QuoteRevisionListResponse> {
+  const rows = await prisma.quoteRevision.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  })
+  if (rows.length === 0) return { items: [] }
+
+  const codes = [...new Set(rows.map((row) => row.itemCode))]
+  const operatorIds = [...new Set(rows.map((row) => row.operatorId))]
+
+  const [items, users] = await Promise.all([
+    prisma.quoteItem.findMany({
+      where: { code: { in: codes } },
+      select: { code: true, name: true },
+    }),
+    prisma.user.findMany({
+      where: { id: { in: operatorIds } },
+      select: { id: true, displayName: true },
+    }),
+  ])
+
+  const nameOf = new Map(items.map((item) => [item.code, item.name]))
+  const userOf = new Map(users.map((user) => [user.id, user.displayName]))
+
+  const list: QuoteRevisionDto[] = rows.map((row) => ({
+    id: row.id,
+    itemCode: row.itemCode,
+    itemName: nameOf.get(row.itemCode) ?? '',
+    field: row.field,
+    oldValue: row.oldValue ?? '',
+    newValue: row.newValue ?? '',
+    operatorName: userOf.get(row.operatorId) ?? '未知',
+    reason: row.reason ?? '',
+    createdAt: row.createdAt.toISOString(),
+  }))
+
+  return { items: list }
 }
 
 export type QuoteImageBytes = {
@@ -465,23 +588,7 @@ export async function updateItemPrice(
         priceText: nextText,
         datasetVersion: version,
       },
-      select: {
-        code: true,
-        source: true,
-        category: true,
-        name: true,
-        model: true,
-        spec: true,
-        unit: true,
-        unitRaw: true,
-        priceKind: true,
-        priceFen: true,
-        priceText: true,
-        note: true,
-        status: true,
-        imageKey: true,
-        updatedAt: true,
-      },
+      select: ITEM_SELECT,
     }),
     prisma.quoteRevision.create({
       data: {
@@ -539,23 +646,7 @@ export async function setItemStatus(
     prisma.quoteItem.update({
       where: { code },
       data: { status, datasetVersion: version },
-      select: {
-        code: true,
-        source: true,
-        category: true,
-        name: true,
-        model: true,
-        spec: true,
-        unit: true,
-        unitRaw: true,
-        priceKind: true,
-        priceFen: true,
-        priceText: true,
-        note: true,
-        status: true,
-        imageKey: true,
-        updatedAt: true,
-      },
+      select: ITEM_SELECT,
     }),
     prisma.quoteRevision.create({
       data: {

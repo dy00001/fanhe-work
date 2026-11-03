@@ -136,6 +136,13 @@ export function QuoteResultTable({
                     {item.note.length > 62 ? `${item.note.slice(0, 62)}…` : item.note}
                   </div>
                 )}
+                {/* 计价方式单独一行，排在备注之后 —— 静态稿 1111–1112 行就是这个次序。
+                    它是「这条按什么算」，属于补充信息，不该抢在名称上面。 */}
+                {item.pricingMode !== '' && (
+                  <div className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground-weak">
+                    {item.pricingMode}
+                  </div>
+                )}
               </td>
 
               <td className={TD}>

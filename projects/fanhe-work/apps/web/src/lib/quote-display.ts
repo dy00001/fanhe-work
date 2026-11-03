@@ -171,6 +171,46 @@ function formatLocalMinute(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** 变更记录的时间列。与数据集那一行同一个格式，读的人不用在两套写法之间换算。 */
+export function formatRevisionTime(iso: string): string {
+  return formatLocalMinute(iso)
+}
+
+/**
+ * 一条变更记录的「旧值 → 新值」怎么读。
+ *
+ * 库里存的是**写入那一刻的展示文本**（`describePrice` 的输出），不是结构化的金额 ——
+ * 所以这里不再二次格式化，只把三种字段各自的语义翻译出来：
+ *
+ * - `price`：原样搬，空值写「—」/「待补价」，因为「从有价变成待补价」本身就是一次
+ *   有意义的变更，不能显示成空白；
+ * - `status`：`active` / `archived` 对读的人没意义，翻成「在售 / 停用」；
+ * - `image`：存的是 imageKey（32 位十六进制），显示出来只是一串乱码，翻成
+ *   「原图 → 新图」「原图 → 已解绑」。图本身可以去详情栏看，这里不需要还原 key。
+ */
+export function describeRevisionChange(
+  field: string,
+  oldValue: string,
+  newValue: string,
+): { before: string; after: string } {
+  if (field === 'status') {
+    return {
+      before: oldValue === 'archived' ? '停用' : '在售',
+      after: newValue === 'archived' ? '停用' : '在售',
+    }
+  }
+  if (field === 'image') {
+    return {
+      before: oldValue === '' ? '无图' : '原图',
+      after: newValue === '' ? '已解绑' : '新图',
+    }
+  }
+  return {
+    before: oldValue === '' ? '—' : oldValue,
+    after: newValue === '' ? '待补价' : newValue,
+  }
+}
+
 /**
  * 解锁状态的文案。
  *

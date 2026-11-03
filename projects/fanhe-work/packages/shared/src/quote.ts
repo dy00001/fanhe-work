@@ -35,9 +35,22 @@ export const QUOTE_SOURCES = ['sale', 'craft', 'hardware'] as const
 export type QuoteSource = (typeof QUOTE_SOURCES)[number]
 
 export const QUOTE_SOURCE_NAMES: Record<QuoteSource, string> = {
-  sale: '销售查价',
-  craft: '板式工艺',
-  hardware: '诺米 / 百隆五金',
+  sale: '销售查价系统',
+  craft: '板式工艺收费',
+  hardware: '诺米/百隆五金',
+}
+
+/**
+ * 来源的短名。**只在空间不够的地方用**：首页卡底部那行「1225 条 · 柜体 · 工艺 · 五金」
+ * 与结果浮层每行末尾的出处。全名在那里会把 560px 的浮层挤成两行。
+ *
+ * 短名与全名的关系是「这一类是什么」对「这张表叫什么」，不是缩写 —— 所以
+ * `hardware` 是「五金」而不是「诺米」：五金里同时有诺米和百隆两家。
+ */
+export const QUOTE_SOURCE_SHORT: Record<QuoteSource, string> = {
+  sale: '柜体',
+  craft: '工艺',
+  hardware: '五金',
 }
 
 /** 图片绑定方式。`exact` 是这一行自己的图，`family` 是同一产品族继承来的。 */
@@ -47,8 +60,13 @@ export type QuoteBindType = (typeof QUOTE_BIND_TYPES)[number]
 export const QUOTE_LIMITS = {
   /** 搜索词长度上限。再长就不是「查价」而是「读表」。 */
   QUERY_MAX: 60,
-  /** 一页最多返回多少条。1225 条全量下发会让首屏多下 180KB，且搜「板」能命中几百条。 */
-  PAGE_SIZE_MAX: 100,
+  /**
+   * 一页最多返回多少条。
+   *
+   * 200 是照静态稿的 `LIMIT`：1225 条全量下发会让首屏多下 180KB，且搜「板」能命中
+   * 几百条；200 条大约覆盖「搜一个常用词」的全部结果，再多就该让人把词打准一点。
+   */
+  PAGE_SIZE_MAX: 200,
   PAGE_SIZE_DEFAULT: 30,
   /** 改价理由。留空允许，但写明更好 —— 审计里只有这一栏能解释「为什么改」。 */
   REASON_MAX: 200,
@@ -85,6 +103,22 @@ export type QuoteItemDto = {
   /** 型号。柜体类 571 条没有型号，这里是空串而不是 null。 */
   model: string
   spec: string
+  /**
+   * 条目号：台账里的「第几行」，形如 `A001`（销售）/ `B001`（工艺）/ `C001`（五金）。
+   *
+   * 它只用来跟纸质台账对号，不参与查表 —— 真正的键是 `code`。前端**必须**用它而
+   * 不是列表下标：一筛选，下标全变。
+   */
+  ledgerNo: string
+  /**
+   * 计价方式（`投影面积` / `拉手` / `石材` …）。只有销售那 571 条有，其余空串。
+   *
+   * **不是备注。** 它决定「单价乘以什么」，详情页单独成行、报价文本里也在括号中
+   * 带上；早期导入把它拼进了 note 前缀，界面上的这一栏因此是空的。
+   */
+  pricingMode: string
+  /** 可选花色。只有 15 条木皮类有值，最长 96 字。空串表示这款没有可选花色。 */
+  materials: string
   /** 归一后的单位（`㎡` / `米` / `个` …）。 */
   unit: string
   /** 台账原文单位。归一只是为了让同一件事能排在一起，展示仍以原文为准。 */
@@ -145,6 +179,48 @@ export type QuoteItemResponse = {
   version: string
   item: QuoteItemDto
   image: QuoteImageDto | null
+}
+
+/**
+ * 台账现状统计。价格维护面板第 4 节那排数字用它。
+ *
+ * **从库里实时算，不从导入时的快照读。** 导入器确实会在 `counts` 里写一份，但人工
+ * 换图、手工上传、停用都会让那份快照过期 —— 而这一排数字存在的意义正是回答「现在
+ * 图绑得怎么样」。给一个导入当天的旧值，比不给更糟。
+ */
+export type QuoteLedgerStatsDto = {
+  /** 精确绑定：这一行在台账里有自己的图。 */
+  exact: number
+  /** 同产品继承：同名块首行有图，本行继承它的图。 */
+  family: number
+  /** 手工上传：界面上传、台账里没有的。 */
+  manual: number
+  /** 五金里没有图的条数。只统计 hardware —— 销售与工艺本来就不配图。 */
+  noImage: number
+  /** 图文件数（活跃行按 imageKey 去重）。 */
+  imageFiles: number
+  /** 图文件里没有任何条目引用的。 */
+  unbound: number
+}
+
+/** 一条改价 / 停用 / 换图记录。追加写，不可改不可删。 */
+export type QuoteRevisionDto = {
+  id: string
+  itemCode: string
+  /** 条目名，按 `itemCode` join 出来。条目已归档时是空串。 */
+  itemName: string
+  /** 变更的字段。 */
+  field: 'price' | 'status' | 'image' | string
+  oldValue: string
+  newValue: string
+  /** 操作人显示名。账号已删时为 `未知`。 */
+  operatorName: string
+  reason: string
+  createdAt: string
+}
+
+export type QuoteRevisionListResponse = {
+  items: readonly QuoteRevisionDto[]
 }
 
 /**

@@ -515,7 +515,12 @@ export function LaunchSection() {
                 编成独立属性 `translate`，`transform:none` 抹不掉它（2026-11-02 第二次踩到）。 */}
             <DialogContent
               showCloseButton={false}
-              className="w-[min(1180px,94vw)] max-w-none gap-0 rounded-[18px] border-0 bg-transparent p-0 shadow-none"
+              /* 宽度走内联样式，不用 `w-[min(1180px,94vw)]`。任意值里带 `min()`
+                 时，只要有一个字符不合 Tailwind 的解析规则，整条类名就被静默丢掉，
+                 宽度退成 auto —— 表现是面板从视口右半边开始、右边缘跑到屏幕外
+                 （2026-11-03 现场截图确认）。给 CSS 更稳，也省得记哪些写法能用。 */
+              style={{ width: 'min(1180px, calc(100vw - 56px))' }}
+              className="max-w-none gap-0 rounded-[18px] border-0 bg-transparent p-0 shadow-none"
             >
               <QuotePanel
                 variant="dialog"

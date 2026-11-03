@@ -1,6 +1,19 @@
-import type { QuoteAccessStateResponse, QuoteMetaResponse } from '@fanhe/shared'
+import type {
+  QuoteAccessStateResponse,
+  QuoteLedgerStatsDto,
+  QuoteMetaResponse,
+  QuoteRevisionDto,
+} from '@fanhe/shared'
+import { useEffect, useState } from 'react'
+
+import { loadQuoteRevisions, loadQuoteStats } from '../../lib/quote'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { describeDataset, minutesUntil } from '../../lib/quote-display'
+import {
+  describeDataset,
+  describeRevisionChange,
+  formatRevisionTime,
+  minutesUntil,
+} from '../../lib/quote-display'
 
 /**
  * 价格维护。**结构与文案对齐静态稿 `.maint`（第三视图）：六节 + 页脚。**
@@ -59,9 +72,9 @@ const MAPPING = [
     'category / name / price_text / note',
     '含倍率、每米、区间者不折算，原样入 price_text',
   ],
-  ['诺米 / 百隆五金', 'sheet 名', 'category（系列）', '18 个 sheet 各自成一个系列'],
+  ['诺米/百隆五金', 'sheet 名', 'category（系列）', '18 个 sheet 各自成一个系列'],
   [
-    '诺米 / 百隆五金',
+    '诺米/百隆五金',
     '产品名称（合并）/ 型号 / 规格 / 单价',
     'name / model / spec / price',
     '名称向下填充；主架型号 + 篮体型号拼为 model',
@@ -131,6 +144,33 @@ export function QuoteMaintPanel({
     access !== null && (access.direct || (remaining !== null && remaining > 0))
       ? 'bg-[color-mix(in_srgb,var(--m-teal)_11%,transparent)] text-m-teal border-[color-mix(in_srgb,var(--m-teal)_22%,transparent)]'
       : 'bg-[color-mix(in_srgb,var(--m-amber)_12%,transparent)] text-m-amber border-[color-mix(in_srgb,var(--m-amber)_24%,transparent)]'
+
+  const [stats, setStats] = useState<QuoteLedgerStatsDto | null>(null)
+  const [revisions, setRevisions] = useState<QuoteRevisionDto[] | null>(null)
+
+  // 打开时才取。这两组数字要扫全表，挂在面板外面等于每次查价都付一次代价。
+  //
+  // 失败一律吞成 null：维护面板的正文是说明文档，统计与记录只是附加信息，
+  // 取不到时留空比弹一个错误提示更合适 —— 这里不是数据页，没有「重试」的语义。
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    void Promise.all([loadQuoteStats(), loadQuoteRevisions(12)])
+      .then(([nextStats, nextRevisions]) => {
+        if (!alive) return
+        setStats(nextStats)
+        setRevisions([...nextRevisions.items])
+      })
+      .catch(() => {
+        if (alive) {
+          setStats(null)
+          setRevisions(null)
+        }
+      })
+    return () => {
+      alive = false
+    }
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -238,15 +278,25 @@ export function QuoteMaintPanel({
 
           <Section title="4. 商品图维护">
             <p className="mb-3.5 text-[12.5px] text-muted-foreground">
-              图片不做独立一份图库，而是<b className="text-foreground">跟着价格行走</b>。 绑定依据是{' '}
-              <code>sheet + 行号</code>，不是名称匹配 —— 同名最多重复 15 次，
+              图片不做独立一份图库，而是<b className="text-foreground">跟着价格行走</b>。
+              {stats === null ? null : (
+                <>
+                  {' '}
+                  全库 {meta?.itemCount ?? 0} 条里 {stats.exact + stats.family + stats.manual}{' '}
+                  条有图：{stats.exact} 条是该行自己的图，{stats.family} 条是与它同名的首个型号的图
+                  {stats.manual > 0 ? `，${stats.manual} 条是界面上传的` : ''}
+                  ；五金里还有 {stats.noImage} 条没有图。
+                </>
+              )}{' '}
+              绑定依据是 <code>sheet + 行号</code>，不是名称匹配 —— 同名最多重复 15 次，
               匹配一旦出错，图会安静地挂到错型号上，界面上完全看不出来。
             </p>
             <div className="mb-4 flex flex-wrap gap-1.5">
-              <Pill value={meta?.imageCount ?? 0} label="张图文件" />
-              <Pill value={meta?.itemCount ?? 0} label="条价格行" />
-              <Pill text="按行号绑定" />
-              <Pill text="不按名称匹配" />
+              <Pill value={stats?.exact} label="精确绑定" tone="teal" />
+              <Pill value={stats?.family} label="同产品继承" tone="amber" />
+              <Pill value={stats?.noImage} label="无图" />
+              <Pill value={stats?.imageFiles} label="张图文件" />
+              <Pill value={stats?.unbound} label="张未绑定" />
             </div>
             <div className="mb-5 grid grid-cols-3 gap-3">
               {[
@@ -369,11 +419,65 @@ export function QuoteMaintPanel({
           </Section>
 
           <Section title="6. 变更记录">
-            <p className="text-[12.5px] text-muted-foreground">
-              改价与改图共用一张 <code>price_revision</code>：条目号、字段、旧值、新值、
-              操作人、解锁会话、原因、时间。每次改价都会写一行，页面上暂未开放查询入口 ——
-              现在的读法是直接查这张表。
-            </p>
+            {revisions === null || revisions.length === 0 ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                改价与改图共用一张 <code>price_revision</code>：条目号、字段、旧值、新值、
+                操作人、解锁会话、原因、时间。
+                {revisions === null
+                  ? '读取中…'
+                  : '还没有任何记录 —— 台账导入不算变更，只有在线改价、停用、换图才会写一行。'}
+              </p>
+            ) : (
+              <table className="w-full border-collapse text-[12.5px]">
+                <thead>
+                  <tr>
+                    <th className="w-[18%] border-b border-border-soft px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak">
+                      时间
+                    </th>
+                    <th className="w-[34%] border-b border-border-soft px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak">
+                      项目
+                    </th>
+                    <th className="w-[20%] border-b border-border-soft px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak">
+                      变更
+                    </th>
+                    <th className="w-[12%] border-b border-border-soft px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak">
+                      操作人
+                    </th>
+                    <th className="border-b border-border-soft px-3 py-2 text-left text-[11.5px] font-medium text-muted-foreground-weak">
+                      原因
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revisions.map((row) => {
+                    const change = describeRevisionChange(row.field, row.oldValue, row.newValue)
+                    return (
+                      <tr key={row.id}>
+                        <td className="border-b border-border-soft px-3 py-2 align-top whitespace-nowrap text-muted-foreground">
+                          {formatRevisionTime(row.createdAt)}
+                        </td>
+                        <td className="border-b border-border-soft px-3 py-2 align-top">
+                          {row.itemName === '' ? row.itemCode : row.itemName}
+                        </td>
+                        <td className="border-b border-border-soft px-3 py-2 align-top whitespace-nowrap">
+                          <span className="text-muted-foreground-weak line-through">
+                            {change.before}
+                          </span>
+                          <span className="mx-1 text-muted-foreground-weak">→</span>
+                          <span className="font-medium text-m-teal">{change.after}</span>
+                        </td>
+                        <td className="border-b border-border-soft px-3 py-2 align-top text-muted-foreground">
+                          {row.operatorName}
+                        </td>
+                        <td className="border-b border-border-soft px-3 py-2 align-top text-muted-foreground">
+                          {row.reason === '' ? '—' : row.reason}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </Section>
         </div>
 
@@ -398,15 +502,32 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function Pill({ value, label, text }: { value?: number; label?: string; text?: string }) {
+/**
+ * 统计胶囊。`value` 为 `undefined` 表示还没取到 —— 显示一个占位短横，**不显示 0**。
+ * 0 是一个结论（「确实没有」），和「还不知道」必须能分开，否则读的人会把加载中
+ * 当成「孤儿图已经清零」。
+ */
+function Pill({
+  value,
+  label,
+  tone,
+}: {
+  value?: number | undefined
+  label: string
+  tone?: 'teal' | 'amber' | undefined
+}) {
+  const toneClass =
+    tone === 'teal'
+      ? 'border-[color-mix(in_srgb,var(--m-teal)_26%,var(--border))] bg-[color-mix(in_srgb,var(--m-teal)_7%,transparent)] text-m-teal'
+      : tone === 'amber'
+        ? 'border-[color-mix(in_srgb,var(--m-amber)_26%,var(--border))] bg-[color-mix(in_srgb,var(--m-amber)_7%,transparent)] text-m-amber'
+        : 'border-border bg-card text-muted-foreground'
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-0.5 text-[11.5px] text-muted-foreground">
-      {text ?? (
-        <>
-          <b className="font-medium text-foreground tabular-nums">{value}</b>
-          {label}
-        </>
-      )}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] ${toneClass}`}
+    >
+      <b className="font-medium tabular-nums">{value === undefined ? '—' : value}</b>
+      {label}
     </span>
   )
 }

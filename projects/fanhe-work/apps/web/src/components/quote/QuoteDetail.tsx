@@ -120,7 +120,11 @@ export function QuoteDetail({
       ? `${price.primary}${price.suffix}`
       : price.tone === 'empty'
         ? '待补价'
-        : price.primary)
+        : price.primary) +
+    (item.pricingMode === '' ? '' : `（${item.pricingMode}）`)
+
+  /** 台账里的行号（`A001` / `C012` / `H345`）。条目号显示它，比 uuid 短一半且能回表里搜。 */
+  const ledgerNo = item.ledgerNo === '' ? item.code : item.ledgerNo
 
   /**
    * 复制那一行。
@@ -144,10 +148,10 @@ export function QuoteDetail({
   /** 「在台账中定位」：把条目号复制出去，源表里搜它比翻名称可靠。 */
   async function handleLocate(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(item.code)
-      setNotice({ kind: 'ok', text: `条目号 ${item.code} 已复制，可在台账里直接搜索` })
+      await navigator.clipboard.writeText(ledgerNo)
+      setNotice({ kind: 'ok', text: `条目号 ${ledgerNo} 已复制，可在台账里直接搜索` })
     } catch {
-      setNotice({ kind: 'error', text: `条目号：${item.code}` })
+      setNotice({ kind: 'error', text: `条目号：${ledgerNo}` })
     }
   }
 
@@ -288,6 +292,7 @@ export function QuoteDetail({
             </span>
             <span className="text-[12.5px] leading-[1.5] text-muted-foreground">
               {price.suffix === '' ? '' : `/ ${item.unit}`}
+              {item.pricingMode === '' ? '' : ` · ${item.pricingMode}`}
             </span>
           </>
         ) : price.tone === 'empty' ? (
@@ -312,6 +317,12 @@ export function QuoteDetail({
         <dd className="m-0 leading-[1.55] break-words">{item.model === '' ? '—' : item.model}</dd>
         <dt className="text-muted-foreground-weak">规格</dt>
         <dd className="m-0 leading-[1.55] break-words">{item.spec === '' ? '—' : item.spec}</dd>
+        {item.pricingMode !== '' && (
+          <>
+            <dt className="text-muted-foreground-weak">计价方式</dt>
+            <dd className="m-0 leading-[1.55] break-words">{item.pricingMode}</dd>
+          </>
+        )}
         {price.tone !== 'amount' && (
           <>
             <dt className="text-muted-foreground-weak">单价原文</dt>
@@ -322,8 +333,18 @@ export function QuoteDetail({
         )}
         <dt className="text-muted-foreground-weak">备注</dt>
         <dd className="m-0 leading-[1.55] break-words">{item.note === '' ? '—' : item.note}</dd>
+        {/* 可选花色可能很长（多板材并列，最长 300 余字）。给一个 96px 的滚动窗口，
+            否则右栏会被一条花色撑到看不见下面的按钮。 */}
+        {item.materials !== '' && (
+          <>
+            <dt className="text-muted-foreground-weak">可选花色</dt>
+            <dd className="m-0 max-h-24 overflow-auto leading-[1.55] break-words">
+              {item.materials}
+            </dd>
+          </>
+        )}
         <dt className="text-muted-foreground-weak">条目号</dt>
-        <dd className="m-0 font-mono leading-[1.55] break-words">{item.code}</dd>
+        <dd className="m-0 font-mono leading-[1.55] break-words">{ledgerNo}</dd>
       </dl>
 
       <div className="mt-4 rounded-[10px] border border-dashed border-border bg-card p-2.5 font-mono text-[11.5px] leading-[1.7] text-muted-foreground">

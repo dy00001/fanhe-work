@@ -4,7 +4,9 @@ import type {
   QuoteItemDto,
   QuoteItemResponse,
   QuoteItemStatus,
+  QuoteLedgerStatsDto,
   QuoteMetaResponse,
+  QuoteRevisionListResponse,
   QuoteSearchResponse,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
@@ -16,8 +18,10 @@ import {
   quoteImageRequest,
   quoteItemRequest,
   quoteMetaRequest,
+  quoteRevisionsRequest,
   quoteSearchRequest,
   quoteSecretRequest,
+  quoteStatsRequest,
   quoteUnlockRequest,
   removeQuoteImageRequest,
   setQuoteItemStatusRequest,
@@ -117,6 +121,16 @@ export function loadQuoteItem(code: string): Promise<QuoteItemResponse> {
 
 export function loadQuoteAccessState(): Promise<QuoteAccessStateResponse> {
   return withAccessToken((token) => quoteAccessStateRequest(token))
+}
+
+/** 台账现状：绑定档位分布、图文件数、孤儿图数。只有打开维护面板时才取。 */
+export function loadQuoteStats(): Promise<QuoteLedgerStatsDto> {
+  return withAccessToken((token) => quoteStatsRequest(token))
+}
+
+/** 最近的改价 / 停用 / 换图记录。 */
+export function loadQuoteRevisions(limit = 20): Promise<QuoteRevisionListResponse> {
+  return withAccessToken((token) => quoteRevisionsRequest(token, limit))
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,9 @@
-import { QUOTE_SOURCE_NAMES, type QuoteItemDto, type QuoteSource } from '@fanhe/shared'
+import {
+  QUOTE_SOURCES,
+  QUOTE_SOURCE_SHORT,
+  type QuoteItemDto,
+  type QuoteSource,
+} from '@fanhe/shared'
 import { CornerDownLeft, Search } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -236,7 +241,7 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
               <b className="font-medium text-muted-foreground">{total ?? '…'}</b> 条
             </span>
             <span className="size-1 rounded-full bg-muted-foreground-weak opacity-60" />
-            <span>柜体 · 工艺 · 五金</span>
+            <span>{QUOTE_SOURCES.map((source) => QUOTE_SOURCE_SHORT[source]).join(' · ')}</span>
           </div>
         </div>
       </div>
@@ -322,8 +327,14 @@ export function QuoteEntryCard({ onOpen }: { onOpen: (keyword: string) => void }
                               {item.model}
                             </>
                           )}
+                          {item.spec !== '' && (
+                            <>
+                              <i className="text-border not-italic">·</i>
+                              {item.spec}
+                            </>
+                          )}
                           <i className="text-border not-italic">·</i>
-                          {QUOTE_SOURCE_NAMES[item.source]}
+                          {QUOTE_SOURCE_SHORT[item.source]}
                         </span>
                       </span>
                       <span className="shrink-0 text-right whitespace-nowrap tabular-nums">

@@ -209,6 +209,13 @@ def price_fields(raw_price, legacy_kind):
 
 
 def extract_sale(path, items):
+    """销售查价表。列序：0 分类 / 1 名称 / 2 单位 / 3 单价 / 4 计价方式 / 5 可选花色。
+
+    **第 4、5 列不是备注。** 早期把「计价方式」拼成 `计价：投影面积｜` 塞进 note，
+    又把第 5 列当 remark 一并拼进去，结果是：备注里躺着一串花色、而界面上本该显示
+    「计价方式」与「可选花色」的两处都是空的。这两列现在各自成字段，note 留空 ——
+    销售表本身没有备注列（表头只标到第 5 列）。
+    """
     book, strings, sheets = open_book(path)
     if not sheets:
         return
@@ -218,7 +225,7 @@ def extract_sale(path, items):
         row = row + [''] * 8
         if row[0]:
             category = row[0]
-        name, unit, price, mode, remark = row[1], row[2], row[3], row[4], row[5]
+        name, unit, price, mode, materials = row[1], row[2], row[3], row[4], row[5]
         # **空价不跳过。** 4 条房门工艺整段空价，跳过它们会让「这类项目怎么报价」
         # 变成一个查不到的问题；留着并标成「待补价」才对。
         if not name:
@@ -234,8 +241,10 @@ def extract_sale(path, items):
                 'unitRaw': unit.strip(),
                 'rawPrice': price,
                 'legacyKind': legacy_price_kind(price),
-                'note': ('计价：' + mode.strip() + '｜' if mode.strip() else '')
-                + (remark.strip() if remark.strip() else ''),
+                # 表格里靠换行分列花色，界面上是一段连续文本 —— 折成空格再折叠重复空白。
+                'pricingMode': mode.strip(),
+                'materials': norm_part(materials.replace('\n', ' ').replace('\r', ' ')),
+                'note': '',
                 'sheet': None,
                 'row': None,
             }
@@ -266,6 +275,9 @@ def extract_craft(path, items):
                 'unitRaw': unit.strip(),
                 'rawPrice': fee,
                 'legacyKind': legacy_price_kind(fee),
+                # 工艺表没有计价方式与花色两列，统一留空，字段形状与销售表保持一致。
+                'pricingMode': '',
+                'materials': '',
                 'note': note.strip(),
                 'sheet': None,
                 'row': None,
@@ -362,6 +374,9 @@ def extract_hardware(path, items):
                     'unitRaw': get('unit').strip(),
                     'rawPrice': price,
                     'legacyKind': legacy_price_kind(price),
+                    # 五金表，同上：没有计价方式与花色两列。
+                    'pricingMode': '',
+                    'materials': '',
                     'note': ((fit + '｜') if fit else '') + get('note'),
                     'sheet': sheet_name,
                     'row': numbers[k],
@@ -647,6 +662,19 @@ def main():
         if seen > 0:
             duplicates += 1
 
+    # 条目号：台账里的「第几行」，前缀按来源（A 销售 / B 工艺 / C 五金），编号在
+    # **来源内**连续。它只用于展示 —— 业务键仍是 `rawKey` 算出来的 code。
+    #
+    # 不照抄静态稿那个计数器：它的工艺从 B572 起（接着销售的 571 往下数）、五金
+    # 又从 C001 重来，同一个规则在三份表上给出三种口径。台账删一行，后面全错位。
+    # 来源内连续是唯一能长期解释的写法，前缀已经表达了来源。
+    ledger_prefix = {'sale': 'A', 'craft': 'B', 'hardware': 'C'}
+    ledger_seq = {}
+    for item in items:
+        source = item['source']
+        ledger_seq[source] = ledger_seq.get(source, 0) + 1
+        item['ledgerNo'] = '%s%03d' % (ledger_prefix[source], ledger_seq[source])
+
     images = []
     dropped = 0
     for binding in bindings:
@@ -672,10 +700,23 @@ def main():
             'droppedBindings': dropped,
         },
     }
+    # 指纹决定「版本变了没有」，而版本是前端判断「手里的价格还成不成立」的唯一依据。
+    # 所以凡是会改变展示内容的列都要进来 —— 只算价格的话，台账补上一个「计价方式」
+    # 或一条备注，前端会一直显示旧值，且不报错。
     payload['fingerprint'] = hashlib.sha256(
         json.dumps(
             [
-                (i['rawKey'], i['occurrence'], i['priceKind'], i['priceFen'], i['priceText'])
+                (
+                    i['rawKey'],
+                    i['occurrence'],
+                    i['priceKind'],
+                    i['priceFen'],
+                    i['priceText'],
+                    i['ledgerNo'],
+                    i['pricingMode'],
+                    i['materials'],
+                    i['note'],
+                )
                 for i in items
             ],
             ensure_ascii=False,

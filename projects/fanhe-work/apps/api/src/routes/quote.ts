@@ -18,7 +18,9 @@ import {
 } from '../quote/access.js'
 import {
   getItem,
+  getLedgerStats,
   getMeta,
+  listRevisions,
   readImage,
   removeItemImage,
   saveItemImage,
@@ -298,6 +300,39 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     },
   )
 
+  /**
+   * 台账现状：绑定档位分布、图文件数、孤儿图数。
+   *
+   * 与 `meta` 分开是因为两者节奏不同：`meta` 每次挂载都要（版本号决定缓存能不能用），
+   * 这组数字只有打开维护面板时才看，而它要扫三遍全表。塞进 `meta` 等于让每次查价
+   * 都付一次全表统计的代价。
+   */
+  app.get('/api/quote/stats', { preHandler: readGuard }, async (_request, reply) => {
+    reply.header('cache-control', 'no-store')
+    return getLedgerStats()
+  })
+
+  /**
+   * 变更记录。挂读权限而不是写权限 —— 审计的意义是「谁都能看改过什么」，
+   * 只有能改的人能看，等于把审计变成了内部台账。
+   */
+  app.get<{ Querystring: { limit?: number } }>(
+    '/api/quote/revisions',
+    {
+      preHandler: readGuard,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { limit: { type: 'integer', minimum: 1, maximum: 100 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store')
+      return listRevisions(request.query.limit ?? 20)
+    },
+  )
   /**
    * 取图。
    *
