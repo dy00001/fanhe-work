@@ -211,6 +211,10 @@ export function formatRevisionTime(iso: string): string {
  * - `status`：`active` / `archived` 对读的人没意义，翻成「在售 / 停用」；
  * - `image`：存的是 imageKey（32 位十六进制），显示出来只是一串乱码，翻成
  *   「原图 → 新图」「原图 → 已解绑」。图本身可以去详情栏看，这里不需要还原 key。
+ * - `category`：分类改名 / 合并 / 删除。新值为空串表示「这个分类被删了」，不能
+ *   落到下面那个 「待补价」兜底里 —— 那句话在这里毫无意义。
+ * - `deleted`：产品被物理删除。旧值是整行快照（名称 / 型号 / 规格 / 条目号 / 价格），
+ *   新值恒为空，所以右边写死「已删除」。这一列是那条产品唯一还存在的记录。
  */
 export function describeRevisionChange(
   field: string,
@@ -228,6 +232,15 @@ export function describeRevisionChange(
       before: oldValue === '' ? '无图' : '原图',
       after: newValue === '' ? '已解绑' : '新图',
     }
+  }
+  if (field === 'category') {
+    return {
+      before: oldValue === '' ? '—' : oldValue,
+      after: newValue === '' ? '分类已删除' : newValue,
+    }
+  }
+  if (field === 'deleted') {
+    return { before: oldValue === '' ? '—' : oldValue, after: '已删除' }
   }
   return {
     before: oldValue === '' ? '—' : oldValue,

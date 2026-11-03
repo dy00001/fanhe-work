@@ -2,6 +2,8 @@ import type {
   CreateQuoteCategoryRequest,
   CreateQuoteItemRequest,
   CreateQuoteSourceRequest,
+  DeleteQuoteCategoryRequest,
+  DeleteQuoteItemRequest,
   DeleteQuoteSourceRequest,
   MergeQuoteCategoriesRequest,
   MergeQuoteCategoriesResponse,
@@ -35,6 +37,8 @@ import {
   createQuoteCategoryRequest,
   createQuoteItemRequest,
   createQuoteSourceRequest,
+  deleteQuoteCategoryRequest,
+  deleteQuoteItemRequest,
   deleteQuoteSourceRequest,
   mergeQuoteCategoriesRequest,
   mergeQuoteCategoryRequest,
@@ -343,6 +347,26 @@ export function mergeQuoteCategories(
 
 export function mergeQuoteItems(input: MergeQuoteItemsRequest): Promise<MergeQuoteItemsResponse> {
   return withAccessToken((token) => mergeQuoteItemsRequest(token, input, getQuoteUnlockToken()))
+}
+
+// ---------------------------------------------------------------------------
+// 删除（分类 / 产品）—— 与「下架」不同，这两个是不可逆的
+// ---------------------------------------------------------------------------
+
+export function deleteQuoteCategory(
+  input: DeleteQuoteCategoryRequest,
+): Promise<{ version: string; name: string }> {
+  return withAccessToken((token) => deleteQuoteCategoryRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function deleteQuoteItem(input: DeleteQuoteItemRequest): Promise<{
+  version: string
+  code: string
+  name: string
+  wasArchived: boolean
+  imageRemoved: boolean
+}> {
+  return withAccessToken((token) => deleteQuoteItemRequest(token, input, getQuoteUnlockToken()))
 }
 
 /**

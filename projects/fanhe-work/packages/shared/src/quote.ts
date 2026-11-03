@@ -564,6 +564,52 @@ export type MergeQuoteItemsResponse = {
   inherited: readonly string[]
 }
 
+/**
+ * 删掉一个分类。
+ *
+ * 与「合并」不同，这里**没有目标**：分类连同它在 `quote_categories` 里的那一行一起
+ * 消失，它下面的产品不会被改挂到任何地方。所以服务端只在**这个分类下一条产品都没有**
+ * （在售与已下架都算）时才允许删 —— 否则产品会挂在一个列表里查不到、筛选栏里也没有
+ * 的分类名下，变成谁都看不见的孤儿。
+ *
+ * 用 `POST .../delete` 而不是 `DELETE`：后者带 body 会被部分代理丢掉。
+ */
+export type DeleteQuoteCategoryRequest = {
+  source: QuoteSource
+  name: string
+}
+
+export type DeleteQuoteCategoryResponse = {
+  version: string
+  name: string
+}
+
+/**
+ * 删掉一条产品。**物理删除**，与「下架」是两件不同的事。
+ *
+ * - 下架（`status = archived`）：历史报价单上的条目号查得到、能单独上架回来。
+ * - 删除（这里）：这一行从库里消失，条目号从此查不到任何东西。
+ *
+ * 所以删除前服务端会把整行快照写进审计（`field = 'deleted'`），事后还能回答
+ * 「当时那条叫什么、多少钱、什么编号」。商品图只有在这一条**自己**持有图时才删
+ * （`image_key === code`）—— 同族继承来的图键属于整个产品族，删了会把别的行的图
+ * 一起弄没。
+ */
+export type DeleteQuoteItemRequest = {
+  source: QuoteSource
+  code: string
+}
+
+export type DeleteQuoteItemResponse = {
+  version: string
+  code: string
+  name: string
+  /** 删掉时是不是已下架状态。界面上要用它把提示写得准一点。 */
+  wasArchived: boolean
+  /** 顺带删掉的商品图张数（0 或 1）。 */
+  imageRemoved: boolean
+}
+
 /** 批量导入里的一行。字段与 `CreateQuoteItemRequest` 对齐，少一个来源（整批一个来源）。 */
 export type QuoteImportRow = {
   category: string

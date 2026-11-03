@@ -1266,4 +1266,146 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     assert.equal(response.statusCode, 400, response.body)
     assert.equal((response.json() as { error: string }).error, 'cross_category')
   })
+
+  // -------------------------------------------------------------------------
+  // 删除：分类与产品
+  // -------------------------------------------------------------------------
+
+  async function listCategoryNames(): Promise<string[]> {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/quote/categories',
+      headers: authed(designerToken),
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    return (response.json() as { items: { name: string }[] }).items.map((row) => row.name)
+  }
+
+  test('删除分类：空分类能删且从列表消失；有产品的分类被拒，产品一条不动', async () => {
+    const write = { ...authed(designerToken), 'x-quote-unlock': unlockToken }
+    const empty = `${TEST_DATA_PREFIX}空壳分类`
+    const occupied = `${TEST_DATA_PREFIX}有货分类`
+    const code = `${TEST_DATA_PREFIX}dc1`
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories',
+      headers: write,
+      payload: { source: 'sale', name: empty },
+    })
+    assert.equal(created.statusCode, 200, created.body)
+    await seedItem({ code, category: occupied, name: 'zzq 删分类用', ledgerNo: 'M301' })
+
+    const removed = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories/delete',
+      headers: write,
+      payload: { source: 'sale', name: empty },
+    })
+    assert.equal(removed.statusCode, 200, removed.body)
+    assert.ok(
+      !(await listCategoryNames()).includes(empty),
+      '删掉的空分类还在列表里 —— 界面刷新一次它就又出现了',
+    )
+
+    // 有产品的分类：409，而且一条产品都不能少。删掉分类会让那些产品挂在一个
+    // 列表里查不到、筛选栏里也没有的名字下，到时候连删都找不到入口。
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories/delete',
+      headers: write,
+      payload: { source: 'sale', name: occupied },
+    })
+    assert.equal(refused.statusCode, 409, refused.body)
+    assert.equal((refused.json() as { error: string }).error, 'has_items')
+    assert.equal(await prisma.quoteItem.count({ where: { code } }), 1)
+
+    // 不存在的分类：404，而不是假装成功。「删了两次」应该看到「找不到了」。
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/quote/categories/delete',
+      headers: write,
+      payload: { source: 'sale', name: empty },
+    })
+    assert.equal(again.statusCode, 404, again.body)
+  })
+
+  test('删除产品：物理删掉、图跟着删、审计留整行快照', async () => {
+    const write = { ...authed(designerToken), 'x-quote-unlock': unlockToken }
+    const category = `${TEST_DATA_PREFIX}删产品`
+    const code = `${TEST_DATA_PREFIX}di1`
+
+    await seedItem({ code, category, name: 'zzq 待删产品', ledgerNo: 'M401', priceText: '128' })
+    await prisma.quoteItemImage.create({
+      data: {
+        imageKey: code,
+        data: new Uint8Array([1, 2, 3]),
+        thumb: new Uint8Array([1]),
+        mime: 'image/png',
+        width: 1,
+        height: 1,
+        thumbWidth: 1,
+        thumbHeight: 1,
+        byteSize: 3,
+        bindType: 'manual',
+      },
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items/delete',
+      headers: write,
+      payload: { source: 'sale', code },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+    const body = response.json() as { name: string; imageRemoved: boolean; wasArchived: boolean }
+    assert.equal(body.name, 'zzq 待删产品')
+    assert.equal(body.imageRemoved, true, '这一条自己有图，删除时应当连图一起清掉')
+    assert.equal(body.wasArchived, false)
+
+    assert.equal(await prisma.quoteItem.count({ where: { code } }), 0, '删除必须是真的删掉')
+    assert.equal(
+      await prisma.quoteItemImage.count({ where: { imageKey: code } }),
+      0,
+      '图留在库里就成了孤儿：没有任何条目指向它，但还占着几百 KB',
+    )
+
+    // 审计是这条产品唯一还存在的记录 —— 少了它，「删除」与「什么都没留下」就没区别。
+    const audit = await prisma.quoteRevision.findFirst({
+      where: { itemCode: code, field: 'deleted' },
+      select: { oldValue: true },
+    })
+    assert.ok(audit !== null, '删除没有留下审计')
+    assert.match(audit.oldValue ?? '', /名称=zzq 待删产品/)
+    assert.match(audit.oldValue ?? '', /条目号=M401/)
+
+    // 变更记录面板要能正常渲染这条新字段，不能因为 field 取值不认识就 500。
+    const revisions = await app.inject({
+      method: 'GET',
+      url: '/api/quote/revisions?limit=20',
+      headers: authed(designerToken),
+    })
+    assert.equal(revisions.statusCode, 200, revisions.body)
+  })
+
+  test('删除产品：不属于当前主类时被拒，跨主类删不掉', async () => {
+    const code = `${TEST_DATA_PREFIX}di2`
+    await seedItem({
+      code,
+      category: `${TEST_DATA_PREFIX}删产品`,
+      name: 'zzq 跨类删',
+      ledgerNo: 'M402',
+    })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items/delete',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      // 这条是 sale 的产品，用一个别的来源去删。界面上列表还没刷新时会走到这里。
+      payload: { source: 'craft', code },
+    })
+    assert.equal(response.statusCode, 403, response.body)
+    assert.equal((response.json() as { error: string }).error, 'wrong_source')
+    assert.equal(await prisma.quoteItem.count({ where: { code } }), 1, '被拒绝时不能顺手删掉')
+  })
 })

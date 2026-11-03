@@ -5,6 +5,8 @@ import {
   type CreateQuoteCategoryRequest,
   type CreateQuoteItemRequest,
   type CreateQuoteSourceRequest,
+  type DeleteQuoteCategoryRequest,
+  type DeleteQuoteItemRequest,
   type DeleteQuoteSourceRequest,
   type MergeQuoteCategoriesRequest,
   type MergeQuoteCategoryRequest,
@@ -31,6 +33,7 @@ import {
 } from '../quote/access.js'
 import {
   createCategory,
+  deleteCategory,
   listCategoryRows,
   mergeCategories,
   mergeCategory,
@@ -39,6 +42,7 @@ import {
   type CategoryFailure,
 } from '../quote/categories.js'
 import { parseQuoteFile } from '../quote/importer.js'
+import { deleteItem, type ItemDeleteFailure } from '../quote/item-delete.js'
 import { mergeItems, type ItemMergeFailure } from '../quote/item-merge.js'
 import {
   createSource,
@@ -141,6 +145,7 @@ const CATEGORY_STATUS: Record<CategoryFailure, number> = {
   invalid_source: 400,
   too_few: 400,
   invalid_target: 400,
+  has_items: 409,
 }
 
 const CATEGORY_MESSAGE: Record<CategoryFailure, string> = {
@@ -150,6 +155,7 @@ const CATEGORY_MESSAGE: Record<CategoryFailure, string> = {
   invalid_source: '来源不合法',
   too_few: '至少选两个分类才能合并。只改一个名字请用「改名」',
   invalid_target: '目标分类不能和要合并的分类同名。请换一个名字，或把目标也一起选中',
+  has_items: '这个分类下还有产品（含已下架）。先把产品删掉或合并到别的分类，再来删这个分类',
 }
 
 /** 主类的失败映射。删不掉时用 409：请求没错，是这一类下面还有东西。 */
@@ -165,8 +171,20 @@ const SOURCE_MESSAGE: Record<SourceFailure, string> = {
   not_found: '找不到这个主类',
   duplicate: '已经有同名的主类了',
   invalid_name: `主类名称不能为空，也不能超过 ${QUOTE_LIMITS.SOURCE_NAME_MAX} 字`,
-  has_items: '这个主类下面还有产品（含已下架）。产品只能下架、不能物理删除，所以删不掉。',
+  has_items: '这个主类下面还有产品（含已下架）。先把产品删掉或合并到别的主类，再来删主类',
   builtin_locked: '内置主类的标识还被导入器与条目号段引用，不能删除',
+}
+
+/** 产品删除的失败映射。 */
+const ITEM_DELETE_STATUS: Record<ItemDeleteFailure, number> = {
+  not_found: 404,
+  // 403 而不是 409：这条产品是存在的，只是不属于你当前打开的这个主类。
+  wrong_source: 403,
+}
+
+const ITEM_DELETE_MESSAGE: Record<ItemDeleteFailure, string> = {
+  not_found: '这条产品已经不在了，可能在另一个窗口里被删掉了。刷新后再试',
+  wrong_source: '这条产品不属于当前主类。列表可能还没刷新，刷新页面后再试',
 }
 
 /** 产品合并的失败映射。 */
@@ -239,6 +257,12 @@ function sendItemMergeFailure(reply: FastifyReply, reason: ItemMergeFailure): Fa
   return reply
     .code(ITEM_MERGE_STATUS[reason])
     .send({ error: reason, message: ITEM_MERGE_MESSAGE[reason] })
+}
+
+function sendItemDeleteFailure(reply: FastifyReply, reason: ItemDeleteFailure): FastifyReply {
+  return reply
+    .code(ITEM_DELETE_STATUS[reason])
+    .send({ error: reason, message: ITEM_DELETE_MESSAGE[reason] })
 }
 
 /** 引用了一个不存在的主类。统一一句话，别让每个接口各编一套。 */
@@ -487,6 +511,17 @@ const CATEGORY_PAIR_BODY_SCHEMA = {
   },
 } as const
 
+/** 删分类只认名字，没有目标 —— 不共用 `from` / `to` 那个形状。 */
+const DELETE_CATEGORY_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'name'],
+  additionalProperties: false,
+  properties: {
+    source: SOURCE_FIELD_SCHEMA,
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+  },
+} as const
+
 const REORDER_CATEGORIES_BODY_SCHEMA = {
   type: 'object',
   required: ['source', 'order'],
@@ -618,6 +653,16 @@ const MERGE_CATEGORIES_BODY_SCHEMA = {
 } as const
 
 /** 合并同一个分类里的多条产品。 */
+const DELETE_ITEM_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'code'],
+  additionalProperties: false,
+  properties: {
+    source: SOURCE_FIELD_SCHEMA,
+    code: { type: 'string', minLength: 1, maxLength: 64, pattern: CODE_PATTERN },
+  },
+} as const
+
 const MERGE_ITEMS_BODY_SCHEMA = {
   type: 'object',
   required: ['source', 'category', 'codes', 'keep'],
@@ -1065,6 +1110,29 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
     },
   )
 
+  /**
+   * 删掉一个空分类。
+   *
+   * 用 POST 而不是 DELETE：DELETE 带 body 会被部分代理丢掉，到时候变成「没有名字的
+   * 删除请求」，服务端只能回一句参数错误。`sources/delete` 出于同一个理由也是 POST。
+   *
+   * 只允许删空分类（判据在 `deleteCategory` 里）。这里不做幂等：删一个不存在的分类
+   * 回 404，而不是回 200 —— 界面上「删了两次」应该看到「找不到了」，那才说明刷新没做。
+   */
+  app.post<{ Body: DeleteQuoteCategoryRequest }>(
+    '/api/quote/categories/delete',
+    { preHandler: requireAuth, schema: { body: DELETE_CATEGORY_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
+      const result = await deleteCategory(request.body.source, request.body.name, context)
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
   /** 重排。只改顺序，不动条目，也不 bump 版本。 */
   app.put<{ Body: ReorderQuoteCategoriesRequest }>(
     '/api/quote/categories/order',
@@ -1126,6 +1194,29 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
       if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
       const result = await mergeItems(request.body, context)
       if (!result.ok) return sendItemMergeFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /**
+   * 物理删掉一条产品。
+   *
+   * 与 `POST /items/:code/status`（下架）刻意分成两条路由：下架可逆、删除不可逆，
+   * 混在一个接口里靠一个布尔参数区分，前端只要传错一个字段就变成不可逆操作。
+   *
+   * 删除前服务端会把整行快照写进审计（`field = 'deleted'`），事后还能回答「这条
+   * 当时叫什么、多少钱、什么编号」。
+   */
+  app.post<{ Body: DeleteQuoteItemRequest }>(
+    '/api/quote/items/delete',
+    { preHandler: requireAuth, schema: { body: DELETE_ITEM_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      if (!(await sourceExists(request.body.source))) return sendMissingSource(reply)
+      const result = await deleteItem(request.body, context)
+      if (!result.ok) return sendItemDeleteFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
       return result.value
     },

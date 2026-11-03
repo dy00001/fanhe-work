@@ -8,6 +8,7 @@ import {
   Pencil,
   Plus,
   Settings2,
+  Trash2,
   X,
 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useState } from 'react'
@@ -15,6 +16,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../../../lib/api'
 import {
   createQuoteCategory,
+  deleteQuoteCategory,
   loadQuoteCategories,
   loadQuoteSources,
   mergeQuoteCategories,
@@ -63,6 +65,8 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
 
   const [editing, setEditing] = useState<{ name: string; draft: string } | null>(null)
   const [merging, setMerging] = useState<{ from: string; to: string } | null>(null)
+  /** 哪一行正处于「确认删除」状态。删除不可逆，所以要两次点击。 */
+  const [deleting, setDeleting] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
 
   /** 分类多选。批量合并就靠它。 */
@@ -208,6 +212,35 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
     })
   }
 
+  /**
+   * 删分类。
+   *
+   * 条数在前端就有（行上那个「N 条」），所以有产品时先说人话，不等一个来回 ——
+   * 与主类管理条一个套路：删不掉的按钮**不置灰**，点下去给一句原因，置灰等于不解释。
+   * 服务端那道 `has_items` 仍然保留，它挡的是「两个人同时操作」。
+   *
+   * 产品一条都没删，只少了「这个名字 + 它的位置」，所以不 bump 数据集版本。
+   */
+  async function submitDelete(name: string, count: number): Promise<void> {
+    setDeleting(null)
+    if (count > 0) {
+      setNotice({
+        kind: 'error',
+        text: `「${name}」下面还有 ${String(count)} 条产品（含已下架）。先把它们合并到别的分类、或逐条删掉，再来删这个分类`,
+      })
+      return
+    }
+    // 这一行消失后，勾选、展开、合并目标里都可能还留着它的名字 —— 不清掉的话，
+    // 下面的批量合并条会显示一个已经不存在的分类。
+    setPicked((current) => current.filter((value) => value !== name))
+    setExpanded((current) => (current === name ? null : current))
+    setMergeTo((current) => (current === name ? '' : current))
+    await run(async () => {
+      await deleteQuoteCategory({ source: activeCode, name })
+      return `已删除分类「${name}」`
+    })
+  }
+
   function togglePick(name: string): void {
     setPicked((current) => {
       const next = current.includes(name)
@@ -326,7 +359,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                 <Th>分类名称</Th>
                 <Th className="w-16 text-right">产品</Th>
                 <Th className="w-[132px]">顺序</Th>
-                <Th className="w-[168px]">操作</Th>
+                <Th className="w-[236px]">操作</Th>
               </tr>
             </thead>
             <tbody>
@@ -429,6 +462,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                           disabled={busy}
                           onClick={() => {
                             setMerging(null)
+                            setDeleting(null)
                             setEditing({ name: row.name, draft: row.name })
                           }}
                           className="inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
@@ -441,6 +475,7 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                           disabled={busy || rows.length < 2}
                           onClick={() => {
                             setEditing(null)
+                            setDeleting(null)
                             setMerging({
                               from: row.name,
                               to: rows.find((other) => other.name !== row.name)?.name ?? '',
@@ -450,6 +485,38 @@ export function QuoteCategoryManager({ onChanged }: { onChanged: () => void }) {
                         >
                           <GitMerge className="size-3" />
                           合并
+                        </button>
+                        {/* 删除不置灰：有产品时点下去由下面那句话解释为什么删不掉。
+                            第一次点击只把按钮换成「确认删除」，第二次才发请求。 */}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            if (deleting !== row.name) {
+                              setEditing(null)
+                              setMerging(null)
+                              setDeleting(row.name)
+                              return
+                            }
+                            void submitDelete(row.name, row.count)
+                          }}
+                          className={
+                            deleting === row.name
+                              ? 'inline-flex h-7 items-center gap-1 rounded-[7px] bg-destructive px-2 text-[11.5px] text-destructive-foreground disabled:opacity-40'
+                              : 'inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40'
+                          }
+                          aria-label={
+                            deleting === row.name
+                              ? `确认删除分类「${row.name}」`
+                              : `删除分类「${row.name}」`
+                          }
+                        >
+                          {busy && deleting === row.name ? (
+                            <LoaderCircle className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                          {deleting === row.name ? '确认删除' : '删除'}
                         </button>
                       </div>
                     </Td>

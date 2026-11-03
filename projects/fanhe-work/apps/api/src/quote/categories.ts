@@ -1,5 +1,6 @@
 import {
   QUOTE_LIMITS,
+  type DeleteQuoteCategoryResponse,
   type QuoteCategoryDto,
   type QuoteCategoryListResponse,
   type QuoteSource,
@@ -42,6 +43,8 @@ export type CategoryFailure =
   | 'too_few'
   /** 目标名出现在源列表里，或者保留条不在候选里。 */
   | 'invalid_target'
+  /** 这个分类下还有产品（在售或已下架），删了它们就成了谁都找不到的孤儿。 */
+  | 'has_items'
 
 export type CategoryResult<T> = { ok: true; value: T } | { ok: false; reason: CategoryFailure }
 
@@ -222,6 +225,64 @@ export async function renameCategory(
   ])
 
   return { ok: true, value: { version, from, to, moved } }
+}
+
+/**
+ * 删掉一个分类（连同它在 `quote_categories` 里的那一行）。
+ *
+ * ## 只允许删空的
+ *
+ * 这张表只负责「有哪些分类 + 顺序」，产品上的 `category` 是另一份值。删掉一个**还有
+ * 产品**的分类，那些产品会挂在一个「列表里查不到、筛选栏里也没有」的名字下 —— 它们
+ * 仍在库里、仍能被搜索命中，但界面上没有任何入口指向它们，也就永远删不掉了。所以判据
+ * 是 `count === 0`，在售与已下架一起算：已下架的条目同样是一个还能上架回来的东西。
+ *
+ * 拒绝时给 `has_items`，让操作员先合并或先处理产品。
+ *
+ * ## 不 bump 版本
+ *
+ * 一条产品都没动，客户端的缓存价格仍然成立 —— 与 `createCategory` 同一个判断，
+ * 也与「排序不 bump」一致。
+ */
+export async function deleteCategory(
+  source: QuoteSource,
+  rawName: string,
+  operator: Operator,
+): Promise<CategoryResult<DeleteQuoteCategoryResponse>> {
+  const name = normalizeName(rawName)
+  if (name === '') return { ok: false, reason: 'invalid_name' }
+
+  const [row, total] = await Promise.all([
+    prisma.quoteCategory.findUnique({
+      where: { source_name: { source, name } },
+      select: { id: true },
+    }),
+    prisma.quoteItem.count({ where: { source, category: name } }),
+  ])
+  // **先判「有没有产品」，再判「这一行在不在」**：分类名可以只出现在条目里而从没落过表
+  // （导入的数据就是这样）。那种名字在维护台上照样是一行，点删该说「下面还有产品」，
+  // 而不是「找不到这个分类」—— 后者会让人以为界面上的那一行是假的。
+  if (total > 0) return { ok: false, reason: 'has_items' }
+  if (row === null) return { ok: false, reason: 'not_found' }
+
+  await prisma.$transaction([
+    prisma.quoteCategory.delete({ where: { id: row.id } }),
+    prisma.quoteRevision.create({
+      data: {
+        itemCode: categoryRef(source),
+        field: 'category',
+        oldValue: name,
+        // 删除没有新值。写空串而不是 null：这一列在「改名 / 合并」里永远有值，
+        // 留 null 会让读审计的人去猜是「没记」还是「删了」。
+        newValue: '',
+        operatorId: operator.userId,
+        unlockSessionId: operator.access.unlockSessionId,
+        reason: '删除分类',
+      },
+    }),
+  ])
+
+  return { ok: true, value: { version: '', name } }
 }
 
 /**

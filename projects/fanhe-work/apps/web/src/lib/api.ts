@@ -56,6 +56,8 @@ import type {
   CreateQuoteCategoryRequest,
   CreateQuoteItemRequest,
   CreateQuoteSourceRequest,
+  DeleteQuoteCategoryRequest,
+  DeleteQuoteItemRequest,
   DeleteQuoteSourceRequest,
   MergeQuoteCategoriesRequest,
   MergeQuoteCategoriesResponse,
@@ -1531,6 +1533,49 @@ export function mergeQuoteItemsRequest(
   unlockToken: string | null,
 ): Promise<MergeQuoteItemsResponse> {
   return request<MergeQuoteItemsResponse>('/api/quote/items/merge', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 删掉一个空分类。用 POST 不用 DELETE：DELETE 带 body 会被部分代理丢掉。 */
+export function deleteQuoteCategoryRequest(
+  accessToken: string,
+  input: DeleteQuoteCategoryRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; name: string }> {
+  return request<{ version: string; name: string }>('/api/quote/categories/delete', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/**
+ * 物理删掉一条产品。与「下架」是两条路由：下架可逆、删除不可逆，混在一个接口里
+ * 靠一个布尔参数区分，前端传错一个字段就变成不可逆操作。
+ */
+export function deleteQuoteItemRequest(
+  accessToken: string,
+  input: DeleteQuoteItemRequest,
+  unlockToken: string | null,
+): Promise<{
+  version: string
+  code: string
+  name: string
+  wasArchived: boolean
+  imageRemoved: boolean
+}> {
+  return request<{
+    version: string
+    code: string
+    name: string
+    wasArchived: boolean
+    imageRemoved: boolean
+  }>('/api/quote/items/delete', {
     method: 'POST',
     body: input,
     accessToken,

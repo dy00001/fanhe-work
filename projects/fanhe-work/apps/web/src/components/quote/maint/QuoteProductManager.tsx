@@ -7,12 +7,13 @@ import {
   type QuoteSourceDto,
   type UploadQuoteImageRequest,
 } from '@fanhe/shared'
-import { ImagePlus, LoaderCircle, Plus, Search, X } from 'lucide-react'
+import { ImagePlus, LoaderCircle, Plus, Search, Trash2, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
 import { ApiError } from '../../../lib/api'
 import {
   createQuoteItem,
+  deleteQuoteItem,
   loadQuoteCategories,
   loadQuoteImageUrl,
   loadQuoteSources,
@@ -75,6 +76,8 @@ export function QuoteProductManager({
   const [priceDraft, setPriceDraft] = useState('')
   const [reason, setReason] = useState('')
   const [creating, setCreating] = useState(false)
+  /** 哪一条正处于「确认删除」。删除是物理删除，所以要两次点击。 */
+  const [deletingCode, setDeletingCode] = useState<string | null>(null)
 
   const canWrite = access !== null && (access.direct || access.unlockedUntil !== null)
 
@@ -160,6 +163,23 @@ export function QuoteProductManager({
         ...(reason.trim() === '' ? {} : { reason: reason.trim() }),
       })
       return `「${item.name}」价格已保存`
+    })
+    setReason('')
+  }
+
+  /**
+   * 物理删除。与「下架」只差一个动词，后果差很多：
+   *
+   * - 下架：历史报价单上的条目号还查得到，随时能上架回来；
+   * - 删除：这一行没了，条目号查不到任何东西，不可撤销（审计里留整行快照）。
+   *
+   * 所以按钮两次点击、文案写成「确认删除」，成功后连分页与统计一起重取。
+   */
+  async function removeItem(item: QuoteItemDto): Promise<void> {
+    setDeletingCode(null)
+    await run(async () => {
+      const result = await deleteQuoteItem({ source, code: item.code })
+      return `已删除「${result.name}」${result.imageRemoved ? '，连同它的商品图' : ''}（不可撤销）`
     })
     setReason('')
   }
@@ -264,7 +284,7 @@ export function QuoteProductManager({
                 <Th className="w-[132px]">分类</Th>
                 <Th className="w-[148px]">价格</Th>
                 <Th className="w-14">状态</Th>
-                <Th className="w-[136px]">操作</Th>
+                <Th className="w-[196px]">操作</Th>
               </tr>
             </thead>
             <tbody>
@@ -331,6 +351,33 @@ export function QuoteProductManager({
                             className="inline-flex h-7 items-center rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40"
                           >
                             {item.status === 'active' ? '下架' : '上架'}
+                          </button>
+                          {/* 与「下架」并排但后果不同：这个是物理删除，不可撤销。
+                              两次点击，第一次只把按钮换成「确认删除」。 */}
+                          <button
+                            type="button"
+                            disabled={!canWrite || busy}
+                            onClick={() => {
+                              if (deletingCode !== item.code) {
+                                setEditingCode(null)
+                                setDeletingCode(item.code)
+                                return
+                              }
+                              void removeItem(item)
+                            }}
+                            className={
+                              deletingCode === item.code
+                                ? 'inline-flex h-7 items-center gap-1 rounded-[7px] bg-destructive px-2 text-[11.5px] text-destructive-foreground disabled:opacity-40'
+                                : 'inline-flex h-7 items-center gap-1 rounded-[7px] border border-border px-2 text-[11.5px] text-muted-foreground hover:bg-accent disabled:opacity-40'
+                            }
+                            aria-label={
+                              deletingCode === item.code
+                                ? `确认删除「${item.name}」`
+                                : `删除「${item.name}」`
+                            }
+                          >
+                            <Trash2 className="size-3" />
+                            {deletingCode === item.code ? '确认删除' : '删除'}
                           </button>
                         </div>
                       </Td>

@@ -140,9 +140,11 @@ export async function listSourceRows(): Promise<QuoteSourceListResponse> {
       archivedCount,
       deletable: total === 0 && !row.builtin,
       // 措辞按「最要紧的那条限制」给，不堆两句：内置的说内置，有条目的说条数。
+      // 这里给的是**下一步该做什么**，而不是「不行」：产品现在可以删，但删之前得
+      // 让人知道是删产品而不是删主类。
       deleteBlockedReason:
         total > 0
-          ? `这一类下面还有 ${String(total)} 条产品（其中 ${String(archivedCount)} 条已下架）。产品只能下架、不能物理删除，所以这个主类删不掉。`
+          ? `这一类下面还有 ${String(total)} 条产品（其中 ${String(archivedCount)} 条已下架）。先把这些产品删掉、或改到别的主类，再来删主类。`
           : row.builtin
             ? '这是内置主类。它的标识还被导入器与条目号段引用，不能删除。'
             : '',

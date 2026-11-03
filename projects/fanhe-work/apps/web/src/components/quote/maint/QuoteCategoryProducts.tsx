@@ -1,9 +1,9 @@
 import type { QuoteItemDto, QuoteSource } from '@fanhe/shared'
-import { LoaderCircle, X } from 'lucide-react'
+import { LoaderCircle, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError } from '../../../lib/api'
-import { mergeQuoteItems, searchQuotes } from '../../../lib/quote'
+import { deleteQuoteItem, mergeQuoteItems, searchQuotes } from '../../../lib/quote'
 import { describePrice } from '../../../lib/quote-display'
 
 /**
@@ -45,6 +45,8 @@ export function QuoteCategoryProducts({
   const [selected, setSelected] = useState<readonly string[]>([])
   const [keep, setKeep] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 哪一条正处于「确认删除」。删除不可逆，所以要两次点击。 */
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   const refresh = useCallback(
     (): Promise<void> =>
@@ -102,6 +104,34 @@ export function QuoteCategoryProducts({
       onClose()
     } catch (cause) {
       onResult('error', cause instanceof ApiError ? cause.message : '合并失败，请重试')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * 删掉一条产品（**物理删除**，与「下架」不同）。
+   *
+   * 这里列出来的都是在售条目，删掉之后连「下架可复原」这条路也没有了 —— 所以按钮要
+   * 两次点击，提示里写明「不可撤销」。审计里留了整行快照（名称 / 型号 / 规格 /
+   * 条目号 / 价格），真要找回只能照着它手工重录。
+   */
+  async function remove(item: QuoteItemDto): Promise<void> {
+    setConfirming(null)
+    setBusy(true)
+    try {
+      const result = await deleteQuoteItem({ source, code: item.code })
+      onResult(
+        'ok',
+        `已删除「${result.name}」${result.imageRemoved ? '，连同它的商品图' : ''}（不可撤销）`,
+      )
+      // 删掉的那条可能还在勾选与「保留」里，不清掉的话合并按钮会指向一个不存在的键。
+      setSelected((current) => current.filter((code) => code !== item.code))
+      setKeep((current) => (current === item.code ? null : current))
+      onChanged()
+      await refresh()
+    } catch (cause) {
+      onResult('error', cause instanceof ApiError ? cause.message : '删除失败，请重试')
     } finally {
       setBusy(false)
     }
@@ -187,6 +217,38 @@ export function QuoteCategoryProducts({
                         <span className="text-muted-foreground-weak">
                           {describePrice(item).suffix}
                         </span>
+                      </td>
+                      <td className="w-[76px] border-b border-border-soft px-1 py-1.5 text-right">
+                        {/* 两次点击。第一次只把按钮换成「确认删除」，点别的行或点
+                            「收起」都等于放弃 —— 物理删除没有第二条路可退。 */}
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            if (confirming !== item.code) {
+                              setConfirming(item.code)
+                              return
+                            }
+                            void remove(item)
+                          }}
+                          className={
+                            confirming === item.code
+                              ? 'inline-flex h-6 items-center gap-1 rounded-[6px] bg-destructive px-1.5 text-[11px] text-destructive-foreground disabled:opacity-40'
+                              : 'inline-flex h-6 items-center gap-1 rounded-[6px] px-1.5 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-40'
+                          }
+                          aria-label={
+                            confirming === item.code
+                              ? `确认删除「${item.name}」`
+                              : `删除产品「${item.name}」`
+                          }
+                        >
+                          {busy && confirming === item.code ? (
+                            <LoaderCircle className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                          {confirming === item.code ? '确认删除' : '删除'}
+                        </button>
                       </td>
                     </tr>
                   )
