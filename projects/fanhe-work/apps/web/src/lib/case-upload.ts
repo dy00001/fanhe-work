@@ -64,8 +64,14 @@ export function describePrepareFailure(reason: PrepareFailure): string {
   }
 }
 
-/** 有些浏览器不给 `OffscreenCanvas.toBlob`，统一走一个函数，失败回落到 DOM canvas。 */
-async function encodeBitmap(
+/**
+ * 有些浏览器不给 `OffscreenCanvas.toBlob`，统一走一个函数，失败回落到 DOM canvas。
+ *
+ * 导出是给 `lib/quote-image.ts` 用的：报价商品图的压缩规则（长边、质量、只缩不放）
+ * 与案例图不同，但「解码 → 缩放 → 编码」这三步没有任何理由写两遍 —— 写两遍就会
+ * 出现两套缩放取整规则，而缩略图错一像素，肉眼看不出来、边框却对不齐。
+ */
+export async function encodeBitmap(
   bitmap: ImageBitmap,
   maxEdge: number,
   quality: number,

@@ -361,14 +361,20 @@ const CREATE_ITEM_BODY_SCHEMA = {
     source: { type: 'string', enum: [...QUOTE_SOURCES] },
     category: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
     name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.ITEM_NAME_MAX },
-    model: { type: 'string', maxLength: 120 },
-    spec: { type: 'string', maxLength: 160 },
-    pricingMode: { type: 'string', maxLength: 40 },
-    materials: { type: 'string', maxLength: 300 },
-    unit: { type: 'string', maxLength: 24 },
-    unitRaw: { type: 'string', maxLength: 24 },
-    priceText: { type: 'string', maxLength: 200 },
-    note: { type: 'string', maxLength: 400 },
+    model: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_MODEL_MAX },
+    spec: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_SPEC_MAX },
+    pricingMode: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_PRICING_MODE_MAX },
+    materials: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_MATERIALS_MAX },
+    unit: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_UNIT_MAX },
+    unitRaw: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_UNIT_MAX },
+    priceText: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_PRICE_TEXT_MAX },
+    note: { type: 'string', maxLength: QUOTE_LIMITS.ITEM_NOTE_MAX },
+    /**
+     * 可选的商品图。**复用取图 / 换图那份 `UPLOAD_BODY_SCHEMA`**，不另写一份：
+     * 两处判据只要有一处不同，就会出现「换图能传、新增时传不上去」这种只在某个
+     * 入口复现的怪现象。
+     */
+    image: UPLOAD_BODY_SCHEMA,
   },
 } as const
 
@@ -833,7 +839,13 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
    */
   app.post<{ Body: CreateQuoteItemRequest }>(
     '/api/quote/items',
-    { preHandler: requireAuth, schema: { body: CREATE_ITEM_BODY_SCHEMA } },
+    {
+      preHandler: requireAuth,
+      schema: { body: CREATE_ITEM_BODY_SCHEMA },
+      // 带图时请求体里有两张 base64（原图 + 缩略图，各约 4/3 膨胀），默认 1MB 装不下。
+      // 与换图那条路由同一个量级。
+      bodyLimit: 8 * 1024 * 1024,
+    },
     async (request, reply) => {
       const context = await resolveWrite(request, reply)
       if (context === null) return reply

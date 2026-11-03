@@ -89,6 +89,21 @@ export const QUOTE_LIMITS = {
   CATEGORY_NAME_MAX: 80,
   /** 产品名长度上限。与 `quote_items.name` 的列宽一致。 */
   ITEM_NAME_MAX: 200,
+  /**
+   * 下面五个是新增产品表单里那几个可选字段的上限。
+   *
+   * **抽成常量是因为它们必须与 `routes/quote.ts` 的 `CREATE_ITEM_BODY_SCHEMA`
+   * 同源。** 表单不设 `maxLength`、schema 却卡长度，表现是「填得好好的，
+   * 点保存弹一条 400」；反过来表单卡得比 schema 严，则是「明明还能写更多，输入框
+   * 却不吃字」。两种都不会报错，只能靠人发现自己少了几个字。
+   */
+  ITEM_MODEL_MAX: 120,
+  ITEM_SPEC_MAX: 160,
+  ITEM_UNIT_MAX: 24,
+  ITEM_NOTE_MAX: 400,
+  ITEM_PRICE_TEXT_MAX: 200,
+  ITEM_PRICING_MODE_MAX: 40,
+  ITEM_MATERIALS_MAX: 300,
   /** 批量导入单份文件的上限。台账 xlsx 约 300KB，8MB 足够覆盖带图的表。 */
   IMPORT_FILE_BYTES_MAX: 8 * 1024 * 1024,
   /**
@@ -374,6 +389,19 @@ export type CreateQuoteItemRequest = {
   /** 价格原文。服务端按 `parsePriceInput` 判形态，与在线改价、台账导入同一套。 */
   priceText?: string
   note?: string
+  /**
+   * 商品图。**可选，且推荐随这一个请求一起提交**，而不是先建条目再调
+   * `POST /items/:code/image`。
+   *
+   * 理由是图键：`imageKey` 用的是条目自己的 `code`，而新产品的 `code` 由服务端按
+   * 业务键算 —— 客户端拿不到，只能等第一次响应回来。分成两步就有中间态「产品建好
+   * 了、图没上去」，操作员看到「已新增」，回到列表却是一张空图，而且这个状态不会
+   * 报错、也不会自动重试。
+   *
+   * 带在同一个请求里，服务端就能把「写条目 + 写图字节 + 绑定」放进一个事务：要么
+   * 两样都在，要么一行都没有，前端只需要区分成功 / 失败两种结果。
+   */
+  image?: UploadQuoteImageRequest
 }
 
 /** 批量导入里的一行。字段与 `CreateQuoteItemRequest` 对齐，少一个来源（整批一个来源）。 */

@@ -727,6 +727,14 @@ async function nextManualLedgerNo(source: QuoteSource): Promise<string> {
  *
  * 台账里确实有（板式工艺同名但说明与收费不同）。所以不是「查重就拒」，而是按
  * `occurrence` 往后找第一个空位，与导入器的规则完全一致。
+ *
+ * ## 图片与条目在同一个事务里
+ *
+ * 新产品没有 code，图的键又必须是 code（`saveItemImage` 的规则），所以图片只能等
+ * 条目建好之后才绑。把「写条目 + 写图字节 + 指过去」放进一个事务，就消掉了那个
+ * 中间态：要么两样都在，要么一行都没写。校验放在**写库之前**，因为一次失败的
+ * 新增如果留下了一行没有图的产品，操作员看到的是「保存失败」，不会想到库里已经
+ * 多了一条。
  */
 export async function createItem(
   input: CreateQuoteItemRequest,
@@ -736,6 +744,10 @@ export async function createItem(
   const name = clipText(input.name, ITEM_COLUMN_MAX.name)
   if (name === '') return { ok: false, reason: 'invalid_name' }
   if (category === '') return { ok: false, reason: 'invalid_category' }
+
+  // 图在写库前先验一遍。`invalid_image` 与换图接口同一个错误码、同一套判据。
+  const image = input.image === undefined ? null : validateImage(input.image)
+  if (input.image !== undefined && image === null) return { ok: false, reason: 'invalid_image' }
 
   const base = {
     source: input.source,
@@ -788,11 +800,46 @@ export async function createItem(
     datasetVersion: version,
   }
 
+  // 图键用条目自己的 code —— 与 `saveItemImage` 一致，手工图不挂在产品族上，
+  // 否则同族的十几行会跟着一起换图。
+  const imageKey = code
+  const imageId = image === null ? null : randomUUID()
+  const baseReason = restoringLedgerNo === null ? '新增产品' : '重新上架'
+
   const [saved] = await prisma.$transaction([
     restoringLedgerNo === null
-      ? prisma.quoteItem.create({ data: { code, ...data }, select: ITEM_SELECT })
-      : // 恢复：`imageKey` 不在更新字段里 —— 下架前绑的图还在，重新上架不该丢图。
-        prisma.quoteItem.update({ where: { code }, data, select: ITEM_SELECT }),
+      ? prisma.quoteItem.create({
+          data: { code, ...data, ...(image === null ? {} : { imageKey }) },
+          select: ITEM_SELECT,
+        })
+      : // 恢复：不带图时 `imageKey` 不在更新字段里 —— 下架前绑的图还在，重新上架
+        // 不该丢图。带了图就用新图覆盖旧的。
+        prisma.quoteItem.update({
+          where: { code },
+          data: { ...data, ...(image === null ? {} : { imageKey }) },
+          select: ITEM_SELECT,
+        }),
+    // 旧图不删字节，只降级并记 `replaced_by`。恢复一条已下架的行时，它可能挂着自己
+    // 上次的图，那一条同样要让位。
+    ...(image === null || imageId === null
+      ? []
+      : [
+          prisma.quoteItemImage.updateMany({
+            where: { imageKey, isActive: true },
+            data: { isActive: false, replacedBy: imageId },
+          }),
+          prisma.quoteItemImage.create({
+            data: {
+              id: imageId,
+              imageKey,
+              ...image,
+              byteSize: image.data.length,
+              bindType: 'manual',
+              sourceRow: null,
+              uploadedBy: operator.userId,
+            },
+          }),
+        ]),
     prisma.quoteRevision.create({
       data: {
         itemCode: code,
@@ -801,7 +848,7 @@ export async function createItem(
         newValue: 'active',
         operatorId: operator.userId,
         unlockSessionId: operator.access.unlockSessionId,
-        reason: restoringLedgerNo === null ? '新增产品' : '重新上架',
+        reason: image === null ? baseReason : `${baseReason}（含商品图）`,
       },
     }),
   ])
@@ -1101,6 +1148,55 @@ function thumbSize(width: number, height: number): { width: number; height: numb
   }
 }
 
+/** 校验通过的一张图，字段名与 `QuoteItemImage` 的列对齐。 */
+type ValidatedImage = {
+  data: Uint8Array<ArrayBuffer>
+  thumb: Uint8Array<ArrayBuffer>
+  mime: string
+  width: number
+  height: number
+  thumbWidth: number
+  thumbHeight: number
+}
+
+/**
+ * 把请求里的 base64 校验成可以落库的一张图。
+ *
+ * **抽成函数是为了让两条入口共用同一套判据**：`saveItemImage`（换图）与
+ * `createItem`（新增产品时带图）。两处各写一份，只要阈值有一处不同，就会出现
+ * 「同一张图换图能传、新增时传不上去」这种谁也说不清的现象 —— 而两处代码单看都
+ * 是对的。
+ *
+ * 校验顺序是刻意的：先看长度（不必解码就能挡掉明显过大的串），再解码判魔数
+ * （**不信客户端声明的 mime**），最后判边长。反过来先判边长的话，一段不是图片的
+ * 文本会得到「尺寸不合法」，而真正的问题是「这不是图」。
+ */
+function validateImage(input: UploadImageInput): ValidatedImage | null {
+  const data = decodeBase64(input.data)
+  const thumb = decodeBase64(input.thumb)
+
+  if (data.length === 0 || data.length > QUOTE_LIMITS.IMAGE_BYTES_MAX) return null
+  if (thumb.length === 0 || thumb.length > QUOTE_LIMITS.IMAGE_BYTES_MAX) return null
+
+  const mime = detectImageMime(data)
+  if (mime === null) return null
+
+  const badEdge = (value: number): boolean =>
+    !Number.isInteger(value) || value < 1 || value > QUOTE_LIMITS.IMAGE_EDGE_MAX
+  if (badEdge(input.width) || badEdge(input.height)) return null
+
+  const thumbDimensions = thumbSize(input.width, input.height)
+  return {
+    data,
+    thumb,
+    mime,
+    width: input.width,
+    height: input.height,
+    thumbWidth: thumbDimensions.width,
+    thumbHeight: thumbDimensions.height,
+  }
+}
+
 /**
  * 上传 / 替换某一行的商品图。
  *
@@ -1121,28 +1217,13 @@ export async function saveItemImage(
   })
   if (row === null) return { ok: false, reason: 'not_found' }
 
-  const data = decodeBase64(input.data)
-  const thumb = decodeBase64(input.thumb)
-
-  if (data.length === 0 || data.length > QUOTE_LIMITS.IMAGE_BYTES_MAX) {
-    return { ok: false, reason: 'invalid_image' }
-  }
-  if (thumb.length === 0 || thumb.length > QUOTE_LIMITS.IMAGE_BYTES_MAX) {
-    return { ok: false, reason: 'invalid_image' }
-  }
-
-  const mime = detectImageMime(data)
-  if (mime === null) return { ok: false, reason: 'invalid_image' }
-
-  const badEdge = (value: number): boolean =>
-    !Number.isInteger(value) || value < 1 || value > QUOTE_LIMITS.IMAGE_EDGE_MAX
-  if (badEdge(input.width) || badEdge(input.height)) return { ok: false, reason: 'invalid_image' }
-
-  const thumbDimensions = thumbSize(input.width, input.height)
+  const validated = validateImage(input)
+  if (validated === null) return { ok: false, reason: 'invalid_image' }
 
   const imageKey = row.code
   const version = await bumpDataset(`换图：${code}`)
   const newId = randomUUID()
+  const { data, thumb, mime } = validated
 
   await prisma.$transaction([
     // 先把这一键上现有的活动图降级。注意 `replacedBy` 指向新行 id，方向是
@@ -1158,10 +1239,10 @@ export async function saveItemImage(
         data,
         thumb,
         mime,
-        width: input.width,
-        height: input.height,
-        thumbWidth: thumbDimensions.width,
-        thumbHeight: thumbDimensions.height,
+        width: validated.width,
+        height: validated.height,
+        thumbWidth: validated.thumbWidth,
+        thumbHeight: validated.thumbHeight,
         byteSize: data.length,
         bindType: 'manual',
         sourceRow: null,
@@ -1192,8 +1273,8 @@ export async function saveItemImage(
       image: {
         key: imageKey,
         mime,
-        width: input.width,
-        height: input.height,
+        width: validated.width,
+        height: validated.height,
         bindType: 'manual',
         byteSize: data.length,
         sourceRow: null,

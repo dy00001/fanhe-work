@@ -54,6 +54,14 @@ const CODE_A = `${TEST_DATA_PREFIX}q_amount`
 const CODE_B = `${TEST_DATA_PREFIX}q_archived`
 const CODE_C = `${TEST_DATA_PREFIX}q_craft`
 
+/**
+ * 新增产品**不能**用固定 code —— 它由服务端按五元组算成 `sale-<digest>`，不带
+ * `zz_test_` 前缀。所以清理只能靠产品名圈：两个名字都带前缀，按 `name.startsWith`
+ * 就能把本文件建的条目、图、审计一次收干净。
+ */
+const NEW_ITEM_NAME = `${TEST_DATA_PREFIX}新增带图产品`
+const BAD_ITEM_NAME = `${TEST_DATA_PREFIX}新增坏图产品`
+
 /** 1×1 PNG。服务端按魔数判类型，不解码，所以它只需要前四字节是对的。 */
 const PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
@@ -103,6 +111,26 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
   }
   async function snapshotSessions() {
     return prisma.quoteUnlockSession.findMany()
+  }
+
+  /**
+   * 清掉本文件通过「新增产品」建出来的行。
+   *
+   * 那些行的 code 是服务端算的 `sale-<digest>`，**不以测试前缀开头** —— 只按 code
+   * 前缀清理会留下三条真实感的条目（和它们的图），跑第二次也不报错，只是库里慢慢
+   * 多出一堆「新增带图产品」。所以按产品名圈。删的顺序必须是 审计 → 图 → 条目：
+   * 后两者没有外键，但反过来的话，一旦中途失败就再也找不到该删哪些图了。
+   */
+  async function purgeManualItems(): Promise<void> {
+    const stale = await prisma.quoteItem.findMany({
+      where: { name: { in: [NEW_ITEM_NAME, BAD_ITEM_NAME] } },
+      select: { code: true },
+    })
+    const codes = stale.map((row) => row.code)
+    if (codes.length === 0) return
+    await prisma.quoteRevision.deleteMany({ where: { itemCode: { in: codes } } })
+    await prisma.quoteItemImage.deleteMany({ where: { imageKey: { in: codes } } })
+    await prisma.quoteItem.deleteMany({ where: { code: { in: codes } } })
   }
 
   let secretSnapshot: Awaited<ReturnType<typeof snapshotSecrets>> = []
@@ -165,6 +193,7 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       where: { imageKey: { startsWith: TEST_DATA_PREFIX } },
     })
     await prisma.quoteRevision.deleteMany({ where: { itemCode: { startsWith: TEST_DATA_PREFIX } } })
+    await purgeManualItems()
 
     // **只清带前缀的 owner**，不清带前缀的全部账号：前缀是本文件与别的集成测试
     // 共用的，全清会误删同时段别的文件建的账号。清 owner 是因为它必须清 ——
@@ -261,6 +290,7 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       where: { imageKey: { startsWith: TEST_DATA_PREFIX } },
     })
     await prisma.quoteItem.deleteMany({ where: { code: { startsWith: TEST_DATA_PREFIX } } })
+    await purgeManualItems()
     // 只删本轮新建的数据集版本：库里那一条是导入台账写的。
     await prisma.quoteDataset.deleteMany({
       where: {
@@ -620,6 +650,88 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       select: { priceFen: true },
     })
     assert.equal(row?.priceFen, 10000)
+  })
+
+  test('新增产品带图：一次提交、图键用新算出的 code、取图取得到', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: {
+        source: 'sale',
+        category: `${TEST_DATA_PREFIX}柜体`,
+        name: NEW_ITEM_NAME,
+        spec: '带图规格',
+        unit: '㎡',
+        priceText: '888',
+        image: { data: PNG_BASE64, thumb: PNG_BASE64, width: 1, height: 1 },
+      },
+    })
+    assert.equal(response.statusCode, 200, response.body)
+
+    const body = response.json() as {
+      version: string
+      item: {
+        code: string
+        ledgerNo: string
+        imageKey: string | null
+        imageVersion: string | null
+      }
+    }
+    assert.match(body.item.ledgerNo, /^M\d+$/, '手工新增用 M 号段，不混进台账号 A/B/C')
+    // 图键必须是**服务端刚算出来的**那个 code。客户端拿不到它，所以这条也顺带
+    // 证明「图随条目一次提交」这条路是通的 —— 分成两步就得先拿到 code。
+    assert.equal(body.item.imageKey, body.item.code, '图键要用条目自己的 code，不能挂到产品族上')
+    assert.notEqual(body.item.imageVersion, null, '响应里没有图版本，前端无法拼缓存键')
+
+    // 只断言 `imageKey` 不够：它可能只是字段被改了、字节根本没写进去。取一次图
+    // 才算证明「关联正确」。
+    const image = await app.inject({
+      method: 'GET',
+      url: `/api/quote/images/${body.item.code}?variant=thumb`,
+      headers: authed(designerToken),
+    })
+    assert.equal(image.statusCode, 200, image.body)
+    assert.equal(image.headers['content-type'], 'image/png')
+
+    const row = await prisma.quoteItemImage.findFirst({
+      where: { imageKey: body.item.code, isActive: true },
+      select: { bindType: true, uploadedBy: true, byteSize: true, thumbWidth: true },
+    })
+    assert.equal(row?.bindType, 'manual', '手工上传记 manual，与台账导入的 exact / family 分开')
+    assert.equal(row?.uploadedBy, designerUserId)
+    assert.equal(row?.byteSize, Buffer.from(PNG_BASE64, 'base64').length)
+    // 1×1 的图不该被放大，缩略图尺寸按只缩不放算。
+    assert.equal(row?.thumbWidth, 1)
+  })
+
+  test('新增产品带非法图：整条不落库，只报 invalid_image', async () => {
+    const countBefore = await prisma.quoteItem.count({ where: { name: BAD_ITEM_NAME } })
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/quote/items',
+      headers: { ...authed(designerToken), 'x-quote-unlock': unlockToken },
+      payload: {
+        source: 'sale',
+        category: `${TEST_DATA_PREFIX}柜体`,
+        name: BAD_ITEM_NAME,
+        priceText: '100',
+        image: {
+          data: Buffer.from('not an image').toString('base64'),
+          thumb: PNG_BASE64,
+          width: 1,
+          height: 1,
+        },
+      },
+    })
+    assert.equal(response.statusCode, 400, response.body)
+    assert.equal((response.json() as { error: string }).error, 'invalid_image')
+
+    // 这条是这个用例的重点：校验在写库之前。反过来的话会留下一条没有图的产品，
+    // 而操作员看到的是「保存失败」，不会想到库里已经多了一条。
+    const countAfter = await prisma.quoteItem.count({ where: { name: BAD_ITEM_NAME } })
+    assert.equal(countAfter, countBefore, '图被拒时不能留下一条没有图的产品')
   })
 
   test('换图：非图片字节被拒，合法 PNG 落库且键用条目自己的 code', async () => {
