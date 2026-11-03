@@ -123,6 +123,12 @@ grep -o "inset 0 -1px 0 0 var(--border-soft)" dist/assets/*.css   # 必须是 1
    排序变，等于每拖一下其他端都要重拉 1225 条。分类重排也出于同一理由不 bump。
 5. **搜索状态下不能拖**（手柄禁用 + 文案说明）：拖的是筛选出来的一小撮，写下去的却是
    整份顺序，会把没显示的几百条整体挪位。
+6. **新增 / 导入的产品排在最后**：`sort_order` 默认是 0，而拖过的列表是 1、2、3…，
+   新行不写这一列就会顶在第 0 位 —— 看起来像加错了地方，想挪走还得先找到它。
+   - 手填新增：写 `max(sort_order)+1`（`nextItemSortOrder`），恢复一条已下架的行同理；
+   - 批量导入：只加在 **create** 上（`sortBase + 行序`），**不能**放进 `data` ——
+     那个对象同时用于 `update`，放进去等于每次导入都把已有行的顺序清一遍。
+     与 `imageKey` 不在更新字段里是同一条道理。
 
 **涉及文件**
 
@@ -131,6 +137,7 @@ grep -o "inset 0 -1px 0 0 var(--border-soft)" dist/assets/*.css   # 必须是 1
 | `packages/shared/src/quote.ts` | `ReorderQuoteItemsRequest`、`ReorderQuoteSourcesRequest` |
 | `apps/api/prisma/schema.prisma` + 迁移 | `QuoteItem.sortOrder` + 索引 |
 | `apps/api/src/quote/item-order.ts` | 新增：产品重排（含「没提到的接在后面」） |
+| `apps/api/src/quote/store.ts` | 新增 `nextItemSortOrder`：手填新增取 max+1；导入只写 create |
 | `apps/api/src/quote/sources.ts` | 新增 `reorderSources`，`SourceFailure` 加 `invalid_order` |
 | `apps/api/src/quote/store.ts` | `searchItems` 的 `orderBy` 加 `sortOrder` |
 | `apps/api/src/routes/quote.ts` | `PUT /items/order`、`PUT /sources/order` + schema + 失败映射 |
@@ -172,7 +179,8 @@ lint / typecheck / format:check 全 0
 
 新增用例：`apps/web/test/quote-sort.test.mjs`（6 条，纯函数行为）、
 `apps/web/test/quote-list-affordance.test.mjs`（5 条，接线与列数）、
-`apps/api/test/quote.test.ts`（4 条，排序接口）。
+`apps/api/test/quote.test.ts`（4 条，排序接口；其中一条顺带钉住「拖过之后新增的产品
+排最后」，注入「新增不写 sortOrder」会红）。
 
 **反例注入 8 次，全部如期变红**
 
