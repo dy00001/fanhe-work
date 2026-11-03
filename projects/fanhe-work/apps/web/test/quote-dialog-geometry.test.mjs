@@ -154,6 +154,40 @@ test('Esc 在捕获阶段处理，先于 Radix 收走面板', () => {
   )
 })
 
+test('灯箱必须把自己设回 pointer-events: auto', () => {
+  const code = readCode(LIGHTBOX_PATH)
+
+  // 🔴 这是整个灯箱能不能用的前提，也是 2026-11-03「滚轮不缩放 + 点哪都关」的**真正根因**。
+  // Radix 的模态 Dialog 打开时把 `document.body.style.pointerEvents` 设成 `none`
+  // （DismissableLayer 里那句 `ownerDocument.body.style.pointerEvents = "none"`），
+  // 然后只给自己的内容层设回 `auto`。灯箱 portal 到 body，是 body 的子节点，
+  // 于是整层继承了 `none` —— 对鼠标完全透明：滚轮落到下面列表上（图不缩放、页面在滚），
+  // 点击落到下面那层整屏容器上（触发「点空白关闭」→ 面板关掉、回首页）。
+  // 鼠标事件根本不进来，`passive: false` 与 `onInteractOutside` 全都无从谈起。
+  assert.match(
+    code,
+    /style=\{\{\s*pointerEvents:\s*'auto'\s*\}\}/,
+    '灯箱根节点丢了 pointer-events: auto。模态 Dialog 会把 body 设成 pointer-events: none，' +
+      'portal 到 body 的灯箱会整层变成鼠标透明的 —— 滚轮穿透、点击穿透，看起来像「点哪都关」。',
+  )
+})
+
+test('点图片不关闭：关闭判定用 pointerdown 记下的目标，不是 pointerup 的 target', () => {
+  const code = readCode(LIGHTBOX_PATH)
+
+  assert.ok(
+    code.includes('onStage: event.target === event.currentTarget'),
+    '缺 pointerdown 时记下的 onStage。舞台调了 setPointerCapture，pointerup 的 target 会被' +
+      '重定向成舞台本身，「点在图上」与「点在背景上」在 pointerup 里长得一模一样。',
+  )
+  assert.match(code, /drag\.onStage/, '关闭判定没有用 onStage')
+  assert.ok(
+    !/!drag\.moved && event\.target === event\.currentTarget/.test(code),
+    '关闭判定又回到比 pointerup 的 target 了。指针捕获下它恒等于 currentTarget，' +
+      '点图片任意位置都会关掉灯箱。',
+  )
+})
+
 test('维护面板有直达改价的入口，而不是只有一个「关闭」', () => {
   const maint = readCode(MAINT_PATH)
   const panel = readCode(PANEL_PATH)

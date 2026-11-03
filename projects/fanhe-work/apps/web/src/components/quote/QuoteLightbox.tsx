@@ -188,7 +188,13 @@ function QuoteLightboxView({
   }, [onClose, applyScale, view.scale])
 
   // 拖动（鼠标 + 单指）。位移超过阈值才算拖动，否则当成点击背景关闭。
-  const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  //
+  // `onStage` 必须在 **pointerdown 那一刻**记下来，不能在 pointerup 里比
+  // `event.target === event.currentTarget`：舞台调了 `setPointerCapture`，
+  // 后续 pointermove / pointerup 的 `target` 会被**重定向成捕获元素本身**，
+  // 于是「点在图上」和「点在背景上」在 pointerup 里长得一模一样 —— 结果是
+  // 点图片任意位置都会关掉灯箱（2026-11-03 用户报的「点图片就关」）。
+  const dragRef = useRef<{ x: number; y: number; moved: boolean; onStage: boolean } | null>(null)
 
   const scalePercent = Math.round(baseScale * view.scale * 100)
   const isActualSize = Math.abs(baseScale * view.scale - 1) < 0.01
@@ -201,6 +207,17 @@ function QuoteLightboxView({
          「点图片任意位置就回到首页」就是这个）。DialogContent 的 `onInteractOutside`
          靠它把这一片排除掉。 */
       data-quote-lightbox=""
+      /* 🔴 **这一行是整个灯箱能不能用的前提。**
+         Radix 的模态 Dialog 打开时会把 `document.body` 的 `pointer-events` 设成
+         `none`（`DismissableLayer` 里那句 `ownerDocument.body.style.pointerEvents =
+         "none"`），然后只给自己的内容层设回 `auto`。灯箱 portal 到 `body`，是 body 的
+         子节点，于是**整层继承了 `none`** —— 对鼠标完全透明：
+           · 滚轮穿过它落到下面的列表上 → 图不缩放、页面在滚（「滚轮被底层接管」）
+           · 点图片 / 点关闭按钮同样穿过 → 落到下面那层整屏容器上 → 触发「点空白关闭」
+             → 查价面板被关掉、回到首页（「点任意位置就关弹窗」）
+         鼠标事件都不进来，前面那些 `passive: false`、`onInteractOutside` 全是空谈。
+         必须显式把自己设回 `auto`。 */
+      style={{ pointerEvents: 'auto' }}
       role="dialog"
       aria-modal="true"
       aria-label={`查看 ${alt}`}
@@ -251,7 +268,12 @@ function QuoteLightboxView({
         ref={stageRef}
         className="relative min-h-0 flex-1 touch-none overflow-hidden"
         onPointerDown={(event) => {
-          dragRef.current = { x: event.clientX, y: event.clientY, moved: false }
+          dragRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+            moved: false,
+            onStage: event.target === event.currentTarget,
+          }
           event.currentTarget.setPointerCapture(event.pointerId)
         }}
         onPointerMove={(event) => {
@@ -275,8 +297,9 @@ function QuoteLightboxView({
           const drag = dragRef.current
           dragRef.current = null
           event.currentTarget.releasePointerCapture(event.pointerId)
-          // 没拖动 = 点在了背景上 = 关闭。图本身不关闭（用户可能只是点了一下想看清）。
-          if (drag !== null && !drag.moved && event.target === event.currentTarget) onClose()
+          // 没拖动 + 按下的地方是背景本身 = 点空白处关闭。图本身不关闭
+          // （用户可能只是点了一下想看清）。
+          if (drag !== null && !drag.moved && drag.onStage) onClose()
         }}
         onDoubleClick={() => setView(LIGHTBOX_IDENTITY)}
       >
