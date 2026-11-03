@@ -1,6 +1,6 @@
-import type { QuoteItemDto, QuoteSource } from '@fanhe/shared'
+import type { QuoteItemDto } from '@fanhe/shared'
 
-import { describePrice, splitHighlight } from '../../lib/quote-display'
+import { describePrice, quoteSourceColor, splitHighlight } from '../../lib/quote-display'
 
 import { QuoteThumb } from './QuoteThumb'
 
@@ -36,11 +36,20 @@ import { QuoteThumb } from './QuoteThumb'
  * 金额：`¥668`，等宽数字；规则价（「按所选花色36板的5倍单价计算」）：琥珀色、允许
  * 换行、最宽 158px；空价：`待补价` 圆角标签 —— 留白会被读成「免费」。
  */
-const SOURCE_COLOR: Record<QuoteSource, string> = {
-  sale: 'var(--m-teal)',
-  craft: 'var(--m-amber)',
-  hardware: 'var(--m-blue)',
-}
+/**
+ * 来源标签的配色**不在这里定**，走 `quoteSourceColor()`。
+ *
+ * 这里曾经有一张写死的来源色表（`sale` 青、`craft` 褐、`hardware` 蓝）。主类可自建
+ * 之后它有两个毛病，都不报错：
+ *
+ * 1. 新建的第六个主类进来是 `undefined` —— 标签只剩一圈默认边框、字是继承色，
+ *    在表格里像是「没归类」的普通文字；
+ * 2. 它与筛选栏用的哈希分配**不是同一套规则**，于是同一个主类在两处的颜色不一样
+ *    （「板式工艺收费」左栏青、表格褐）。用户拿颜色当对应关系的判据，对不上就以为
+ *    是两样东西。
+ *
+ * 颜色只能有一个出处，所以整段删掉，改调那个函数。
+ */
 
 /** 静态稿把来源标签里的分类名截到 10 个字：再长就把 16% 的列挤爆。 */
 const TAG_MAX = 10
@@ -98,7 +107,7 @@ export function QuoteResultTable({
         {rows.map((item) => {
           const price = describePrice(item)
           const active = item.code === selectedCode
-          const color = SOURCE_COLOR[item.source]
+          const color = quoteSourceColor(item.source)
           return (
             <tr
               key={item.code}

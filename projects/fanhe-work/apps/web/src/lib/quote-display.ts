@@ -107,14 +107,26 @@ export function describeBindType(bindType: QuoteBindType): string {
 }
 
 /**
- * 来源那个 6px 圆点的颜色。
+ * 来源的配色 —— **左栏圆点、结果表标签、详情浮层圆点共用这一份，别再各写一套。**
  *
  * 早先是一张写死的 `{ sale: 青, craft: 褐, hardware: 蓝 }`。主类能自建之后，那张表
  * 对新来源返回 `undefined` —— 圆点变成**透明**，看起来像少画了一个点，而且不报错。
  *
- * 改成按 code 取模分配：同样的 code 永远同一个颜色，新建的第十个主类也有颜色
- * （与第三个同色，可接受 —— 圆点是辅助，名字才是判据）。
+ * 🔴 **2026-11-03 的故障就是这么来的**：只把筛选栏换成了下面的哈希分配，结果表
+ * （`QuoteResultTable`）里还留着一份写死表。于是「板式工艺收费」在左栏是青的、在表格
+ * 那一列是褐的 —— 两处都「有颜色」、都不报错、都不抛异常，只是对不上。用户拿颜色当
+ * 对应关系的判据，对不上就等于告诉他这是两个东西。**颜色只能有一个出处。**
+ *
+ * 内置三值优先命中固定表：它们的配色是静态稿定的（销售=青、工艺=褐、五金=蓝），已经
+ * 用了一个多月，不该因为「改成哈希」而整体换一遍。哈希只负责自定义主类：同样的 code
+ * 永远同一个颜色，撞上内置色或彼此撞色都可接受（圆点是辅助，名字才是判据）。
  */
+const BUILTIN_SOURCE_COLORS: Readonly<Record<string, string>> = {
+  sale: 'var(--m-teal)',
+  craft: 'var(--m-amber)',
+  hardware: 'var(--m-blue)',
+}
+
 const SOURCE_DOT_COLORS = [
   'var(--m-teal)',
   'var(--m-amber)',
@@ -123,6 +135,9 @@ const SOURCE_DOT_COLORS = [
 ] as const
 
 export function quoteSourceColor(code: string): string {
+  const builtin = BUILTIN_SOURCE_COLORS[code]
+  if (builtin !== undefined) return builtin
+
   let hash = 0
   for (let index = 0; index < code.length; index += 1) {
     hash = (hash * 31 + code.charCodeAt(index)) % 100_000
