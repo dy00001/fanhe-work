@@ -97,7 +97,12 @@ export function CaseLibraryDialog({
   /** 上传相关的提示（未被接受的格式、某一张失败）。与 `library.message` 分开：那条是
    *  归属写失败，这一条是「你选的这张图没进来」，用户要采取的动作不一样。 */
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
-  /** 删除上传图的二次确认。静态图删不掉，所以这个动作一旦触发就是真的删字节，值得一问。 */
+  /**
+   * 删除的二次确认。
+   *
+   * 内置图与上传图都不可撤销（内置图靠一条隐藏记录消失，上传图软删后字节也不再有任何
+   * 入口），所以这个动作值得一问。
+   */
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   /**
@@ -138,6 +143,9 @@ export function CaseLibraryDialog({
   /**
    * 上传图的 id 集合。**判断依据是快照里的 `uploads`，不是 id 的写法** —— id 的命名
    * 约定服务端也在用，但界面不该去解析它：哪天约定变了，两处都要跟着改。
+   *
+   * 它只用来决定「哪些格子的地址要带令牌换 object URL」。**不再参与删除判断** ——
+   * 那正是「内置图删不掉」的旧根因：删除能力被错误地绑在了图片来源上。
    */
   const uploadIds = useMemo(
     () => new Set((library.snapshot?.uploads ?? []).map((upload) => upload.itemId)),
@@ -185,8 +193,14 @@ export function CaseLibraryDialog({
     })
   }, [visible, assets.thumbs, uploadIds, uploadEntries])
   const selectedItems = view === null ? [] : view.all.filter((item) => selected.has(item.id))
-  /** 勾选里能删的那几张（自己上传的）。静态清单里的图没有可删的行。 */
-  const deletableCount = selectedItems.filter((item) => uploadIds.has(item.id)).length
+  /**
+   * 可删除的张数。**就是选中的张数** —— 内置图与上传图都能删。
+   *
+   * 这里曾经是 `selectedItems.filter((item) => uploadIds.has(item.id)).length`，那个判断
+   * 把「内置图」排除在外，于是选中已有图片时删除按钮整个是灰的。删除能力本来就不该由
+   * 图片来源决定：用户在图集里看到的是一张图，不是「一行数据库记录」。
+   */
+  const deletableCount = selectedItems.length
   const allSelectedUnassigned =
     selectedItems.length > 0 && selectedItems.every((item) => item.folderId === null)
   const folderLimitReached =
@@ -283,14 +297,21 @@ export function CaseLibraryDialog({
     if (failures.length > 0) setUploadNotice(failures.join('；'))
   }
 
-  /** 删除勾选里**能删的那些**（自己上传的）。静态清单里的图删不掉，服务端会 404。 */
-  async function removeUploads(): Promise<void> {
-    const targets = Array.from(selected).filter((itemId) => uploadIds.has(itemId))
+  /**
+   * 删除勾选的图。
+   *
+   * **内置图与上传图一视同仁。** 服务端按 itemId 分流：上传图软删字节，内置图记一条
+   * 隐藏记录（快照里多一个 `hiddenItemIds`，展示层据此不再画它）。界面这一层不需要
+   * 知道区别 —— 之前正是因为在这一层做了区分，才出现「已有的删不掉」。
+   *
+   * 串行是为了失败时能说清「删到第几张停的」。删除是低频动作，不值得并发。
+   */
+  async function removeItems(): Promise<void> {
+    const targets = Array.from(selected)
     if (targets.length === 0) return
     let allOk = true
     for (const itemId of targets) {
-      // 串行同样是为了失败时能说清「删到第几张停的」。删除是低频动作，不值得并发。
-      const ok = await library.deleteUpload(itemId)
+      const ok = await library.deleteItem(itemId)
       if (!ok) allOk = false
     }
     if (allOk) setSelected(new Set())
@@ -563,8 +584,8 @@ export function CaseLibraryDialog({
             </button>
 
             <div className="ml-auto flex items-center gap-2">
-              {/* 删除只对「自己上传的」有效，所以按钮上带张数：全选时它会显示 0 并禁用，
-                  这比让用户点一下再收到「这些删不掉」的报错清楚。 */}
+              {/* 删除对选中的每一张都有效（内置图与上传图都能删），所以按钮上带张数：
+                  一张都没选时它会显示「删除」并禁用 —— 比让用户点一下再没反应清楚。 */}
               {confirmDelete ? (
                 <span className="flex items-center gap-2">
                   <span className="text-muted-foreground">
@@ -573,7 +594,7 @@ export function CaseLibraryDialog({
                   <button
                     type="button"
                     onClick={() => {
-                      void removeUploads().finally(() => setConfirmDelete(false))
+                      void removeItems().finally(() => setConfirmDelete(false))
                     }}
                     className="rounded-md bg-destructive px-2.5 py-1.5 text-destructive-foreground transition-opacity hover:opacity-90"
                   >

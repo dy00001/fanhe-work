@@ -12,7 +12,7 @@ import {
   createCaseFolderRequest,
   createCaseUploadsRequest,
   deleteCaseFolderRequest,
-  deleteCaseUploadRequest,
+  deleteCaseItemRequest,
   moveCaseItemsRequest,
   renameCaseFolderRequest,
 } from './api'
@@ -65,8 +65,13 @@ export function uploadCaseImage(input: CreateCaseUploadsRequest): Promise<CaseLi
   return withAccessToken(async (token) => (await createCaseUploadsRequest(token, input)).library)
 }
 
-export function deleteCaseUpload(itemId: string): Promise<CaseLibrarySnapshot> {
-  return withAccessToken(async (token) => (await deleteCaseUploadRequest(token, itemId)).library)
+/**
+ * 删除一张图。**内置图与上传图都走这里**，区别由服务端处理（上传图软删字节，内置图
+ * 记一条隐藏记录）。界面因此不需要在两个按钮之间做判断 —— 那正是之前「一半能删一半
+ * 不能删」的来源。
+ */
+export function deleteCaseItem(itemId: string): Promise<CaseLibrarySnapshot> {
+  return withAccessToken(async (token) => (await deleteCaseItemRequest(token, itemId)).library)
 }
 
 /**

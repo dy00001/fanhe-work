@@ -111,6 +111,7 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
    */
   beforeEach(async () => {
     await prisma.caseItemPlacement.deleteMany({ where: { userId: libraryOwnerId } })
+    await prisma.caseItemDeletion.deleteMany({ where: { userId: libraryOwnerId } })
     await prisma.caseUpload.deleteMany({ where: { userId: libraryOwnerId } })
     await prisma.caseFolder.deleteMany({ where: { userId: libraryOwnerId } })
     await prisma.caseLibraryState.deleteMany({ where: { userId: libraryOwnerId } })
@@ -123,6 +124,7 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
       // 外键是 Cascade，删账号本可连带清掉。这里显式删一次：级联生效与否取决于外键
       // 真的建上了，而「测试留下的数据没清干净」会在下次运行时表现为莫名其妙的计数不符。
       await prisma.caseItemPlacement.deleteMany({ where: { userId: libraryOwnerId } })
+      await prisma.caseItemDeletion.deleteMany({ where: { userId: libraryOwnerId } })
       await prisma.caseUpload.deleteMany({ where: { userId: libraryOwnerId } })
       await prisma.caseFolder.deleteMany({ where: { userId: libraryOwnerId } })
       await prisma.caseLibraryState.deleteMany({ where: { userId: libraryOwnerId } })
@@ -159,6 +161,8 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
     folders: { id: string; categoryId: string; name: string }[]
     placements: { itemId: string; folderId: string | null }[]
     uploads: { itemId: string; categoryId: string; width: number; height: number }[]
+    /** 被移除的内置图。上传图不走它（删掉后直接从 uploads 消失）。 */
+    hiddenItemIds: string[]
   }
 
   async function readLibrary(headers: { authorization: string }): Promise<Library> {
@@ -195,6 +199,7 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
     assert.deepEqual(library.folders, [])
     assert.deepEqual(library.placements, [])
     assert.deepEqual(library.uploads, [])
+    assert.deepEqual(library.hiddenItemIds, [])
   })
 
   test('建文件夹：落库、修订号自增、名字被归一', async () => {
@@ -582,7 +587,7 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
     assert.equal(library.uploads.length, 0)
   })
 
-  test('删除上传图：快照里消失，取图变 404，静态图不受影响', async () => {
+  test('删除上传图：快照里消失，取图变 404', async () => {
     const { headers } = await signIn()
     const created = await uploadOne(headers)
     const upload = (created.json().library as Library).uploads[0]
@@ -590,11 +595,14 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
 
     const removed = await app.inject({
       method: 'DELETE',
-      url: `/api/cases/uploads/${upload.itemId}`,
+      url: `/api/cases/items/${upload.itemId}`,
       headers,
     })
     assert.equal(removed.statusCode, 200, `删除失败：${removed.body}`)
-    assert.equal((removed.json().library as Library).uploads.length, 0)
+    const library = removed.json().library as Library
+    assert.equal(library.uploads.length, 0)
+    // 上传图不走隐藏清单：它的行没了，不需要第二个状态。
+    assert.deepEqual(library.hiddenItemIds, [])
 
     const gone = await app.inject({
       method: 'GET',
@@ -602,14 +610,96 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
       headers,
     })
     assert.equal(gone.statusCode, 404)
+  })
 
-    // 静态清单里的图没有可删的行，删它只能是 404 —— 而不是把别的东西删掉。
-    const staticItem = await app.inject({
+  test('删除内置图：记一条隐藏记录，归属行一并清掉，重复删除幂等', async () => {
+    const { headers } = await signIn()
+    const created = await createFolder(headers, '主卧灰玻')
+    const folderId = created.folders[0]?.id
+    assert.ok(folderId !== undefined)
+
+    // 先把这张内置图放进文件夹 —— 删除必须把它从归属里摘掉，否则「文件夹里有几张」
+    // 会多算一张，而那个数字是用户核对整理结果的唯一依据。
+    await app.inject({
+      method: 'PUT',
+      url: '/api/cases/placements',
+      headers,
+      payload: { categoryId: 'cabinet', itemIds: ['cabinet-1'], folderId },
+    })
+
+    const removed = await app.inject({
       method: 'DELETE',
-      url: '/api/cases/uploads/cabinet-1',
+      url: '/api/cases/items/cabinet-1',
       headers,
     })
-    assert.equal(staticItem.statusCode, 404)
+    assert.equal(removed.statusCode, 200, `内置图应当可删：${removed.body}`)
+    const library = removed.json().library as Library
+    assert.deepEqual(library.hiddenItemIds, ['cabinet-1'])
+    assert.deepEqual(library.placements, [])
+
+    // 库里留的那一行带着品类：这张表按品类统计「删了几张」，切错前缀会让统计口径错，
+    // 而且没有任何界面会报错。
+    const row = await prisma.caseItemDeletion.findFirst({
+      where: { userId: libraryOwnerId, itemId: 'cabinet-1' },
+      select: { categoryId: true },
+    })
+    assert.equal(row?.categoryId, 'cabinet')
+
+    // 重复删除不该 500：另一台设备同时删、或用户重试同一次请求都会走到这里。
+    const again = await app.inject({
+      method: 'DELETE',
+      url: '/api/cases/items/cabinet-1',
+      headers,
+    })
+    assert.equal(again.statusCode, 200, again.body)
+    assert.deepEqual((again.json().library as Library).hiddenItemIds, ['cabinet-1'])
+
+    // 封面也在同一套规则里：它是图集里的一张真实图片，用户会想删掉它。
+    const cover = await app.inject({
+      method: 'DELETE',
+      url: '/api/cases/items/cabinet-cover',
+      headers,
+    })
+    assert.equal(cover.statusCode, 200, cover.body)
+    assert.deepEqual((cover.json().library as Library).hiddenItemIds.sort(), [
+      'cabinet-1',
+      'cabinet-cover',
+    ])
+  })
+
+  test('删除：品类 id 里带连字符的内置图也能删（前缀不能按第一个 - 切）', async () => {
+    const { headers } = await signIn()
+    // `shoe-cabinet` / `aluminum-wood-cabinet` 这种品类名本身带连字符。按第一个 `-`
+    // 切会得到 `shoe`、`aluminum`，那两个都不是合法品类 —— 表现为「只有部分品类的图
+    // 删不掉」，看起来像随机出现的 bug。
+    for (const itemId of ['shoe-cabinet-2', 'aluminum-wood-cabinet-3', 'wine-cabinet-cover']) {
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/api/cases/items/${itemId}`,
+        headers,
+      })
+      assert.equal(response.statusCode, 200, `${itemId} 应当可删：${response.body}`)
+    }
+    const library = await readLibrary(headers)
+    assert.deepEqual([...library.hiddenItemIds].sort(), [
+      'aluminum-wood-cabinet-3',
+      'shoe-cabinet-2',
+      'wine-cabinet-cover',
+    ])
+  })
+
+  test('删除：既不是上传图、前缀也不合法时返回 404', async () => {
+    const { headers } = await signIn()
+    for (const itemId of ['bedroom-1', 'cabinet', 'cabinet-', 'random']) {
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/api/cases/items/${itemId}`,
+        headers,
+      })
+      assert.equal(response.statusCode, 404, `${itemId} 不该被接受：${response.body}`)
+    }
+    // 什么都不该被写进去。
+    assert.deepEqual((await readLibrary(headers)).hiddenItemIds, [])
   })
 
   test('上传图全账号共用：别人也取得到、也删得掉', async () => {
@@ -645,7 +735,7 @@ describe('案例库接口', { skip: reachable ? false : '数据库不可达，�
     // 「编辑」包含删除：同事删掉之后，上传者那边也没了。
     const remove = await app.inject({
       method: 'DELETE',
-      url: `/api/cases/uploads/${upload.itemId}`,
+      url: `/api/cases/items/${upload.itemId}`,
       headers: colleague.headers,
     })
     assert.equal(remove.statusCode, 200, remove.body)

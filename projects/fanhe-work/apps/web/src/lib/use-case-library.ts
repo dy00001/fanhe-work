@@ -6,7 +6,7 @@ import {
   caseSaveExit,
   createCaseFolder,
   deleteCaseFolder,
-  deleteCaseUpload,
+  deleteCaseItem,
   describeCaseSaveError,
   loadCaseLibrary,
   moveCaseItems,
@@ -60,8 +60,11 @@ export type CaseLibraryHandle = {
    * 抛出去会中断整批，而其中一张因为格式不对失败时，另外四张完全应该继续传。
    */
   uploadOne: (item: CreateCaseUploadItem, folderId: string | null) => Promise<boolean>
-  /** 删除一张自己上传的图。静态清单里的图删不掉（服务端 404）。 */
-  deleteUpload: (itemId: string) => Promise<boolean>
+  /**
+   * 删除一张图。**内置图与上传图都走这一条**：前者由服务端记一条隐藏记录（字节在
+   * 构建产物里，删不到），后者软删字节。界面因此不再需要「这张能不能删」这个判断。
+   */
+  deleteItem: (itemId: string) => Promise<boolean>
 }
 
 /**
@@ -243,8 +246,8 @@ export function useCaseLibrary(categoryId: string, enabled: boolean): CaseLibrar
     [categoryId, runWrite],
   )
 
-  const deleteUpload = useCallback(
-    (itemId: string) => runWrite(() => deleteCaseUpload(itemId)),
+  const deleteItem = useCallback(
+    (itemId: string) => runWrite(() => deleteCaseItem(itemId)),
     [runWrite],
   )
 
@@ -264,6 +267,6 @@ export function useCaseLibrary(categoryId: string, enabled: boolean): CaseLibrar
     deleteFolder,
     moveItems,
     uploadOne,
-    deleteUpload,
+    deleteItem,
   }
 }

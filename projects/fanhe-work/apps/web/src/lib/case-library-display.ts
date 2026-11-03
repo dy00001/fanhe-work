@@ -212,6 +212,16 @@ export function buildCaseLibraryView(
 ): CaseLibraryView {
   const folders = snapshot.folders.filter((folder) => folder.categoryId === category.id)
   const folderById = new Map(snapshot.folders.map((folder) => [folder.id, folder]))
+  /**
+   * 被移除的内置图（`snapshot.hiddenItemIds`）。
+   *
+   * **在合并之后统一过滤一次，而不是在原生清单那一处跳过。** 内置图既可能出现在本品类
+   * 的清单里，也可能被挪进了别的品类的文件夹（外来图那条路径）—— 只在原生清单过滤的话，
+   * 删掉的图会从自己品类消失、却还挂在隔壁品类的文件夹里，看起来像「删除没生效」。
+   *
+   * 上传图不走这份清单：它删掉后直接从 `uploads` 里消失，没有第二个状态。
+   */
+  const hidden = new Set(snapshot.hiddenItemIds)
   const placementOf = new Map<string, string | null>()
   for (const placement of snapshot.placements) {
     placementOf.set(placement.itemId, placement.folderId)
@@ -299,7 +309,7 @@ export function buildCaseLibraryView(
   }
   foreign.sort((left, right) => sortKey(left.id) - sortKey(right.id))
 
-  const all = [...items, ...foreign]
+  const all = [...items, ...foreign].filter((item) => !hidden.has(item.id))
   const groups: CaseFolderGroup[] = folders.map((folder) => ({
     folder,
     items: all.filter((item) => item.folderId === folder.id),

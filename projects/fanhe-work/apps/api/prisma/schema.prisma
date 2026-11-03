@@ -160,11 +160,13 @@ model User {
   /// **这里的「账号」是库的归属账号，不是发起请求的人。** 案例库全账号共用一份，路由层
   /// 把所有请求都解析到主账号名下（`apps/api/src/case-library/scope.ts`），所以这几张表
   /// 里永远只有主账号那一份数据 —— 别的用户既能读到，也能改、能删。
-  caseFolders      CaseFolder[]
-  casePlacements   CaseItemPlacement[]
-  caseLibraryState CaseLibraryState?
+  caseFolders       CaseFolder[]
+  casePlacements    CaseItemPlacement[]
+  caseLibraryState  CaseLibraryState?
   /// 自己上传的案例图片（字节本体在这里，见 `CaseUpload`）。
-  caseUploads      CaseUpload[]
+  caseUploads       CaseUpload[]
+  /// 被移除的**内置**案例图（见 `CaseItemDeletion`）。
+  caseItemDeletions CaseItemDeletion[]
 
   /// 这个账号作为「设计师」负责的客户。与下面 salesCustomers 是两条不同关系，
   /// 都指向 customers 表，因此必须命名区分 —— 不命名时 Prisma 无法判断该走哪一条。
@@ -811,6 +813,41 @@ model CaseUpload {
   /// 快照按品类取、按创建时间排，这条索引覆盖它。
   @@index([userId, categoryId, deletedAt, createdAt])
   @@map("case_uploads")
+}
+
+/// 一张**内置**案例图被移除的记录。
+///
+/// 内置图（`apps/web/src/lib/case-catalog.ts` 里那些随前端分发的 webp）没有可删的行：
+/// 它们的字节在构建产物里，服务端连存在性都不知道。在此之前，「删除」这个动作只对
+/// 上传图成立，界面上选中内置图时删除按钮是灰的 —— 用户看到的是一半功能坏了。
+///
+/// 所以给内置图一个「已移除」的表示，形状与 `case_item_placements` 完全对称：主键
+/// `(user_id, item_id)`，一行 = 这张图不再出现在图集里。展示层拿到快照后把它从清单里
+/// 滤掉，与「没有归属行就是未归档」是同一套「缺失即默认」的写法。
+///
+/// **不设 deletedAt。** 删了就是删了：这个状态没有「暂时」的语义，加一列软删时间只会
+/// 让每个读路径都多一个判断。要恢复某张图，删掉这一行即可（运维手工操作，界面不提供
+/// 入口 —— 与上传图的删除一致，两者都不可撤销）。
+///
+/// itemId 的合法性由服务层按前缀判定（`<品类>-<后缀>`）。服务端不掌握内置清单，
+/// 因此这里允许出现指向「前端已经不再分发」的旧 id：它们只占一行、不参与任何界面。
+model CaseItemDeletion {
+  userId String @map("user_id") @db.Uuid
+
+  /// 形如 `cabinet-1` 或 `cabinet-cover`。列宽与 `CASE_LIBRARY_LIMITS.ITEM_ID_MAX` 一致，
+  /// 上传图在同一个命名空间里，但它走 `case_uploads` 的软删，不会落到这张表。
+  itemId String @map("item_id") @db.VarChar(64)
+
+  /// 冗余存品类，便于按品类统计「这个品类被删掉了几张」。取值必须与 itemId 前缀一致。
+  categoryId String @map("category_id") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, itemId])
+  @@index([userId, categoryId])
+  @@map("case_item_deletions")
 }
 
 // ---------------------------------------------------------------------------

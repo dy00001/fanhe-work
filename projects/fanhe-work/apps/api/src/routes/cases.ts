@@ -13,7 +13,7 @@ import {
   createFolder,
   createUploads,
   deleteFolder,
-  deleteUpload,
+  deleteItem,
   getCaseLibrary,
   moveItems,
   readUploadImage,
@@ -60,7 +60,9 @@ const FAILURE_STATUS: Record<CaseLibraryFailureReason, number> = {
 }
 
 const FAILURE_MESSAGE: Record<CaseLibraryFailureReason, string> = {
-  not_found: '文件夹不存在',
+  // 文件夹、图片、删除记录都会走到这里，所以不写「文件夹不存在」：删图片时收到那句
+  // 提示会让人以为点错了按钮。
+  not_found: '这条记录已不存在，请刷新后重试',
   invalid_category: '品类不存在',
   invalid_name: `文件夹名不能为空，且不超过 ${CASE_LIBRARY_LIMITS.FOLDER_NAME_MAX} 字`,
   invalid_items: '图片清单不合法',
@@ -348,15 +350,22 @@ export function registerCaseRoutes(app: FastifyInstance): void {
     },
   )
 
-  /** 删除一张上传图。静态清单里的图删不掉（库里没有对应行），进来就是 404。 */
+  /**
+   * 删除一张图。**上传图与内置图共用这一条** —— 界面上的「删除」只有一个按钮，接口
+   * 也就该只有一个入口。旧路径 `/api/cases/uploads/:itemId` 只认上传图，内置图进去
+   * 一律 404，那是「已有图片删不掉」的直接原因，已由这条替代。
+   *
+   * 内置图没有可删的行，服务端记一条隐藏记录（`case_item_deletions`）；删除的效果
+   * 通过快照里的 `hiddenItemIds` 传回客户端，展示层据此不再画它。
+   */
   app.delete<{ Params: { itemId: string } }>(
-    '/api/cases/uploads/:itemId',
+    '/api/cases/items/:itemId',
     { preHandler: requireAuth, schema: { params: UPLOAD_DELETE_PARAMS_SCHEMA } },
     async (request, reply) => {
       const userId = await scopedUserId(request)
       if (userId === null) return reply.code(401).send(UNAUTHORIZED_BODY)
 
-      const result = await deleteUpload(userId, request.params.itemId)
+      const result = await deleteItem(userId, request.params.itemId)
       if (!result.ok) return sendFailure(reply, result.reason)
 
       const body: CaseLibraryResponse = { library: result.data }

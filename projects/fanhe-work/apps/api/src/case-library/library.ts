@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   CASE_LIBRARY_LIMITS,
+  caseBuiltInCategoryId,
   caseItemIdBelongsTo,
   caseUploadItemId,
   isCaseCategoryId,
@@ -75,7 +76,7 @@ function fail(reason: CaseLibraryFailureReason): CaseLibraryResult<never> {
  */
 type CaseLibraryClient = Pick<
   Prisma.TransactionClient,
-  'caseLibraryState' | 'caseFolder' | 'caseItemPlacement' | 'caseUpload'
+  'caseLibraryState' | 'caseFolder' | 'caseItemPlacement' | 'caseUpload' | 'caseItemDeletion'
 >
 
 const FOLDER_SELECT = {
@@ -118,7 +119,7 @@ async function readSnapshot(
   client: CaseLibraryClient,
   userId: string,
 ): Promise<CaseLibrarySnapshot> {
-  const [state, folders, placements, uploads] = await Promise.all([
+  const [state, folders, placements, uploads, deletions] = await Promise.all([
     client.caseLibraryState.findUnique({ where: { userId }, select: { revision: true } }),
     client.caseFolder.findMany({
       where: { userId, deletedAt: null },
@@ -142,6 +143,12 @@ async function readSnapshot(
         createdAt: true,
       },
     }),
+    // 内置图的移除记录。只取 id：界面需要的正是「哪些不要再画」。
+    client.caseItemDeletion.findMany({
+      where: { userId },
+      orderBy: [{ createdAt: 'asc' }, { itemId: 'asc' }],
+      select: { itemId: true },
+    }),
   ])
 
   const placementList: CasePlacement[] = []
@@ -162,6 +169,7 @@ async function readSnapshot(
       height: row.height,
       createdAt: row.createdAt.toISOString(),
     })),
+    hiddenItemIds: deletions.map((row) => row.itemId),
   }
 }
 
@@ -601,31 +609,57 @@ export async function readUploadImage(
 }
 
 /**
- * 删除一张上传图。
+ * 删除一张图。**内置图与上传图走同一条路径 —— 用户眼里它们就是同一种东西。**
  *
- * **软删。** 另一台设备可能正拿着这个 itemId 在发移动请求；硬删会让它收到一个分不清
- * 「被删了」与「从没存在」的 404。软删之后那张图不再出现在任何快照里，字节留着由以后
- * 的清理任务处置 —— 这与文件夹的删除是同一条取舍。
+ * 两条分支的差别只在「删除怎么表示」：
  *
- * 归属行跟着物理删除（不是置空）：图片已经不在了，留一条指向它的归属只会让统计张数
- * 时多算一张。
+ *   - 上传图（`isCaseUploadItemId`）：软删 `case_uploads` 那一行。另一台设备可能正拿着
+ *     这个 itemId 在发移动请求，硬删会让它收到一个分不清「被删了」与「从没存在」的 404。
+ *   - 内置图：写一条 `case_item_deletions`。字节在构建产物里，服务端删不到；能表达的
+ *     只有「这张不要再显示了」。快照把这份清单带回去，展示层据此把它从图集里滤掉。
  *
- * **只能删自己上传的。** 静态清单里的图（`cabinet-3`）根本没有这一行，进来就是 404。
+ * 两条分支都**物理删掉归属行**。图已经不在了，留一条指向它的归属只会让「文件夹里有
+ * 几张」多算一张，而那个数字是用户核对整理结果时唯一的依据。
+ *
+ * **这是对旧行为的一次修正。** 之前这个函数只认上传图（`cabinet-1` 进来就是 404），
+ * 于是界面上「选中内置图时删除按钮是灰的」。根因不在权限判断，而在数据模型缺一个
+ * 「内置图被移除」的表示 —— 界面只是忠实地反映了这一点。
+ *
+ * 不可撤销，界面不提供恢复入口。要找回内置图得手工删掉那行隐藏记录（运维操作），
+ * 上传图软删之后同样没有任何入口 —— 两者都按「删了就没了」对待，所以界面上有一次
+ * 明确的二次确认。
  */
-export async function deleteUpload(
+export async function deleteItem(
   userId: string,
   itemId: string,
 ): Promise<CaseLibraryResult<CaseLibrarySnapshot>> {
-  if (!isCaseUploadItemId(itemId)) return fail('not_found')
-  const row = await prisma.caseUpload.findFirst({
-    where: { userId, itemId, deletedAt: null },
-    select: { id: true },
-  })
-  if (row === null) return fail('not_found')
+  if (isCaseUploadItemId(itemId)) {
+    const row = await prisma.caseUpload.findFirst({
+      where: { userId, itemId, deletedAt: null },
+      select: { id: true },
+    })
+    if (row === null) return fail('not_found')
+
+    const snapshot = await withRevision(userId, async (tx) => {
+      await tx.caseItemPlacement.deleteMany({ where: { userId, itemId } })
+      await tx.caseUpload.update({ where: { id: row.id }, data: { deletedAt: new Date() } })
+    })
+    return { ok: true, data: snapshot }
+  }
+
+  const categoryId = caseBuiltInCategoryId(itemId)
+  // 既不是上传图、前缀也不落在任何品类上：只有改过的请求或脏数据会走到这里。
+  if (categoryId === null) return fail('not_found')
 
   const snapshot = await withRevision(userId, async (tx) => {
     await tx.caseItemPlacement.deleteMany({ where: { userId, itemId } })
-    await tx.caseUpload.update({ where: { id: row.id }, data: { deletedAt: new Date() } })
+    // `upsert` 而不是 `create`：同一张图被两台设备同时删、或用户重试同一次请求时，
+    // 主键冲突不该被翻译成一个看起来像代码错误的 500。重复删除是幂等的。
+    await tx.caseItemDeletion.upsert({
+      where: { userId_itemId: { userId, itemId } },
+      create: { userId, itemId, categoryId },
+      update: {},
+    })
   })
   return { ok: true, data: snapshot }
 }

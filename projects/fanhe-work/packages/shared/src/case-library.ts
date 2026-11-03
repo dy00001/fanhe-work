@@ -161,6 +161,16 @@ export type CaseLibrarySnapshot = {
    * 清单里没有」的错位。它每行只有四个短字段，几十行不过几 KB。
    */
   uploads: readonly CaseUpload[]
+  /**
+   * 被移除的**内置**图。形如 `cabinet-1`、`wardrobe-cover`。
+   *
+   * 内置图的字节在构建产物里，服务端删不掉它，只能记一条「这张不要再显示了」。
+   * 因此快照必须带上这份清单 —— 少了它，界面会把刚删掉的图又画出来（下一次轮询
+   * 就"复活"），而用户会以为删除失败。
+   *
+   * 只有内置图会进这里：上传图删除后直接从 `uploads` 消失，不需要第二个状态。
+   */
+  hiddenItemIds: readonly string[]
 }
 
 export type CaseLibraryResponse = {
@@ -304,6 +314,43 @@ export function isCaseUploadItemId(itemId: string): boolean {
   const categoryId = match[1] ?? ''
   const token = match[2] ?? ''
   return isCaseCategoryId(categoryId) && CASE_UPLOAD_TOKEN_PATTERN.test(token)
+}
+
+/**
+ * 判断一个 itemId 是否指向**内置**（随前端分发）的图。
+ *
+ * 服务端不掌握内置清单，能验的只有「`<合法品类>-<非空后缀>`」这条命名约定 —— 与
+ * `caseItemIdBelongsTo` 是同一条线索。挡不住的只是「编号不存在的图」，而它对界面
+ * 无害：多一行没人读的删除记录，客户端按清单渲染时自然不会画它。
+ *
+ * **前缀必须逐个比，不能按第一个 `-` 切。** 品类 id 里本来就有连字符
+ * （`shoe-cabinet`、`aluminum-wood-cabinet`），切出来会是 `shoe` 这种不存在的品类，
+ * 于是「鞋柜的图删不掉」—— 一个只影响部分品类、看着像随机出现的 bug。
+ *
+ * 上传图的 id 同样满足「品类前缀」，因此必须先排掉它：它的删除走 `case_uploads`
+ * 的软删，不是隐藏记录。两者混在一起会让快照里同时出现「字节没了」和「只是隐藏」。
+ */
+export function isCaseBuiltInItemId(itemId: string): boolean {
+  if (isCaseUploadItemId(itemId)) return false
+  if (itemId.length > CASE_LIBRARY_LIMITS.ITEM_ID_MAX) return false
+  for (const categoryId of CASE_CATEGORY_IDS) {
+    if (itemId.length > categoryId.length + 1 && itemId.startsWith(`${categoryId}-`)) return true
+  }
+  return false
+}
+
+/**
+ * 内置图属于哪个品类。不合法时返回 `null`。
+ *
+ * 单独给一个函数而不是让调用方自己切字符串：删除时要往隐藏记录里写 `categoryId`，
+ * 而这张表按品类统计「删了几张」。切错一位的后果是统计口径错，且没有任何界面会报错。
+ */
+export function caseBuiltInCategoryId(itemId: string): string | null {
+  if (!isCaseBuiltInItemId(itemId)) return null
+  for (const categoryId of CASE_CATEGORY_IDS) {
+    if (itemId.startsWith(`${categoryId}-`)) return categoryId
+  }
+  return null
 }
 
 /**

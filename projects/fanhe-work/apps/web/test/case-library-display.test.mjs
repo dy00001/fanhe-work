@@ -44,7 +44,7 @@ function folder(id, categoryId, name) {
   }
 }
 
-const EMPTY = { revision: 1, folders: [], placements: [], uploads: [] }
+const EMPTY = { revision: 1, folders: [], placements: [], uploads: [], hiddenItemIds: [] }
 
 test('未归档包含全部图片，封面排第一', () => {
   const category = categoryOf('cabinet')
@@ -372,4 +372,77 @@ test('上传图的 alt 用序号而不是文件名', () => {
   )
   const first = view.all.find((item) => item.id === UPLOAD_ID)
   assert.equal(first.alt, '橱柜上传 1')
+})
+
+// ---------------------------------------------------------------------------
+// 删除内置图
+// ---------------------------------------------------------------------------
+//
+// 内置图的字节在构建产物里，服务端删不到，只能记一条隐藏记录，快照通过
+// `hiddenItemIds` 把它带回来。展示层必须**在两个方向上都过滤**：
+//   - 本品类的图 → 从自己的图集里消失；
+//   - 被挪进别的品类文件夹的图 → 从那个品类里也消失。
+// 只在第一处过滤的话，删掉的图会「从自己品类消失、却还挂在隔壁品类的文件夹里」，
+// 表现像删除没生效 —— 而它其实生效了，只是这里漏了一个方向。
+
+test('被移除的内置图从全部与未归档里消失，计数一起变小', () => {
+  const category = categoryOf('cabinet')
+  const baseline = buildCaseLibraryView(category, EMPTY, INDEX)
+  const view = buildCaseLibraryView(
+    category,
+    { ...EMPTY, hiddenItemIds: ['cabinet-1', caseCoverItemId('cabinet')] },
+    INDEX,
+  )
+
+  assert.equal(
+    view.all.some((item) => item.id === 'cabinet-1'),
+    false,
+    'cabinet-1 应当被滤掉',
+  )
+  assert.equal(
+    view.all.some((item) => item.id === caseCoverItemId('cabinet')),
+    false,
+    '封面也是图集里的一张图，删了就该消失',
+  )
+  // 「共 N 张」直接读 view.all.length，所以计数必须跟着变小 —— 否则状态行会显示
+  // 一个比网格里实际张数大的数字。
+  assert.equal(view.all.length, baseline.all.length - 2)
+  assert.equal(view.unassigned.length, baseline.unassigned.length - 2)
+})
+
+test('被移除的内置图也不会从别的品类的文件夹里冒出来', () => {
+  const snapshot = {
+    revision: 13,
+    folders: [folder('fw', 'wardrobe', '长衣区')],
+    placements: [{ itemId: 'cabinet-1', folderId: 'fw' }],
+    uploads: [],
+    hiddenItemIds: ['cabinet-1'],
+  }
+
+  const wardrobe = buildCaseLibraryView(categoryOf('wardrobe'), snapshot, INDEX)
+  const group = wardrobe.folders.find((item) => item.folder.id === 'fw')
+  assert.ok(group !== undefined)
+  assert.deepEqual(group.items, [])
+  assert.equal(
+    wardrobe.all.some((item) => item.id === 'cabinet-1'),
+    false,
+    '跨品类那条路径也要过滤，否则删掉的图会从隔壁品类「复活」',
+  )
+})
+
+test('隐藏清单只影响内置图，上传图照常显示（它的删除是另一条路径）', () => {
+  const view = buildCaseLibraryView(
+    categoryOf('cabinet'),
+    {
+      revision: 14,
+      folders: [],
+      placements: [],
+      uploads: [upload(UPLOAD_ID, 'cabinet')],
+      // 正常情况下上传图的 id 不会出现在这里，但真出现了也不该被它误伤 —— 上传图删除后
+      // 是从 `uploads` 里消失，不存在「隐藏」这个状态。
+      hiddenItemIds: [],
+    },
+    INDEX,
+  )
+  assert.ok(view.all.some((item) => item.id === UPLOAD_ID))
 })
