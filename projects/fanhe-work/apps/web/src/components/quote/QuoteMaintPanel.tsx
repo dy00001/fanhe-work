@@ -125,11 +125,14 @@ export function QuoteMaintPanel({
   onOpenChange,
   access,
   meta,
+  onGoEdit,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   access: QuoteAccessStateResponse | null
   meta: QuoteMetaResponse | null
+  /** 「去改价」：关掉这一屏，把焦点送到右栏的价格输入框。 */
+  onGoEdit: () => void
 }) {
   const remaining = minutesUntil(access?.unlockedUntil ?? null)
   const badge =
@@ -193,12 +196,23 @@ export function QuoteMaintPanel({
               三档入口 · 一处真值 · 全量留痕
             </DialogDescription>
           </div>
+          {/* 这一屏是**说明书**，不是编辑器：静态稿第 4 节的标题就写着「本期只读，不可写」。
+              真正改价 / 停用 / 换图在右栏的「维护」区。原来这里只有一个「关闭」，
+              点进来像撞到一堵墙（2026-11-03 用户报「价格维护页面不可操作」），
+              所以补一个直达入口 —— 不加表单，只把路指过去。 */}
+          <button
+            type="button"
+            onClick={onGoEdit}
+            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent"
+          >
+            去改价
+          </button>
           <button
             type="button"
             onClick={() => {
               onOpenChange(false)
             }}
-            className="ml-auto inline-flex h-8 items-center rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent"
+            className="inline-flex h-8 items-center rounded-[9px] border border-border bg-card px-3 text-[13px] hover:bg-accent"
           >
             关闭
           </button>
@@ -209,6 +223,8 @@ export function QuoteMaintPanel({
             <p className="mb-3.5 text-[12.5px] text-muted-foreground">
               三份源台账是唯一真值。平台上不新增第四个录入口，只提供三条操作路径，
               改价一律回到台账再导入，避免出现「库里有、表里没有」的分叉。
+              <b className="text-foreground">这一屏讲规则与来源，不在页面上编辑</b>
+              —— 要改某一条，关掉这一屏，在右栏「维护」区改。
             </p>
             <div className="mb-5 grid grid-cols-3 gap-3">
               {ENTRY.map((entry, index) => (

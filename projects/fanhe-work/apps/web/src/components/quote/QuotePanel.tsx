@@ -269,6 +269,24 @@ export function QuotePanel({
     else setGateOpen(true)
   }
 
+  /**
+   * 维护面板里的「去改价」。
+   *
+   * 关掉说明屏，把焦点送到右栏的价格输入框。**等 260ms 再聚焦**：Radix 关闭时会在
+   * 卸载那一刻把焦点还给打开它的按钮，早于它就会被抢回去；而卸载发生在 200ms 的
+   * 关闭动画之后。
+   */
+  const handleGoEdit = useCallback(() => {
+    setMaintOpen(false)
+    window.setTimeout(() => {
+      const input = document.getElementById('quote-price-input')
+      if (input instanceof HTMLInputElement) {
+        input.focus()
+        input.select()
+      }
+    }, 260)
+  }, [])
+
   /** 口令验证通过后直接进维护面板（静态稿第 1443 行是同一条路径）。 */
   const handleGateChanged = useCallback(() => {
     void loadQuoteAccessState()
@@ -470,7 +488,13 @@ export function QuotePanel({
         onStateChanged={handleGateChanged}
       />
 
-      <QuoteMaintPanel open={maintOpen} onOpenChange={setMaintOpen} access={access} meta={meta} />
+      <QuoteMaintPanel
+        open={maintOpen}
+        onOpenChange={setMaintOpen}
+        access={access}
+        meta={meta}
+        onGoEdit={handleGoEdit}
+      />
     </div>
   )
 

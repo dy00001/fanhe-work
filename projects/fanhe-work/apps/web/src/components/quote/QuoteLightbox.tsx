@@ -127,15 +127,64 @@ function QuoteLightboxView({
     [content, stage],
   )
 
+  /**
+   * 滚轮缩放。
+   *
+   * **不能写成 React 的 `onWheel`。** React 17 起把 `wheel` 注册成**被动**监听器
+   * （`passive: true`），在回调里调 `preventDefault()` 只会得到一条控制台警告、
+   * 阻止不了默认行为 —— 结果是「图没放大，底下的页面滚走了」，也就是用户说的
+   * 「滚轮被底层接管」。必须自己用 `addEventListener(..., { passive: false })`。
+   *
+   * 用函数式 `setView` 读当前倍率，而不是把 `view.scale` 放进依赖：后者每缩放一次
+   * 就要摘挂一次监听器。
+   */
+  const wheelZoom = useCallback(
+    (deltaY: number, anchor: { x: number; y: number }) => {
+      setView((current) =>
+        zoomLightbox(current, wheelLightboxScale(current.scale, deltaY), anchor, content, stage),
+      )
+    },
+    [content, stage],
+  )
+
+  useEffect(() => {
+    const element = stageRef.current
+    if (element === null) return
+    const onWheel = (event: WheelEvent): void => {
+      // 非被动监听里这一句才真的生效：舞台不滚、页面也不滚。
+      event.preventDefault()
+      const rect = element.getBoundingClientRect()
+      wheelZoom(event.deltaY, {
+        x: event.clientX - rect.left - rect.width / 2,
+        y: event.clientY - rect.top - rect.height / 2,
+      })
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      element.removeEventListener('wheel', onWheel)
+    }
+  }, [wheelZoom])
+
+  /**
+   * 键盘。
+   *
+   * **挂在 `window` 的捕获阶段**，不是冒泡：灯箱是 portal 到 `body` 的，Radix 的
+   * `Dialog` 在 `document` 上监听 Esc，冒泡阶段它先跑 —— 按一下 Esc 会连查价面板
+   * 一起收掉。捕获阶段先于 document 冒泡，`stopPropagation()` 才拦得住。
+   */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onClose()
+        return
+      }
       if (event.key === '+' || event.key === '=') applyScale(view.scale * 1.25)
       if (event.key === '-') applyScale(view.scale / 1.25)
       if (event.key === '0') setView(LIGHTBOX_IDENTITY)
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [onClose, applyScale, view.scale])
 
   // 拖动（鼠标 + 单指）。位移超过阈值才算拖动，否则当成点击背景关闭。
@@ -147,6 +196,11 @@ function QuoteLightboxView({
   return createPortal(
     <div
       className="fixed inset-0 z-[60] flex flex-col bg-black/88 backdrop-blur-sm"
+      /* 这个标记是给外层 Dialog 看的：灯箱 portal 到 body，DOM 上在对话框**外面**，
+         Radix 会把「点灯箱」判成「点了对话框外面」→ 连查价面板一起关掉（用户报的
+         「点图片任意位置就回到首页」就是这个）。DialogContent 的 `onInteractOutside`
+         靠它把这一片排除掉。 */
+      data-quote-lightbox=""
       role="dialog"
       aria-modal="true"
       aria-label={`查看 ${alt}`}
@@ -196,15 +250,6 @@ function QuoteLightboxView({
       <div
         ref={stageRef}
         className="relative min-h-0 flex-1 touch-none overflow-hidden"
-        onWheel={(event) => {
-          event.preventDefault()
-          const rect = event.currentTarget.getBoundingClientRect()
-          const anchor = {
-            x: event.clientX - rect.left - rect.width / 2,
-            y: event.clientY - rect.top - rect.height / 2,
-          }
-          applyScale(wheelLightboxScale(view.scale, event.deltaY), anchor)
-        }}
         onPointerDown={(event) => {
           dragRef.current = { x: event.clientX, y: event.clientY, moved: false }
           event.currentTarget.setPointerCapture(event.pointerId)

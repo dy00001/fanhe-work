@@ -507,20 +507,64 @@ export function LaunchSection() {
             {/* 面板自带头部（标题 / 搜索 / 价格维护 / 关闭），所以这里**不要**
                 `DialogHeader` —— 两套标题叠在一起就不是一比一了。
 
-                **不要在 `className` 里加 `relative` 或任何定位类。** `DialogContent`
-                的基类是 `fixed` + `translate-x/y-[-50%]`，tailwind-merge 会把同组的
-                定位类当成覆盖对象删掉 `fixed`，只剩一个平移量，窗口被推出视口
-                （2026-10-30 真实故障，门禁全绿）。判据：`test/case-library-dialog-layout.test.mjs`。
-                同理也不要在子元素上写内联 `transform` —— Tailwind v4 把 `translate-x-[-50%]`
-                编成独立属性 `translate`，`transform:none` 抹不掉它（2026-11-02 第二次踩到）。 */}
+                **居中不再交给 Radix 的 `left-50% + translate-50%`。**
+                那一套依赖 `fixed` 元素的包含块就是视口；实测弹窗形态落在
+                `L=475`（视口 1436，本该 128），而同样基类的维护面板却是居中的 ——
+                说明这条链上有个我们控制不到的偏移。改成「整屏 flex 容器 + 面板自身
+                定尺」，居中由 flex 算，与 translate、与包含块宽度都无关。
+
+                三条必须一起写，缺一条都会被基类拽回去：
+                  ① `left/top:0` + `100vw/100vh` 覆盖 `left-[50%] top-[50%]`；
+                     `vw/vh` 永远按视口算，不受包含块变宽的影响。
+                  ② `translate:none` + `transform:none`：Tailwind v4 把
+                     `translate-x-[-50%]` 编成**独立属性 `translate`**，
+                     只写 `transform:none` 抹不掉它（2026-11-02 踩过）。
+                  ③ `animation:none`：基类带 `data-[state=open]:zoom-in-95`，
+                     挂载即打开时动画停在 `scale(.95)`，面板会缩成 1121×722
+                     （2026-11-03 实测）。
+
+                宽度仍是 1180，但不再写 `calc(100vw - 56px)` —— 那一条在多屏/
+                带滚动条时会和 `100vw` 打架；留白统一由容器的 `padding:28px` 给。 */}
             <DialogContent
               showCloseButton={false}
-              /* 宽度走内联样式，不用 `w-[min(1180px,94vw)]`。任意值里带 `min()`
-                 时，只要有一个字符不合 Tailwind 的解析规则，整条类名就被静默丢掉，
-                 宽度退成 auto —— 表现是面板从视口右半边开始、右边缘跑到屏幕外
-                 （2026-11-03 现场截图确认）。给 CSS 更稳，也省得记哪些写法能用。 */
-              style={{ width: 'min(1180px, calc(100vw - 56px))' }}
-              className="max-w-none gap-0 rounded-[18px] border-0 bg-transparent p-0 shadow-none"
+              style={{
+                position: 'fixed',
+                left: 0,
+                top: 0,
+                width: '100vw',
+                height: '100vh',
+                maxWidth: 'none',
+                maxHeight: 'none',
+                transform: 'none',
+                translate: 'none',
+                scale: 'none',
+                animation: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 28,
+                border: 0,
+                borderRadius: 0,
+                background: 'transparent',
+                boxShadow: 'none',
+              }}
+              className="gap-0"
+              /* 整屏之后，遮罩层在下面永远收不到点击，所以「点空白处关闭」挪到这里。
+                 用 `mousedown` 与静态稿第 1344 行一致：起手在面板内、松手在空白处
+                 （拖选文字）不该关闭。 */
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setQuoteOpen(false)
+              }}
+              /* 商品图灯箱是 portal 到 body 的，DOM 上在对话框外面。不拦的话，点灯箱
+                 里的任何位置（含它自己的关闭按钮）都会被 Radix 判成「点了对话框外面」
+                 → 整个查价面板关掉、回到首页。这是 2026-11-03 用户报的第 2 个问题。
+                 只放行灯箱这一片，其余（真点遮罩）仍按默认关闭。 */
+              onInteractOutside={(event) => {
+                const target = event.target
+                if (target instanceof Element && target.closest('[data-quote-lightbox]') !== null) {
+                  event.preventDefault()
+                }
+              }}
             >
               <QuotePanel
                 variant="dialog"
