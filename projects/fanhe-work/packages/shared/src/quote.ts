@@ -85,6 +85,21 @@ export const QUOTE_LIMITS = {
   IMAGE_EDGE_MAX: 2400,
   /** 缩略图宽。表格行高 56，2 倍屏下 320 足够。 */
   THUMB_WIDTH: 320,
+  /** 分类名长度上限。与 `quote_items.category` 的列宽一致。 */
+  CATEGORY_NAME_MAX: 80,
+  /** 产品名长度上限。与 `quote_items.name` 的列宽一致。 */
+  ITEM_NAME_MAX: 200,
+  /** 批量导入单份文件的上限。台账 xlsx 约 300KB，8MB 足够覆盖带图的表。 */
+  IMPORT_FILE_BYTES_MAX: 8 * 1024 * 1024,
+  /**
+   * 一次最多识别多少行。
+   *
+   * 上限的意义不是性能，而是**让人别把整本产品手册拖进来**：识别出来的行要人工
+   * 逐条确认，两千行没人会看第二眼，确认就变成了走过场。
+   */
+  IMPORT_ROWS_MAX: 2000,
+  /** 预览里回传多少行。超出部分只给计数 —— 一次回两千行的 JSON 有 400KB。 */
+  IMPORT_PREVIEW_ROWS: 200,
 } as const
 
 /**
@@ -286,6 +301,149 @@ export type QuoteImageMutationResponse = {
   version: string
   image: QuoteImageDto
 }
+
+// ---------------------------------------------------------------------------
+// 维护台：分类、产品、批量导入
+// ---------------------------------------------------------------------------
+
+/**
+ * 一个分类在维护台里的样子。
+ *
+ * `count` 是**在售**条数（不含 archived）：维护台要回答的是「这个分类下现在还能
+ * 卖出什么」，把已下架的算进去会让「合并前先看一眼有多少条」失去意义。
+ */
+export type QuoteCategoryDto = {
+  source: QuoteSource
+  name: string
+  count: number
+  sortOrder: number
+  /** 是否已经在 `quote_categories` 里落了行。false 表示它是从条目里临时补出来的。 */
+  persisted: boolean
+}
+
+export type QuoteCategoryListResponse = {
+  version: string
+  items: readonly QuoteCategoryDto[]
+}
+
+/** 改名。`from` 与 `to` 都必须在同一来源内。 */
+export type RenameQuoteCategoryRequest = {
+  source: QuoteSource
+  from: string
+  to: string
+}
+
+/**
+ * 合并：把 `from` 下的所有条目改挂到 `to`，然后删掉 `from`。
+ *
+ * `to` 不存在时会被创建 —— 这正是「自定义分类 + 合并」的组合用法：先把要保留的
+ * 名字建出来，再把别的分类并进去。
+ */
+export type MergeQuoteCategoryRequest = {
+  source: QuoteSource
+  from: string
+  to: string
+}
+
+/** 新建空分类。用于「先建分类，再往里传产品」。 */
+export type CreateQuoteCategoryRequest = {
+  source: QuoteSource
+  name: string
+}
+
+/** 重排：给出该来源下分类名的完整顺序，按数组下标重写 sort_order。 */
+export type ReorderQuoteCategoriesRequest = {
+  source: QuoteSource
+  order: readonly string[]
+}
+
+/**
+ * 新产品。`code` 由服务端按业务键算，**不接受客户端指定** —— 前端算一遍、服务端
+ * 再算一遍，两边只要有一处折叠空白的规则不同，同一条产品就会有两个键。
+ */
+export type CreateQuoteItemRequest = {
+  source: QuoteSource
+  category: string
+  name: string
+  model?: string
+  spec?: string
+  pricingMode?: string
+  materials?: string
+  unit?: string
+  unitRaw?: string
+  /** 价格原文。服务端按 `parsePriceInput` 判形态，与在线改价、台账导入同一套。 */
+  priceText?: string
+  note?: string
+}
+
+/** 批量导入里的一行。字段与 `CreateQuoteItemRequest` 对齐，少一个来源（整批一个来源）。 */
+export type QuoteImportRow = {
+  category: string
+  name: string
+  model: string
+  spec: string
+  unit: string
+  priceText: string
+  note: string
+  pricingMode: string
+  materials: string
+  /** 台账行号。识别时给出行序，应用后写进 `ledger_no`。 */
+  ledgerNo: string
+}
+
+export const QUOTE_IMPORT_FORMATS = ['xlsx', 'csv', 'pdf'] as const
+export type QuoteImportFormat = (typeof QUOTE_IMPORT_FORMATS)[number]
+
+/**
+ * 识别结果的一行。
+ *
+ * `warnings` 是**逐行**的：整批一条警告会让人不知道该改哪一行。识别器把「价格为空」
+ * 「名称像表头」这类问题挂在具体行上，操作员在确认表里能直接看到。
+ */
+export type QuoteImportPreviewRow = QuoteImportRow & {
+  /** 1 基，指源文件里的行号。人工核对时按它回原表。 */
+  sourceLine: number
+  warnings: readonly string[]
+}
+
+export type QuoteImportPreviewResponse = {
+  fileName: string
+  format: QuoteImportFormat
+  /** 识别到的总行数（可能大于 `rows.length`，见 `QUOTE_LIMITS.IMPORT_PREVIEW_ROWS`）。 */
+  total: number
+  rows: readonly QuoteImportPreviewRow[]
+  /** 文件级提示：格式降级、列没认出来、PDF 抽出的文本可能串行等。 */
+  warnings: readonly string[]
+  /** 识别时猜到的来源。操作员可以在确认页改。 */
+  suggestedSource: QuoteSource | null
+  /** 识别时看到的表头，给确认页显示「认成了哪几列」。 */
+  detectedColumns: readonly string[]
+}
+
+export type QuoteImportPreviewRequest = {
+  fileName: string
+  /** 纯 base64，不带 `data:` 前缀。 */
+  data: string
+}
+
+export type QuoteImportApplyRequest = {
+  fileName: string
+  source: QuoteSource
+  rows: readonly QuoteImportRow[]
+}
+
+export type QuoteImportApplyResponse = {
+  version: string
+  /** 新增 / 覆盖 / 归档（本次未出现但库里有、且来自同一份导入批次的行）。 */
+  added: number
+  changed: number
+  unchanged: number
+  total: number
+}
+
+/** 批量导入的准入与失败原因。路由按它映射状态码。 */
+export type QuoteImportFailure =
+  'empty_file' | 'too_large' | 'unsupported' | 'parse_failed' | 'no_rows'
 
 /**
  * 把台账里的「单价」原文解析成三件套。

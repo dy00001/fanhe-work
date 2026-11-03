@@ -1,6 +1,13 @@
 import type {
+  CreateQuoteCategoryRequest,
+  CreateQuoteItemRequest,
+  MergeQuoteCategoryRequest,
   QuoteAccessStateResponse,
+  QuoteCategoryListResponse,
   QuoteImageMutationResponse,
+  QuoteImportApplyRequest,
+  QuoteImportApplyResponse,
+  QuoteImportPreviewResponse,
   QuoteItemDto,
   QuoteItemResponse,
   QuoteItemStatus,
@@ -8,14 +15,22 @@ import type {
   QuoteMetaResponse,
   QuoteRevisionListResponse,
   QuoteSearchResponse,
+  RenameQuoteCategoryRequest,
+  ReorderQuoteCategoriesRequest,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
 } from '@fanhe/shared'
 
 import { ApiError } from './api'
 import {
+  createQuoteCategoryRequest,
+  createQuoteItemRequest,
+  mergeQuoteCategoryRequest,
   quoteAccessStateRequest,
+  quoteCategoriesRequest,
   quoteImageRequest,
+  quoteImportApplyRequest,
+  quoteImportPreviewRequest,
   quoteItemRequest,
   quoteMetaRequest,
   quoteRevisionsRequest,
@@ -24,6 +39,8 @@ import {
   quoteStatsRequest,
   quoteUnlockRequest,
   removeQuoteImageRequest,
+  renameQuoteCategoryRequest,
+  reorderQuoteCategoriesRequest,
   setQuoteItemStatusRequest,
   updateQuoteItemRequest,
   uploadQuoteImageRequest,
@@ -233,6 +250,74 @@ export function uploadQuoteImage(
 
 export function removeQuoteImage(code: string): Promise<{ version: string }> {
   return withAccessToken((token) => removeQuoteImageRequest(token, code, getQuoteUnlockToken()))
+}
+
+// ---------------------------------------------------------------------------
+// 维护台：分类 / 产品 / 批量导入
+// ---------------------------------------------------------------------------
+
+export function loadQuoteCategories(): Promise<QuoteCategoryListResponse> {
+  return withAccessToken((token) => quoteCategoriesRequest(token))
+}
+
+export function createQuoteCategory(
+  input: CreateQuoteCategoryRequest,
+): Promise<{ name: string; count: number; sortOrder: number }> {
+  return withAccessToken((token) => createQuoteCategoryRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function renameQuoteCategory(
+  input: RenameQuoteCategoryRequest,
+): Promise<{ version: string; moved: number }> {
+  return withAccessToken((token) => renameQuoteCategoryRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function mergeQuoteCategory(
+  input: MergeQuoteCategoryRequest,
+): Promise<{ version: string; moved: number }> {
+  return withAccessToken((token) => mergeQuoteCategoryRequest(token, input, getQuoteUnlockToken()))
+}
+
+export function reorderQuoteCategories(
+  input: ReorderQuoteCategoriesRequest,
+): Promise<{ updated: number }> {
+  return withAccessToken((token) =>
+    reorderQuoteCategoriesRequest(token, input, getQuoteUnlockToken()),
+  )
+}
+
+export function createQuoteItem(input: CreateQuoteItemRequest): Promise<{ version: string }> {
+  return withAccessToken((token) => createQuoteItemRequest(token, input, getQuoteUnlockToken()))
+}
+
+/**
+ * File → 纯 base64。
+ *
+ * **不能写 `btoa(String.fromCharCode(...bytes))`**：8MB 的文件展开成 800 万个参数，
+ * 直接 `RangeError: Maximum call stack size exceeded`。按 32KB 分块拼。
+ */
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK))
+  }
+  return btoa(binary)
+}
+
+/** 识别文件，**一行都不写库**。结果给确认页。 */
+export async function previewQuoteImport(file: File): Promise<QuoteImportPreviewResponse> {
+  const data = await fileToBase64(file)
+  return withAccessToken((token) =>
+    quoteImportPreviewRequest(token, { fileName: file.name, data }, getQuoteUnlockToken()),
+  )
+}
+
+export function applyQuoteImport(
+  input: QuoteImportApplyRequest,
+): Promise<QuoteImportApplyResponse> {
+  return withAccessToken((token) => quoteImportApplyRequest(token, input, getQuoteUnlockToken()))
 }
 
 // ---------------------------------------------------------------------------

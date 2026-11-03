@@ -2,9 +2,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 
 import {
   QUOTE_LIMITS,
+  QUOTE_SOURCES,
   QUOTE_SOURCE_NAMES,
   parsePriceInput,
+  type CreateQuoteItemRequest,
   type QuoteDatasetDto,
+  type QuoteImportRow,
   type QuoteImageDto,
   type QuoteItemDto,
   type QuoteItemStatus,
@@ -20,6 +23,7 @@ import {
 import { prisma } from '../db/prisma.js'
 
 import type { QuoteWriteAccess } from './access.js'
+import { buildQuoteItemCode } from './keys.js'
 
 /**
  * 报价查价的数据层。
@@ -43,7 +47,13 @@ import type { QuoteWriteAccess } from './access.js'
  */
 
 export type QuoteFailureReason =
-  'not_found' | 'invalid_price' | 'invalid_reason' | 'invalid_image' | 'invalid_status'
+  | 'not_found'
+  | 'invalid_price'
+  | 'invalid_reason'
+  | 'invalid_image'
+  | 'invalid_status'
+  | 'invalid_name'
+  | 'invalid_category'
 
 export type QuoteResult<T> = { ok: true; value: T } | { ok: false; reason: QuoteFailureReason }
 
@@ -75,7 +85,7 @@ export async function getLatestDataset(): Promise<QuoteDatasetDto | null> {
  * 导入这条路仍然用内容指纹，因为那条路上「同一份台账重复导入不产生新版本」是有
  * 意义的（否则每导一次，所有人的界面都要重拉一遍）。
  */
-async function bumpDataset(note: string): Promise<string> {
+export async function bumpDataset(note: string): Promise<string> {
   const latest = await getLatestDataset()
   const version = `r${Date.now().toString(36)}${randomBytes(2).toString('hex')}`
   await prisma.quoteDataset.create({
@@ -334,24 +344,48 @@ export async function getItem(code: string): Promise<{
   }
 }
 
-/** 分类清单。meta 一次带回，前端不必为筛选下拉再发一个请求。 */
+/**
+ * 分类清单。meta 一次带回，前端不必为筛选下拉再发一个请求。
+ *
+ * **顺序来自 `quote_categories`，不来自字典序。** 台账里的分类是自然顺序（柜体门板
+ * → 木门 → 护墙板），`groupBy` 出来却是拼音序，读起来像被打乱过。没在表里落行的
+ * 分类（还没人排过序的新导入）排在后面、按名称 —— 这样「刚导入一个新分类」不会插
+ * 到列表中间，让人以为顺序乱了。
+ *
+ * 只返回**有条目**的分类：筛选栏里出现一个点进去必然为空的分类没有意义。空分类
+ * 只在维护台出现（`listCategoryRows`）。
+ */
 export async function listCategories(): Promise<
   readonly { source: QuoteSource; name: string; count: number }[]
 > {
-  const rows = await prisma.quoteItem.groupBy({
-    by: ['source', 'category'],
-    where: { status: 'active' },
-    _count: { _all: true },
-  })
+  const [rows, persisted] = await Promise.all([
+    prisma.quoteItem.groupBy({
+      by: ['source', 'category'],
+      where: { status: 'active' },
+      _count: { _all: true },
+    }),
+    prisma.quoteCategory.findMany({ select: { source: true, name: true, sortOrder: true } }),
+  ])
+
+  const orderOf = new Map(persisted.map((row) => [`${row.source}\u001f${row.name}`, row.sortOrder]))
+  const sourceRank = (source: string): number => {
+    const index = QUOTE_SOURCES.indexOf(source as QuoteSource)
+    return index === -1 ? QUOTE_SOURCES.length : index
+  }
+
   return rows
     .map((row) => ({
       source: row.source as QuoteSource,
       name: row.category,
       count: row._count._all,
     }))
-    .sort((a, b) =>
-      a.source === b.source ? a.name.localeCompare(b.name, 'zh') : a.source.localeCompare(b.source),
-    )
+    .sort((a, b) => {
+      if (a.source !== b.source) return sourceRank(a.source) - sourceRank(b.source)
+      const orderA = orderOf.get(`${a.source}\u001f${a.name}`) ?? Number.MAX_SAFE_INTEGER
+      const orderB = orderOf.get(`${b.source}\u001f${b.name}`) ?? Number.MAX_SAFE_INTEGER
+      if (orderA !== orderB) return orderA - orderB
+      return a.name.localeCompare(b.name, 'zh')
+    })
 }
 
 export async function getMeta(): Promise<QuoteMetaResponse> {
@@ -470,10 +504,26 @@ export async function listRevisions(limit: number): Promise<QuoteRevisionListRes
   const nameOf = new Map(items.map((item) => [item.code, item.name]))
   const userOf = new Map(users.map((user) => [user.id, user.displayName]))
 
+  /**
+   * 变更记录里的「项目」一列。
+   *
+   * 除了条目号，还有两种不是条目的写入会落进这张表：分类改名 / 合并（`cat:<source>`）
+   * 与批量导入（`import`）。它们 join 不到条目，直接显示 `cat:sale` 会让人以为
+   * 库里有一条叫这个名字的产品。
+   */
+  function subjectOf(code: string): string {
+    if (code === 'import') return '批量导入'
+    if (code.startsWith('cat:')) {
+      const source = code.slice(4) as QuoteSource
+      return `分类 · ${QUOTE_SOURCE_NAMES[source] ?? source}`
+    }
+    return nameOf.get(code) ?? ''
+  }
+
   const list: QuoteRevisionDto[] = rows.map((row) => ({
     id: row.id,
     itemCode: row.itemCode,
-    itemName: nameOf.get(row.itemCode) ?? '',
+    itemName: subjectOf(row.itemCode),
     field: row.field,
     oldValue: row.oldValue ?? '',
     newValue: row.newValue ?? '',
@@ -614,6 +664,306 @@ export async function updateItemPrice(
       ),
     },
   }
+}
+
+/**
+ * 列宽上限。**与导入器同一份口径**（`tools/quote-import.ts` 里的 `COLUMN_MAX`）：
+ * 两处不一致的后果是「界面上能存下的名字，导入时被截断」，而界面上看不出来。
+ */
+const ITEM_COLUMN_MAX = {
+  category: 80,
+  name: 200,
+  model: 120,
+  spec: 160,
+  unit: 24,
+  unitRaw: 24,
+  priceText: 200,
+  note: 400,
+  pricingMode: 40,
+  materials: 300,
+  ledgerNo: 12,
+} as const
+
+/** 折叠空白再截断。新产品是手输的，粘贴进来的多行文本要压成一行。 */
+function clipText(value: string, max: number): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
+/**
+ * 手动新增产品的条目号。
+ *
+ * 台账里的号是 `A001` / `B001` / `C001`（按来源），手动新增的用 `M` 前缀另开一串 ——
+ * 混进台账号里会让「拿纸质台账对号」这件事失效。列表按 `ledger_no` 排序，`M` 在
+ * `A/B/C` 之后，新产品自然排在各自来源的末尾。
+ */
+async function nextManualLedgerNo(source: QuoteSource): Promise<string> {
+  const rows = await prisma.quoteItem.findMany({
+    where: { source, ledgerNo: { startsWith: 'M' } },
+    select: { ledgerNo: true },
+  })
+  let max = 0
+  for (const row of rows) {
+    const matched = /^M(\d{1,8})$/.exec(row.ledgerNo)
+    if (matched !== null) max = Math.max(max, Number(matched[1]))
+  }
+  return `M${String(max + 1).padStart(3, '0')}`
+}
+
+/**
+ * 新增产品（维护台上传）。
+ *
+ * ## 键仍然由五元组算，不接受客户端给
+ *
+ * 客户端算一遍、服务端再算一遍，只要有一处折叠空白的规则不同，同一条产品就会拿到
+ * 两个键 —— 表现为「刚加的产品，搜出来有两条」。所以 `code` 只在这里生成。
+ *
+ * ## 撞上已下架的同名行 = 恢复，不是新建
+ *
+ * 台账里删掉的产品转 `archived`。再把它加回来时，如果算出一个新键，历史报价单上
+ * 那条 `archived` 记录就永远对不上新产品了。所以先找「同五元组里第一个 archived
+ * 的键」复用，并把 `ledger_no` 保留原值。
+ *
+ * ## 同名同规格可以有多条
+ *
+ * 台账里确实有（板式工艺同名但说明与收费不同）。所以不是「查重就拒」，而是按
+ * `occurrence` 往后找第一个空位，与导入器的规则完全一致。
+ */
+export async function createItem(
+  input: CreateQuoteItemRequest,
+  operator: { userId: string; access: QuoteWriteAccess },
+): Promise<QuoteResult<{ version: string; item: QuoteItemDto }>> {
+  const category = clipText(input.category, ITEM_COLUMN_MAX.category)
+  const name = clipText(input.name, ITEM_COLUMN_MAX.name)
+  if (name === '') return { ok: false, reason: 'invalid_name' }
+  if (category === '') return { ok: false, reason: 'invalid_category' }
+
+  const base = {
+    source: input.source,
+    category,
+    name,
+    model: clipText(input.model ?? '', ITEM_COLUMN_MAX.model),
+    spec: clipText(input.spec ?? '', ITEM_COLUMN_MAX.spec),
+  }
+
+  const siblings = await prisma.quoteItem.findMany({
+    where: base,
+    select: { code: true, status: true, ledgerNo: true },
+  })
+  const known = new Map(siblings.map((row) => [row.code, row]))
+
+  let code: string | null = null
+  let restoringLedgerNo: string | null = null
+  for (let occurrence = 0; occurrence < 64; occurrence += 1) {
+    const candidate = buildQuoteItemCode({ ...base, occurrence })
+    const row = known.get(candidate)
+    if (row === undefined) {
+      code = candidate
+      break
+    }
+    if (row.status === 'archived') {
+      code = candidate
+      restoringLedgerNo = row.ledgerNo
+      break
+    }
+  }
+  // 64 个位置都被占满只可能是异常数据；当作「名字不可用」报出去，而不是覆盖某一行。
+  if (code === null) return { ok: false, reason: 'invalid_name' }
+
+  const parsed = parsePriceInput(clipText(input.priceText ?? '', ITEM_COLUMN_MAX.priceText))
+  const ledgerNo = restoringLedgerNo ?? (await nextManualLedgerNo(input.source))
+  const version = await bumpDataset(`新增产品：${code}`)
+
+  const data = {
+    ...base,
+    ledgerNo,
+    pricingMode: clipText(input.pricingMode ?? '', ITEM_COLUMN_MAX.pricingMode),
+    materials: clipText(input.materials ?? '', ITEM_COLUMN_MAX.materials),
+    unit: clipText(input.unit ?? '', ITEM_COLUMN_MAX.unit),
+    unitRaw: clipText(input.unitRaw ?? '', ITEM_COLUMN_MAX.unitRaw),
+    priceKind: parsed.kind,
+    priceFen: parsed.priceFen,
+    priceText: parsed.priceText,
+    note: clipText(input.note ?? '', ITEM_COLUMN_MAX.note),
+    status: 'active' as const,
+    datasetVersion: version,
+  }
+
+  const [saved] = await prisma.$transaction([
+    restoringLedgerNo === null
+      ? prisma.quoteItem.create({ data: { code, ...data }, select: ITEM_SELECT })
+      : // 恢复：`imageKey` 不在更新字段里 —— 下架前绑的图还在，重新上架不该丢图。
+        prisma.quoteItem.update({ where: { code }, data, select: ITEM_SELECT }),
+    prisma.quoteRevision.create({
+      data: {
+        itemCode: code,
+        field: 'product',
+        oldValue: restoringLedgerNo === null ? null : 'archived',
+        newValue: 'active',
+        operatorId: operator.userId,
+        unlockSessionId: operator.access.unlockSessionId,
+        reason: restoringLedgerNo === null ? '新增产品' : '重新上架',
+      },
+    }),
+  ])
+
+  const images = await loadImageVersions(saved.imageKey === null ? [] : [saved.imageKey])
+  return {
+    ok: true,
+    value: {
+      version,
+      item: toItemDto(saved, saved.imageKey === null ? null : (images.get(saved.imageKey) ?? null)),
+    },
+  }
+}
+
+/**
+ * 批量导入：把确认过的行写进库。
+ *
+ * ## 只 upsert，不归档
+ *
+ * 台账全量导入（CLI 那条路）会把「本次没出现」的行转 archived —— 那是整表重导的
+ * 语义。这里的输入是**一份增量文件**（新品报价、供应商调价单），把它当成全量会让
+ * 一次只导 20 行的操作顺手把 1205 行全部下架。下架是维护台里单独的按钮。
+ *
+ * ## 幂等靠业务键
+ *
+ * 与导入器同一套键：同一份文件导两次，第二次全是 `unchanged`，不产生重复行。这
+ * 正是「确认页可以反复点」的前提。
+ *
+ * ## 版本号只 bump 一次
+ *
+ * 逐行 bump 会让前端收到一串中间版本；一次批量导入对客户端来说就是「价格变了」，
+ * 一个号足够。
+ */
+export async function applyImportRows(
+  source: QuoteSource,
+  rows: readonly QuoteImportRow[],
+  operator: { userId: string; access: QuoteWriteAccess },
+): Promise<
+  QuoteResult<{ version: string; added: number; changed: number; unchanged: number; total: number }>
+> {
+  if (rows.length === 0) return { ok: false, reason: 'invalid_name' }
+  if (rows.length > QUOTE_LIMITS.IMPORT_ROWS_MAX) return { ok: false, reason: 'invalid_name' }
+
+  // 同一批里出现两次同五元组时，靠 occurrence 分开 —— 与导入器、新增产品同一条规则。
+  const seen = new Map<string, number>()
+  const prepared = rows.map((row) => {
+    const category = clipText(row.category, ITEM_COLUMN_MAX.category)
+    const name = clipText(row.name, ITEM_COLUMN_MAX.name)
+    const model = clipText(row.model, ITEM_COLUMN_MAX.model)
+    const spec = clipText(row.spec, ITEM_COLUMN_MAX.spec)
+    const tuple = [source, category, name, model, spec].join('\u001f')
+    const occurrence = seen.get(tuple) ?? 0
+    seen.set(tuple, occurrence + 1)
+    return {
+      code: buildQuoteItemCode({ source, category, name, model, spec, occurrence }),
+      category,
+      name,
+      model,
+      spec,
+      pricingMode: clipText(row.pricingMode, ITEM_COLUMN_MAX.pricingMode),
+      materials: clipText(row.materials, ITEM_COLUMN_MAX.materials),
+      unit: clipText(row.unit, ITEM_COLUMN_MAX.unit),
+      // 识别器只有一列「单位」，归一值与原文取同一个 —— 台账里两者的差别（`㎡` 与
+      // `平方`）是导入器按来源做的归一，界面上手填的行没有这个上下文。
+      unitRaw: clipText(row.unit, ITEM_COLUMN_MAX.unitRaw),
+      priceText: clipText(row.priceText, ITEM_COLUMN_MAX.priceText),
+      note: clipText(row.note, ITEM_COLUMN_MAX.note),
+      ledgerNo: clipText(row.ledgerNo, ITEM_COLUMN_MAX.ledgerNo),
+    }
+  })
+
+  const existing = new Map(
+    (
+      await prisma.quoteItem.findMany({
+        where: { code: { in: prepared.map((row) => row.code) } },
+        select: { code: true, priceKind: true, priceFen: true, priceText: true, status: true },
+      })
+    ).map((row) => [row.code, row]),
+  )
+
+  // 没带条目号的行按 `M` 续号。留空会让它们全部排到列表最前，而且彼此分不出先后。
+  let manualSeq = 0
+  {
+    const manualRows = await prisma.quoteItem.findMany({
+      where: { source, ledgerNo: { startsWith: 'M' } },
+      select: { ledgerNo: true },
+    })
+    for (const row of manualRows) {
+      const matched = /^M(\d{1,8})$/.exec(row.ledgerNo)
+      if (matched !== null) manualSeq = Math.max(manualSeq, Number(matched[1]))
+    }
+  }
+
+  const version = await bumpDataset(`批量导入：${source} ${rows.length} 行`)
+  let added = 0
+  let changed = 0
+  let unchanged = 0
+
+  const CHUNK = 100
+  for (let offset = 0; offset < prepared.length; offset += CHUNK) {
+    const slice = prepared.slice(offset, offset + CHUNK)
+    await prisma.$transaction(
+      slice.map((row) => {
+        const before = existing.get(row.code)
+        const parsed = parsePriceInput(row.priceText)
+        const ledgerNo =
+          row.ledgerNo !== '' ? row.ledgerNo : `M${String(++manualSeq).padStart(3, '0')}`
+
+        if (before === undefined) added += 1
+        else if (
+          before.priceKind !== parsed.kind ||
+          before.priceFen !== parsed.priceFen ||
+          before.priceText !== parsed.priceText ||
+          before.status !== 'active'
+        ) {
+          changed += 1
+        } else {
+          unchanged += 1
+        }
+
+        const data = {
+          source,
+          category: row.category,
+          name: row.name,
+          model: row.model,
+          spec: row.spec,
+          ledgerNo,
+          pricingMode: row.pricingMode,
+          materials: row.materials,
+          unit: row.unit,
+          unitRaw: row.unitRaw,
+          priceKind: parsed.kind,
+          priceFen: parsed.priceFen,
+          priceText: parsed.priceText,
+          note: row.note,
+          status: 'active',
+          datasetVersion: version,
+        }
+
+        // `imageKey` 不在更新字段里：手工绑的图不该被一次导入顶掉。
+        return prisma.quoteItem.upsert({
+          where: { code: row.code },
+          create: { code: row.code, ...data },
+          update: data,
+        })
+      }),
+    )
+  }
+
+  await prisma.quoteRevision.create({
+    data: {
+      itemCode: 'import',
+      field: 'import',
+      oldValue: null,
+      newValue: `新增 ${added} / 更新 ${changed} / 未变 ${unchanged}`,
+      operatorId: operator.userId,
+      unlockSessionId: operator.access.unlockSessionId,
+      reason: `批量导入 ${source} ${rows.length} 行`,
+    },
+  })
+
+  return { ok: true, value: { version, added, changed, unchanged, total: rows.length } }
 }
 
 /** 审计里存的是「当时显示的什么」，所以带上形态 —— 只存数字会看不出「1.5 倍」。 */

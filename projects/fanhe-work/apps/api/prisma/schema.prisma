@@ -1377,6 +1377,39 @@ model QuoteDataset {
   @@map("quote_datasets")
 }
 
+/// 分类。**只负责「顺序」与「有哪些分类」两件事**，不复制条目上的分类值。
+///
+/// 分类的真值仍然是 `quote_items.category`：搜索、筛选、导入全按那一列走。这张表
+/// 存在的理由是另外两件 `quote_items` 表达不了的事：
+///
+/// 1. **顺序**。台账里分类是自然顺序（柜体门板 → 木门 → 护墙板），`groupBy` 出来的
+///    却是字典序，读起来像被打乱过。顺序只有人知道，得存下来。
+/// 2. **空分类**。新建一个分类时它下面还没有产品，`groupBy` 不会返回它 —— 于是
+///    「刚建的分类」在界面上凭空消失，看起来像没保存成功。
+///
+/// `name` 与 `quote_items.category` 逐字一致（改名时两处同步改，见
+/// `apps/api/src/quote/categories.ts`）。**不做显示名覆盖**：那会让「筛选按哪个名」
+/// 与「搜索结果里显示哪个名」分成两套，早晚对不上。
+model QuoteCategory {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// sale / craft / hardware。与 `quote_items.source` 同一个取值域。
+  source String @db.VarChar(16)
+
+  name String @db.VarChar(80)
+
+  /// 显式顺序，升序。同一来源内从 0 开始，拖动一次重排一批。
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  /// 同一来源下分类名唯一 —— 合并、改名都靠它定位。
+  @@unique([source, name])
+  @@index([source, sortOrder])
+  @@map("quote_categories")
+}
+
 /// 一条报价。1225 行（销售 571 / 工艺 58 / 五金 596）。
 model QuoteItem {
   /// 业务键。形如 `sale:免漆类（飞林柜）:E0级实木颗粒板（柜+门）标板::`。

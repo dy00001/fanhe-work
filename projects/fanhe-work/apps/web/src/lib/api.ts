@@ -38,7 +38,12 @@ import type {
   PermissionCatalogResponse,
   PermissionCode,
   QuoteAccessStateResponse,
+  QuoteCategoryListResponse,
   QuoteImageMutationResponse,
+  QuoteImportApplyRequest,
+  QuoteImportApplyResponse,
+  QuoteImportPreviewRequest,
+  QuoteImportPreviewResponse,
   QuoteItemResponse,
   QuoteLedgerStatsDto,
   QuoteMetaResponse,
@@ -46,6 +51,11 @@ import type {
   QuoteSearchResponse,
   QuoteSource,
   QuoteUnlockResponse,
+  CreateQuoteCategoryRequest,
+  CreateQuoteItemRequest,
+  MergeQuoteCategoryRequest,
+  RenameQuoteCategoryRequest,
+  ReorderQuoteCategoriesRequest,
   SetQuoteItemStatusRequest,
   UpdateQuoteItemRequest,
   UploadQuoteImageRequest,
@@ -1430,13 +1440,122 @@ export function removeQuoteImageRequest(
   })
 }
 
+// ---------------------------------------------------------------------------
+// 维护台：分类 / 产品 / 批量导入
+// ---------------------------------------------------------------------------
+//
+// 这几条全是写路径，一律带 `x-quote-unlock`。**没有一条是「读」** —— 分类清单
+// 是唯一例外，它挂在读权限上：看分类不该要口令，那只是一张目录。
+
+export function quoteCategoriesRequest(accessToken: string): Promise<QuoteCategoryListResponse> {
+  return request<QuoteCategoryListResponse>('/api/quote/categories', {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+export function createQuoteCategoryRequest(
+  accessToken: string,
+  input: CreateQuoteCategoryRequest,
+  unlockToken: string | null,
+): Promise<{ source: QuoteSource; name: string; count: number; sortOrder: number }> {
+  return request('/api/quote/categories', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+export function renameQuoteCategoryRequest(
+  accessToken: string,
+  input: RenameQuoteCategoryRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; from: string; to: string; moved: number }> {
+  return request('/api/quote/categories', {
+    method: 'PATCH',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+export function mergeQuoteCategoryRequest(
+  accessToken: string,
+  input: MergeQuoteCategoryRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; from: string; to: string; moved: number }> {
+  return request('/api/quote/categories/merge', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+export function reorderQuoteCategoriesRequest(
+  accessToken: string,
+  input: ReorderQuoteCategoriesRequest,
+  unlockToken: string | null,
+): Promise<{ updated: number }> {
+  return request('/api/quote/categories/order', {
+    method: 'PUT',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 新增产品。`code` 由服务端算 —— 客户端拿不到，也不需要拿。 */
+export function createQuoteItemRequest(
+  accessToken: string,
+  input: CreateQuoteItemRequest,
+  unlockToken: string | null,
+): Promise<{ version: string; item: unknown }> {
+  return request('/api/quote/items', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+  })
+}
+
+/** 识别文件，**不写库**。 */
+export function quoteImportPreviewRequest(
+  accessToken: string,
+  input: QuoteImportPreviewRequest,
+  unlockToken: string | null,
+): Promise<QuoteImportPreviewResponse> {
+  return request<QuoteImportPreviewResponse>('/api/quote/import/preview', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+    // 8MB 的 xlsx 转 base64 是 11MB，还要在服务端解压解析。默认 30 秒在旧机器上不够。
+    timeoutMs: 90_000,
+  })
+}
+
+export function quoteImportApplyRequest(
+  accessToken: string,
+  input: QuoteImportApplyRequest,
+  unlockToken: string | null,
+): Promise<QuoteImportApplyResponse> {
+  return request<QuoteImportApplyResponse>('/api/quote/import/apply', {
+    method: 'POST',
+    body: input,
+    accessToken,
+    ...(unlockToken === null ? {} : { extraHeaders: { 'x-quote-unlock': unlockToken } }),
+    timeoutMs: 90_000,
+  })
+}
+
 /**
  * 取图字节。
  *
  * **不能让 `<img src>` 直接用地址** —— 取图接口要 Bearer 令牌，而 `<img>` 不带
  * 请求头。这里拉成 `Blob`，调用方转 object URL（与案例库那条同源）。
- */
-export async function quoteImageRequest(
+ */ export async function quoteImageRequest(
   accessToken: string,
   key: string,
   variant: 'thumb' | 'full',

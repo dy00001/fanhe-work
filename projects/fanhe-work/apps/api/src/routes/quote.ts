@@ -3,8 +3,16 @@ import {
   QUOTE_LIMITS,
   QUOTE_SOURCES,
   QUOTE_ITEM_STATUSES,
+  type CreateQuoteCategoryRequest,
+  type CreateQuoteItemRequest,
+  type MergeQuoteCategoryRequest,
+  type QuoteImportApplyRequest,
+  type QuoteImportFailure,
+  type QuoteImportPreviewRequest,
   type QuoteItemStatus,
   type QuoteSource,
+  type RenameQuoteCategoryRequest,
+  type ReorderQuoteCategoriesRequest,
 } from '@fanhe/shared'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 
@@ -15,8 +23,20 @@ import {
   setAccessSecret,
   unlockWithPassword,
   type QuoteAccessFailure,
+  type QuoteWriteAccess,
 } from '../quote/access.js'
 import {
+  createCategory,
+  listCategoryRows,
+  mergeCategory,
+  renameCategory,
+  reorderCategories,
+  type CategoryFailure,
+} from '../quote/categories.js'
+import { parseQuoteFile } from '../quote/importer.js'
+import {
+  applyImportRows,
+  createItem,
   getItem,
   getLedgerStats,
   getMeta,
@@ -85,6 +105,8 @@ const ITEM_STATUS: Record<QuoteFailureReason, number> = {
   invalid_reason: 400,
   invalid_image: 400,
   invalid_status: 409,
+  invalid_name: 400,
+  invalid_category: 400,
 }
 
 const ITEM_MESSAGE: Record<QuoteFailureReason, string> = {
@@ -93,6 +115,40 @@ const ITEM_MESSAGE: Record<QuoteFailureReason, string> = {
   invalid_reason: `说明不能超过 ${QUOTE_LIMITS.REASON_MAX} 字`,
   invalid_image: '图片格式不支持，或超出了体积 / 尺寸上限',
   invalid_status: '状态没有变化',
+  invalid_name: '名称不能为空，也不能超过长度上限',
+  invalid_category: '分类不能为空，也不能超过长度上限',
+}
+
+/** 分类维护的失败映射。`duplicate` 用 409：请求没错，是这个名字已经被占了。 */
+const CATEGORY_STATUS: Record<CategoryFailure, number> = {
+  not_found: 404,
+  duplicate: 409,
+  invalid_name: 400,
+  invalid_source: 400,
+}
+
+const CATEGORY_MESSAGE: Record<CategoryFailure, string> = {
+  not_found: '找不到这个分类',
+  duplicate: '这个分类名已经存在。要合并请用「合并到」，不要用改名',
+  invalid_name: `分类名不能为空，也不能超过 ${QUOTE_LIMITS.CATEGORY_NAME_MAX} 字`,
+  invalid_source: '来源不合法',
+}
+
+/** 批量导入的失败映射。`unsupported` 用 415，`too_large` 用 413。 */
+const IMPORT_STATUS: Record<QuoteImportFailure, number> = {
+  empty_file: 400,
+  too_large: 413,
+  unsupported: 415,
+  parse_failed: 422,
+  no_rows: 422,
+}
+
+const IMPORT_MESSAGE: Record<QuoteImportFailure, string> = {
+  empty_file: '文件是空的',
+  too_large: `文件不能超过 ${Math.round(QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX / 1024 / 1024)}MB`,
+  unsupported: '只认 Excel（.xlsx）、CSV 与 PDF',
+  parse_failed: '文件解析失败',
+  no_rows: '没有识别到可导入的行',
 }
 
 function currentAuth(request: FastifyRequest) {
@@ -115,6 +171,48 @@ function sendAccessFailure(
 
 function sendItemFailure(reply: FastifyReply, reason: QuoteFailureReason): FastifyReply {
   return reply.code(ITEM_STATUS[reason]).send({ error: reason, message: ITEM_MESSAGE[reason] })
+}
+
+function sendCategoryFailure(reply: FastifyReply, reason: CategoryFailure): FastifyReply {
+  return reply
+    .code(CATEGORY_STATUS[reason])
+    .send({ error: reason, message: CATEGORY_MESSAGE[reason] })
+}
+
+function sendImportFailure(
+  reply: FastifyReply,
+  reason: QuoteImportFailure,
+  message?: string,
+): FastifyReply {
+  return reply.code(IMPORT_STATUS[reason]).send({
+    error: reason,
+    // 解析器给的说明比通用文案有用得多（「这份 PDF 里抽不出可读文字」），有就用它。
+    message: message ?? IMPORT_MESSAGE[reason],
+  })
+}
+
+/**
+ * 写路径的准入，一步到位：登录 → 角色 / 解锁令牌。
+ *
+ * 返回 `null` 表示**已经把失败响应发出去了**，调用方直接 `return reply` 即可。
+ * 判据本身在 `quote/access.ts`，这里只是把「取 auth → 判权 → 发错误」这三步收成
+ * 一处，避免新加的五个写接口各抄一遍、然后有一处抄漏 `readUnlockToken`。
+ */
+async function resolveWrite(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ userId: string; access: QuoteWriteAccess } | null> {
+  const auth = currentAuth(request)
+  if (auth === null) {
+    void reply.code(401).send(UNAUTHORIZED_BODY)
+    return null
+  }
+  const access = await resolveWriteAccess(auth, readUnlockToken(request))
+  if (!access.ok) {
+    void sendAccessFailure(reply, access.reason)
+    return null
+  }
+  return { userId: auth.userId, access: access.value }
 }
 
 /**
@@ -247,6 +345,131 @@ const IMAGE_QUERY_SCHEMA = {
   properties: {
     v: { type: 'string', maxLength: 16 },
     variant: { type: 'string', enum: ['thumb', 'full'] },
+  },
+} as const
+
+// ---------------------------------------------------------------------------
+// 维护台：分类、产品、批量导入
+// ---------------------------------------------------------------------------
+
+/** 新增产品。`code` 不在请求体里 —— 它由服务端按业务键算，理由见 `store.createItem`。 */
+const CREATE_ITEM_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'category', 'name'],
+  additionalProperties: false,
+  properties: {
+    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    category: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.ITEM_NAME_MAX },
+    model: { type: 'string', maxLength: 120 },
+    spec: { type: 'string', maxLength: 160 },
+    pricingMode: { type: 'string', maxLength: 40 },
+    materials: { type: 'string', maxLength: 300 },
+    unit: { type: 'string', maxLength: 24 },
+    unitRaw: { type: 'string', maxLength: 24 },
+    priceText: { type: 'string', maxLength: 200 },
+    note: { type: 'string', maxLength: 400 },
+  },
+} as const
+
+const CREATE_CATEGORY_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'name'],
+  additionalProperties: false,
+  properties: {
+    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+  },
+} as const
+
+/** 改名与合并共用一个形状（`from` / `to`），语义差别在路由上。 */
+const CATEGORY_PAIR_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'from', 'to'],
+  additionalProperties: false,
+  properties: {
+    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    from: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    to: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+  },
+} as const
+
+const REORDER_CATEGORIES_BODY_SCHEMA = {
+  type: 'object',
+  required: ['source', 'order'],
+  additionalProperties: false,
+  properties: {
+    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    order: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 300,
+      items: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    },
+  },
+} as const
+
+const IMPORT_PREVIEW_BODY_SCHEMA = {
+  type: 'object',
+  required: ['fileName', 'data'],
+  additionalProperties: false,
+  properties: {
+    fileName: { type: 'string', minLength: 1, maxLength: 200 },
+    // base64 膨胀是固定的 4/3，留一点余量。真正的字节数校验在解析器里按解码后长度做。
+    data: {
+      type: 'string',
+      minLength: 1,
+      maxLength: Math.ceil(QUOTE_LIMITS.IMPORT_FILE_BYTES_MAX * 1.4),
+    },
+  },
+} as const
+
+const IMPORT_ROW_SCHEMA = {
+  type: 'object',
+  required: [
+    'category',
+    'name',
+    'model',
+    'spec',
+    'unit',
+    'priceText',
+    'note',
+    'pricingMode',
+    'materials',
+    'ledgerNo',
+  ],
+  additionalProperties: false,
+  properties: {
+    category: { type: 'string', maxLength: QUOTE_LIMITS.CATEGORY_NAME_MAX },
+    name: { type: 'string', minLength: 1, maxLength: QUOTE_LIMITS.ITEM_NAME_MAX },
+    model: { type: 'string', maxLength: 120 },
+    spec: { type: 'string', maxLength: 160 },
+    unit: { type: 'string', maxLength: 24 },
+    priceText: { type: 'string', maxLength: 200 },
+    note: { type: 'string', maxLength: 400 },
+    pricingMode: { type: 'string', maxLength: 40 },
+    materials: { type: 'string', maxLength: 300 },
+    ledgerNo: { type: 'string', maxLength: 12 },
+    // 确认页会把预览行原样回传，带上这两列。这里允许它们，但**不写库** ——
+    // 行号与逐行提示是给人看的，`applyImportRows` 只挑它认识的字段。
+    sourceLine: { type: 'integer', minimum: 1 },
+    warnings: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 20 },
+  },
+} as const
+
+const IMPORT_APPLY_BODY_SCHEMA = {
+  type: 'object',
+  required: ['fileName', 'source', 'rows'],
+  additionalProperties: false,
+  properties: {
+    fileName: { type: 'string', minLength: 1, maxLength: 200 },
+    source: { type: 'string', enum: [...QUOTE_SOURCES] },
+    rows: {
+      type: 'array',
+      minItems: 1,
+      maxItems: QUOTE_LIMITS.IMPORT_ROWS_MAX,
+      items: IMPORT_ROW_SCHEMA,
+    },
   },
 } as const
 
@@ -511,6 +734,184 @@ export function registerQuoteRoutes(app: FastifyInstance): void {
         userId: auth.userId,
         access: access.value,
       })
+      if (!result.ok) return sendItemFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // 维护台：分类
+  // -------------------------------------------------------------------------
+
+  /**
+   * 分类清单，**含空分类与未落表的分类**。
+   *
+   * 与 `meta.categories` 的区别：那边只给筛选下拉用，空分类出现没有意义；这边是
+   * 维护台，人正要在空分类里传第一个产品。
+   */
+  app.get('/api/quote/categories', { preHandler: readGuard }, async (_request, reply) => {
+    reply.header('cache-control', 'no-store')
+    return listCategoryRows()
+  })
+
+  app.post<{ Body: CreateQuoteCategoryRequest }>(
+    '/api/quote/categories',
+    { preHandler: requireAuth, schema: { body: CREATE_CATEGORY_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await createCategory(request.body.source, request.body.name, context)
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /** 改名。条目与分类表一起改，所以会 bump 数据集版本。 */
+  app.patch<{ Body: RenameQuoteCategoryRequest }>(
+    '/api/quote/categories',
+    { preHandler: requireAuth, schema: { body: CATEGORY_PAIR_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await renameCategory(
+        request.body.source,
+        request.body.from,
+        request.body.to,
+        context,
+      )
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /** 合并：`from` 下的条目全部改挂到 `to`，然后删掉 `from`。 */
+  app.post<{ Body: MergeQuoteCategoryRequest }>(
+    '/api/quote/categories/merge',
+    { preHandler: requireAuth, schema: { body: CATEGORY_PAIR_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await mergeCategory(
+        request.body.source,
+        request.body.from,
+        request.body.to,
+        context,
+      )
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  /** 重排。只改顺序，不动条目，也不 bump 版本。 */
+  app.put<{ Body: ReorderQuoteCategoriesRequest }>(
+    '/api/quote/categories/order',
+    { preHandler: requireAuth, schema: { body: REORDER_CATEGORIES_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await reorderCategories(request.body.source, request.body.order, context)
+      if (!result.ok) return sendCategoryFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // 维护台：产品
+  // -------------------------------------------------------------------------
+
+  /**
+   * 新增产品。
+   *
+   * 与 `PATCH /api/quote/items/:code`（改价）分开，是因为语义不同：那条改一行已有
+   * 的数据，这条要**先算业务键**再决定是新建还是恢复一条已下架的行。混在一个接口
+   * 里，客户端就得先知道 code —— 而新产品的 code 只有服务端算得出来。
+   */
+  app.post<{ Body: CreateQuoteItemRequest }>(
+    '/api/quote/items',
+    { preHandler: requireAuth, schema: { body: CREATE_ITEM_BODY_SCHEMA } },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+      const result = await createItem(request.body, context)
+      if (!result.ok) return sendItemFailure(reply, result.reason)
+      reply.header('cache-control', 'no-store')
+      return result.value
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // 维护台：批量导入
+  // -------------------------------------------------------------------------
+
+  /**
+   * 识别文件，**一行都不写库**。
+   *
+   * 之所以要把「识别」与「导入」拆成两个接口：识别一定会出错（合并单元格、跨行备注、
+   * 表头前多一行标题），而导入是不可逆的。操作员在中间那一步逐条核对、改完再提交，
+   * 是这条链路唯一的安全阀。
+   */
+  app.post<{ Body: QuoteImportPreviewRequest }>(
+    '/api/quote/import/preview',
+    {
+      preHandler: requireAuth,
+      schema: { body: IMPORT_PREVIEW_BODY_SCHEMA },
+      // base64 是 4/3 膨胀，8MB 的文件约 11MB。这条路由单独放开，其他路由仍是默认值。
+      bodyLimit: 12 * 1024 * 1024,
+    },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+
+      const bytes = new Uint8Array(Buffer.from(request.body.data, 'base64'))
+      const parsed = parseQuoteFile(request.body.fileName, bytes)
+      if (!parsed.ok) return sendImportFailure(reply, parsed.reason, parsed.message)
+
+      reply.header('cache-control', 'no-store')
+      return {
+        fileName: request.body.fileName,
+        format: parsed.value.format,
+        total: parsed.value.rows.length,
+        rows: parsed.value.rows.slice(0, QUOTE_LIMITS.IMPORT_PREVIEW_ROWS),
+        warnings: parsed.value.warnings,
+        suggestedSource: parsed.value.suggestedSource,
+        detectedColumns: parsed.value.detectedColumns,
+      }
+    },
+  )
+
+  /** 应用确认过的行。按业务键 upsert，同一份文件重复提交不产生重复行。 */
+  app.post<{ Body: QuoteImportApplyRequest }>(
+    '/api/quote/import/apply',
+    {
+      preHandler: requireAuth,
+      schema: { body: IMPORT_APPLY_BODY_SCHEMA },
+      bodyLimit: 8 * 1024 * 1024,
+    },
+    async (request, reply) => {
+      const context = await resolveWrite(request, reply)
+      if (context === null) return reply
+
+      // 只挑十个业务字段。确认页回传的行里带着 `sourceLine` / `warnings`，那是给
+      // 人看的，进库会让 `quote_items` 多出两列没人读的数据。
+      const rows = request.body.rows.map((row) => ({
+        category: row.category,
+        name: row.name,
+        model: row.model,
+        spec: row.spec,
+        unit: row.unit,
+        priceText: row.priceText,
+        note: row.note,
+        pricingMode: row.pricingMode,
+        materials: row.materials,
+        ledgerNo: row.ledgerNo,
+      }))
+
+      const result = await applyImportRows(request.body.source, rows, context)
       if (!result.ok) return sendItemFailure(reply, result.reason)
       reply.header('cache-control', 'no-store')
       return result.value

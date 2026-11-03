@@ -146,19 +146,25 @@ export function QuotePanel({
     searchRef.current?.select()
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
+  /**
+   * meta 的加载抽成一个可重复调用的函数。
+   *
+   * 维护台里改名分类、合并、导入产品都会改 `meta`（分类清单、条数、版本号）。
+   * 只在挂载时取一次的话，改完分类回到筛选栏还是旧的那份 —— 而界面上看不出
+   * 「这是缓存」，只会让人觉得改名没生效。
+   */
+  const refreshMeta = useCallback(() => {
     loadQuoteMeta()
       .then((value) => {
-        if (!cancelled) setMeta(value)
+        setMeta(value)
+        setMetaError(null)
       })
       .catch((error: unknown) => {
-        if (!cancelled) setMetaError(error instanceof ApiError ? error.message : '加载失败')
+        setMetaError(error instanceof ApiError ? error.message : '加载失败')
       })
-    return () => {
-      cancelled = true
-    }
   }, [])
+
+  useEffect(refreshMeta, [refreshMeta])
 
   const refreshAccess = useCallback(() => {
     loadQuoteAccessState()
@@ -269,24 +275,6 @@ export function QuotePanel({
     else setGateOpen(true)
   }
 
-  /**
-   * 维护面板里的「去改价」。
-   *
-   * 关掉说明屏，把焦点送到右栏的价格输入框。**等 260ms 再聚焦**：Radix 关闭时会在
-   * 卸载那一刻把焦点还给打开它的按钮，早于它就会被抢回去；而卸载发生在 200ms 的
-   * 关闭动画之后。
-   */
-  const handleGoEdit = useCallback(() => {
-    setMaintOpen(false)
-    window.setTimeout(() => {
-      const input = document.getElementById('quote-price-input')
-      if (input instanceof HTMLInputElement) {
-        input.focus()
-        input.select()
-      }
-    }, 260)
-  }, [])
-
   /** 口令验证通过后直接进维护面板（静态稿第 1443 行是同一条路径）。 */
   const handleGateChanged = useCallback(() => {
     void loadQuoteAccessState()
@@ -296,6 +284,19 @@ export function QuotePanel({
       })
       .catch(() => setAccess(null))
   }, [])
+
+  /**
+   * 维护台里任何写操作成功之后。
+   *
+   * 三件事都要做：重查列表（价格变了）、重取 meta（分类与条数可能变了）、重判授权
+   * （30 分钟到期后就该显示「口令失效」）。只做第一件的话，改完分类回到筛选栏
+   * 还是旧清单，而界面上没有任何提示说明为什么。
+   */
+  const handleMaintChanged = useCallback(() => {
+    setReloadToken((value) => value + 1)
+    refreshMeta()
+    refreshAccess()
+  }, [refreshMeta, refreshAccess])
 
   /**
    * Esc 收起整页形态（静态稿第 1497 行）。
@@ -435,19 +436,12 @@ export function QuotePanel({
               {rows.length === 0 ? '无匹配条目' : '选一条看详情'}
             </p>
           ) : (
-            /* `key` 让「换一条选中项」等于重新挂载：价格输入框、改动说明、提示语
-               全部回到初值。写成在 effect 里重置会撞 `react-hooks/set-state-in-effect`，
-               而且第一帧会先显示上一条的价格。 */
+            /* `key` 让「换一条选中项」等于重新挂载：提示语回到初值。写成在 effect 里
+               重置会撞 `react-hooks/set-state-in-effect`，而且第一帧会先显示上一条的图。 */
             <QuoteDetail
               key={detail.item.code}
               detail={detail}
-              access={access}
-              onRequestUnlock={() => setGateOpen(true)}
               onOpenImage={() => openLightbox(detail.item.imageKey, detail.item.imageVersion)}
-              onChanged={() => {
-                setReloadToken((value) => value + 1)
-                refreshAccess()
-              }}
             />
           )}
         </aside>
@@ -493,7 +487,7 @@ export function QuotePanel({
         onOpenChange={setMaintOpen}
         access={access}
         meta={meta}
-        onGoEdit={handleGoEdit}
+        onChanged={handleMaintChanged}
       />
     </div>
   )

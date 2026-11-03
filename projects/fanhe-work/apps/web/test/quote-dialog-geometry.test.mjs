@@ -17,7 +17,9 @@
  *      c) Esc 挂在 `window` 冒泡阶段，Radix 在 `document` 上先收到 → 一起收掉。
  *
  *   3. 「价格维护页面不可操作」不是权限也不是表单坏了：那一屏在静态稿里本来就写着
- *      「本期只读，不可写」，只有「关闭」一个按钮。补一个「去改价」把路指到右栏。
+ *      「本期只读，不可写」，只有「关闭」一个按钮。**2026-11-03 下半场**把这一屏
+ *      整块重写成操作台（分类 / 产品与价格 / 批量导入 / 变更记录），同时按需求把
+ *      查价面板右栏的改价入口全部撤掉 —— 本文件最后一条断言钉的就是「撤干净了」。
  *
  * 这些都不产生类型错误、也不改变任何纯函数的输出，浏览器里要复现一次还得先点到
  * 那个品类、再滚一次滚轮。所以在这里钉静态断言。
@@ -31,6 +33,7 @@ const LAUNCH_PATH = new URL('../src/components/home/LaunchSection.tsx', import.m
 const LIGHTBOX_PATH = new URL('../src/components/quote/QuoteLightbox.tsx', import.meta.url)
 const MAINT_PATH = new URL('../src/components/quote/QuoteMaintPanel.tsx', import.meta.url)
 const PANEL_PATH = new URL('../src/components/quote/QuotePanel.tsx', import.meta.url)
+const DETAIL_PATH = new URL('../src/components/quote/QuoteDetail.tsx', import.meta.url)
 
 /** 注释里可以大段讨论这些写法，只有落在代码里的才算数。 */
 function stripComments(source) {
@@ -188,25 +191,72 @@ test('点图片不关闭：关闭判定用 pointerdown 记下的目标，不是 
   )
 })
 
-test('维护面板有直达改价的入口，而不是只有一个「关闭」', () => {
-  const maint = readCode(MAINT_PATH)
+test('查价面板回归只读：改价入口已从右栏全部撤走', () => {
   const panel = readCode(PANEL_PATH)
+  const detail = readCode(DETAIL_PATH)
+
+  // 需求 4 的原话：「移除『报价查价』页面中的改价功能」。
+  // 钉的是**入口消失**，不是「接口消失」—— `saveQuotePrice` 那三个函数还在，
+  // 维护台在用它们。所以只能断言「这两个文件里不出现」，不能删接口。
+  assert.ok(
+    !panel.includes('quote-price-input'),
+    '查价面板又在找 #quote-price-input 了。改价已搬到「价格与产品维护」，' +
+      '查价面板只负责查 —— 改价按钮混在结果表右侧时，手滑一次就是改错一条在用价格。',
+  )
+  assert.ok(
+    !panel.includes('onGoEdit') && !panel.includes('handleGoEdit'),
+    '查价面板又出现了「去改价」的跳转。维护台现在是操作台，进去就能改，不需要跳转。',
+  )
 
   assert.ok(
-    maint.includes('onGoEdit: () => void'),
-    'QuoteMaintPanel 缺 onGoEdit。这一屏是说明书、只读，没有出口的话点进去就是一堵墙。',
+    !detail.includes('saveQuotePrice'),
+    '右栏详情又调 saveQuotePrice 了。价格输入框与保存按钮应该只在维护台里。',
   )
-  assert.match(maint, /onClick=\{onGoEdit\}/, '「去改价」按钮没接到 onGoEdit')
-  assert.ok(maint.includes('去改价'), '「去改价」按钮的文字被改了，静态稿里没有别的措辞')
-
-  assert.ok(panel.includes('onGoEdit={handleGoEdit}'), 'QuotePanel 没把 handleGoEdit 传下去')
+  assert.ok(!detail.includes('saveQuoteStatus'), '右栏详情又出现下架 / 恢复按钮了')
   assert.ok(
-    panel.includes("getElementById('quote-price-input')"),
-    'handleGoEdit 没有把焦点送到价格输入框，用户还是得自己找',
+    !detail.includes('uploadQuoteImage') && !detail.includes('removeQuoteImage'),
+    '右栏详情又出现换图 / 解绑图了，这两个动作同样只在维护台',
   )
+
+  // 反向确认：右栏确实还在（否则上面四条会因为它被删空而假绿）。
+  assert.ok(detail.includes('describePrice'), '右栏连价格显示都没了，说明文件被改坏了')
+  assert.ok(detail.includes('复制报价文本'), '右栏的复制按钮没了')
+})
+
+test('维护台是四个操作区，不再是一屏说明书', () => {
+  const maint = readCode(MAINT_PATH)
+
+  // 需求 1：「取消该板块原有的『使用说明』部分」。
+  // 上一版这一屏是六节说明文档（数据入口 / 字段映射 / 同步机制 / 商品图 / 授权 /
+  // 记录），点进去什么都不能做 —— 那正是「价格维护页面不可操作」的来源。
+  for (const section of ['数据入口', '字段映射', '同步机制', '商品图', '本期只读']) {
+    assert.ok(
+      !maint.includes(section),
+      `维护台里又出现了「${section}」这类说明段落。这一屏是操作台，不是说明书。`,
+    )
+  }
+
+  // 需求 2 / 3 / 5 / 6 对应的四个区。少一个就有一类操作没有入口。
+  for (const key of ['categories', 'products', 'import', 'revisions']) {
+    assert.ok(
+      maint.includes(`'${key}'`),
+      `维护台少了「${key}」区。四个区分别是：分类、产品与价格、批量导入、变更记录。`,
+    )
+  }
+  for (const component of [
+    'QuoteCategoryManager',
+    'QuoteProductManager',
+    'QuoteImportPanel',
+    'QuoteRevisionList',
+  ]) {
+    assert.ok(maint.includes(`<${component}`), `维护台没有挂载 ${component}`)
+  }
+
+  // 面板尺寸必须走内联 style：`w-[min(1180px,96vw)]` 这类带 min() 的任意值在
+  // Tailwind v4 里会被整条丢弃（11-02 踩过），表现为面板被内容压成一条竖线。
   assert.match(
-    panel,
-    /setTimeout\([\s\S]{0,200}?focus\(\)/,
-    '聚焦必须延后。Radix 关闭时会在卸载那一刻把焦点还给触发按钮，同步聚焦会被抢回去。',
+    maint,
+    /width:\s*'min\(1180px,\s*96vw\)'/,
+    '维护台的宽度又写成 Tailwind 任意值了。带 min() 的任意值在 v4 里整条失效。',
   )
 })
