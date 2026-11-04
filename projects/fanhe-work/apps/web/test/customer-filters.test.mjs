@@ -24,6 +24,7 @@ import {
   hourRange,
   isCustomerRangeKey,
   overlapsActivity,
+  ownerLabel,
   parseRangeParam,
   presetRange,
   rangeLabel,
@@ -166,6 +167,7 @@ test('地址编解码：默认值不写进地址，自定义区间带上两端',
     stage: 'designing',
     q: '李',
     pendingReview: true,
+    owner: 'designer:2f5c1a9e-1111-4222-8333-444455556666',
   }
   const params = filtersToParams(custom)
   assert.equal(params.get('p'), 'custom')
@@ -175,11 +177,14 @@ test('地址编解码：默认值不写进地址，自定义区间带上两端',
   assert.equal(params.get('stage'), 'designing')
   assert.equal(params.get('q'), '李')
   assert.equal(params.get('review'), 'pending')
-  assert.equal(activeFilterCount(custom), 5)
+  // 归属用短键 `o`，与 `p` 同一套习惯。
+  assert.equal(params.get('o'), 'designer:2f5c1a9e-1111-4222-8333-444455556666')
+  assert.equal(activeFilterCount(custom), 6)
 
   // 折回对象后必须与原来等价，否则「跳转带上筛选」这条约定就是空的。
   const back = filtersFromParams(params, NOW)
   assert.equal(filtersKey(back), filtersKey(custom))
+  assert.equal(back.owner, custom.owner)
 })
 
 test('清除单个条件只影响那一项，其余筛选保持原样', () => {
@@ -199,6 +204,30 @@ test('清除单个条件只影响那一项，其余筛选保持原样', () => {
   assert.equal(noRange.range.key, 'all')
   assert.equal(noRange.range.from, null)
   assert.equal(filtersToParams(noRange).get('from'), null)
+
+  // 归属单独可清，且不影响其余条件：它是最新加的那一项，最容易在重置里漏掉。
+  const withOwner = { ...filled, owner: 'mine' }
+  const noOwner = clearFilter(withOwner, 'owner')
+  assert.equal(noOwner.owner, '')
+  assert.equal(noOwner.scope, 'overseas')
+  assert.equal(filtersToParams(noOwner).get('o'), null)
+})
+
+test('归属文案：固定档直出，成员档从名单查名字，查不到不印 uuid', () => {
+  const ownerId = '2f5c1a9e-1111-4222-8333-444455556666'
+  const owners = [{ id: ownerId, name: '张三', role: 'designer' }]
+
+  assert.equal(ownerLabel('', owners), null)
+  assert.equal(ownerLabel('mine', owners), '我负责的')
+  assert.equal(ownerLabel('unassigned', owners), '未分配')
+  assert.equal(ownerLabel(`designer:${ownerId}`, owners), '设计师·张三')
+
+  // 名单是异步到达的，第一帧必然查不到。此时给一句「指定设计师」，
+  // 而不是把一串十六进制摆在筛选标签上。
+  assert.equal(ownerLabel(`designer:${ownerId}`, []), '指定设计师')
+  assert.equal(ownerLabel('sales:00000000-0000-0000-0000-000000000000', owners), '指定销售')
+  // 非法值不产生标签（与 parseOwnerFilter 回到「全部」是同一件事）。
+  assert.equal(ownerLabel('乱写', owners), null)
 })
 
 test('活跃度窗口与当前时间筛选取交集：上月区间必然与最近 24 小时不相交', () => {

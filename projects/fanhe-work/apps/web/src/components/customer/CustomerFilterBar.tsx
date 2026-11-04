@@ -1,14 +1,16 @@
-import { CUSTOMER_STAGES } from '@fanhe/shared'
+import { CUSTOMER_STAGES, ownerFilterValue, type CustomerOwnerDto } from '@fanhe/shared'
 import { X } from 'lucide-react'
 import { useState } from 'react'
 
 import {
   CUSTOMER_RANGE_OPTIONS,
+  OWNER_FIXED_OPTIONS,
   SCOPE_OPTIONS,
   activeFilterCount,
   clearFilter,
   customInputs,
   customRange,
+  ownerLabel,
   resolveCustomerRange,
   type CustomerFilterKey,
   type CustomerFilters,
@@ -34,6 +36,12 @@ export function CustomerFilterBar(props: {
   onChange: (next: CustomerFilters) => void
   /** 当前时刻，用于「自定义」的初始日期与区间文案。 */
   now: Date
+  /**
+   * 归属下拉的成员档。由列表响应下发，只含「有客户的人」。
+   * 加载中传空数组：下拉只剩两个固定档，不该用一句「加载中」占位 ——
+   * 那会让筛选条在每次切换时跳一次高度。
+   */
+  owners: readonly CustomerOwnerDto[]
 }) {
   /**
    * 搜索框的输入暂存。`null` 表示「用户还没动过这个框」，此时显示地址里生效的关键词。
@@ -60,6 +68,11 @@ export function CustomerFilterBar(props: {
   if (stageValue !== undefined) chips.push({ key: 'stage', label: stageLabel(stageValue) })
   if (filters.q !== '') chips.push({ key: 'q', label: `关键词「${filters.q}」` })
   if (filters.pendingReview) chips.push({ key: 'review', label: '只看待复核' })
+  const ownerText = ownerLabel(filters.owner, props.owners)
+  if (ownerText !== null) chips.push({ key: 'owner', label: ownerText })
+
+  const designerOptions = props.owners.filter((owner) => owner.role === 'designer')
+  const salesOptions = props.owners.filter((owner) => owner.role === 'sales')
 
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -187,6 +200,50 @@ export function CustomerFilterBar(props: {
           </select>
         </div>
 
+        {/*
+          归属筛选。成员档按角色分组：同一个人可能既是某些客户的设计师、又是另一些
+          客户的销售，两个选项筛出来的结果不同，合并成一个「张三」会让人以为筛全了。
+        */}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="customer-owner" className="text-xs text-muted-foreground">
+            归属
+          </label>
+          <select
+            id="customer-owner"
+            value={filters.owner}
+            onChange={(event) => patch({ owner: event.target.value })}
+            className="h-8 max-w-52 rounded-md border border-input bg-transparent px-2 text-sm text-foreground"
+          >
+            <option value="">全部归属</option>
+            {OWNER_FIXED_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+            {designerOptions.length === 0 ? null : (
+              <optgroup label="设计师">
+                {designerOptions.map((owner) => (
+                  <option
+                    key={`designer:${owner.id}`}
+                    value={ownerFilterValue('designer', owner.id)}
+                  >
+                    {owner.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {salesOptions.length === 0 ? null : (
+              <optgroup label="销售">
+                {salesOptions.map((owner) => (
+                  <option key={`sales:${owner.id}`} value={ownerFilterValue('sales', owner.id)}>
+                    {owner.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
+
         <div className="flex flex-col gap-1.5">
           <label htmlFor="customer-stage" className="text-xs text-muted-foreground">
             阶段
@@ -261,6 +318,7 @@ export function CustomerFilterBar(props: {
               stage: '',
               q: '',
               pendingReview: false,
+              owner: '',
             })
           }}
         >

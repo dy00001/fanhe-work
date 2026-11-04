@@ -12,6 +12,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  EDITABLE_AMOUNT_FIELDS,
+  ORDER_AMOUNT_FIELDS,
   activityCeiling,
   activityOf,
   confidenceHint,
@@ -20,6 +22,7 @@ import {
   formatFen,
   formatWan,
   hourText,
+  isAmountAnomaly,
   orderProgress,
   parseYuanToFen,
   peakHourIndex,
@@ -298,4 +301,46 @@ test('正常档位不受新逻辑影响', () => {
   assert.equal(confidenceHint(69, []).tone, 'medium')
   assert.equal(confidenceHint(70, []).tone, 'high')
   assert.equal(confidenceHint(30, []).showScore, true, '非 0 分仍要显示数字')
+})
+
+/*
+ * 订单结算的七个格子。
+ *
+ * 这些断言守的是「界面与服务端对同一件事的说法一致」：格子少一个，那个金额就永远
+ * 显示不出来；可编辑集合写错，派生字段会被做成输入框，人一改就被下一次重算覆盖。
+ */
+
+test('七个金额格子各出现一次，顺序按收款项到总额', () => {
+  assert.deepEqual(
+    ORDER_AMOUNT_FIELDS.map((field) => field.label),
+    ['定金', '预付款', '已收尾款', '未收尾款', '手续费', '合同总金额', '实收金额'],
+  )
+  // 字段名不能重复，否则两个格子渲染同一个数字，而界面上看不出哪里错了。
+  const fields = ORDER_AMOUNT_FIELDS.map((field) => field.field)
+  assert.equal(new Set(fields).size, fields.length)
+})
+
+test('只有五项可人工更正，派生两项不带编辑入口', () => {
+  assert.deepEqual(
+    EDITABLE_AMOUNT_FIELDS.map((field) => field.label),
+    ['定金', '预付款', '已收尾款', '手续费', '合同总金额'],
+  )
+  const unpaid = ORDER_AMOUNT_FIELDS.find((field) => field.key === 'unpaid')
+  const received = ORDER_AMOUNT_FIELDS.find((field) => field.key === 'received')
+  assert.equal(unpaid?.editable, false)
+  assert.equal(received?.editable, false)
+  // 派生项必须写明口径，否则「这个数是怎么来的」只能靠猜。
+  assert.match(unpaid?.formula ?? '', /合同总金额 − 定金 − 预付款 − 已收尾款/)
+  assert.match(received?.formula ?? '', /定金 \+ 预付款 \+ 已收尾款 − 手续费/)
+})
+
+test('未收尾款为负时判为异常，其余字段不误报', () => {
+  const unpaid = ORDER_AMOUNT_FIELDS.find((field) => field.key === 'unpaid')
+  const contract = ORDER_AMOUNT_FIELDS.find((field) => field.key === 'contract')
+  assert.ok(unpaid && contract)
+  assert.equal(isAmountAnomaly(unpaid, -1), true)
+  assert.equal(isAmountAnomaly(unpaid, 0), false)
+  assert.equal(isAmountAnomaly(unpaid, null), false, '未录入不算异常')
+  // 合同额哪怕为 0 也不是异常：那是「这单不要钱」，不是记账冲突。
+  assert.equal(isAmountAnomaly(contract, -1), false)
 })

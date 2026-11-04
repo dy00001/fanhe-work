@@ -7,12 +7,14 @@ import type {
   CreateCustomerRequest,
   CustomerDetailDto,
   CustomerListResponse,
+  DeleteCustomerResponse,
   PoolListResponse,
   PoolSuggestionDto,
   ReviewPoolSuggestionRequest,
   SetCustomerStageRequest,
   UpdateCustomerRequest,
   UpdateCustomerStepRequest,
+  UpdateOrderAmountsRequest,
 } from '@fanhe/shared'
 
 import {
@@ -24,8 +26,11 @@ import {
   customerDetailRequest,
   customerPoolRequest,
   customersRequest,
+  deleteCustomerOrderRequest,
+  deleteCustomerRequest,
   reviewPoolSuggestionRequest,
   setCustomerStageRequest,
+  updateCustomerOrderAmountsRequest,
   updateCustomerRequest,
   updateCustomerStepRequest,
   type CustomerListQuery,
@@ -85,6 +90,37 @@ export function updateCustomerStep(
   return withAccessToken(
     async (token) => (await updateCustomerStepRequest(token, id, orderId, idx, input)).customer,
   )
+}
+
+/**
+ * 更正订单金额。返回整条客户详情：金额与客户级合同额汇总同时变化，
+ * 只回订单的话详情顶部的汇总会停在旧值。
+ */
+export function updateCustomerOrderAmounts(
+  id: string,
+  orderId: string,
+  input: UpdateOrderAmountsRequest,
+): Promise<CustomerDetailDto> {
+  return withAccessToken(
+    async (token) => (await updateCustomerOrderAmountsRequest(token, id, orderId, input)).customer,
+  )
+}
+
+/** 删除一张订单。同样回整条详情，删完那一单要从列表里消失且汇总要跟着减。 */
+export function deleteCustomerOrder(id: string, orderId: string): Promise<CustomerDetailDto> {
+  return withAccessToken(
+    async (token) => (await deleteCustomerOrderRequest(token, id, orderId)).customer,
+  )
+}
+
+/**
+ * 删除一位客户。
+ *
+ * 返回被删客户的名字而不是整条详情：那条记录已经不存在，界面需要的是「删掉的是
+ * 哪一位」这句话里的名字。
+ */
+export function deleteCustomer(id: string): Promise<DeleteCustomerResponse['deleted']> {
+  return withAccessToken(async (token) => (await deleteCustomerRequest(token, id)).deleted)
 }
 
 export function setCustomerStage(

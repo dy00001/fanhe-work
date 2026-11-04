@@ -1255,12 +1255,23 @@ model CustomerOrder {
   stageSource String @default("ai_stage") @map("stage_source") @db.VarChar(20)
 
   /// 合同额，单位分。唯一可靠来源是看板的合同证据表，那 5 笔是逐单核对过的。
-  /// 其余订单留空，宁缺勿错。
+  /// 其余订单留空，宁缺勿错。**这一列是「合同总金额」，由人录入。**
   contractFen Int? @map("contract_fen")
-  /// 已收金额，单位分。看板未给出，只有 ai_schema 的客户级累计值可参考，
-  /// 而那个值无法确定归属哪一单，故一律留空，等人工录入。
+  /// 定金，单位分。手填。
+  depositFen Int? @map("deposit_fen")
+  /// 预付款，单位分。手填。
+  prepayFen Int? @map("prepay_fen")
+  /// 已收尾款，单位分。手填。与「实收」不同：实收还要加上定金与预付款再扣手续费。
+  finalReceivedFen Int? @map("final_received_fen")
+  /// 手续费，单位分。手填。从实收里扣除（退款手续费、平台抽成等）。
+  feeFen Int? @map("fee_fen")
+
+  /// 实收金额，单位分。**派生列**：定金 + 预付款 + 已收尾款 − 手续费。
+  /// 由 `computeOrderSettlement`（shared）算出后写入，任何地方都不得直接赋值。
+  /// 导入路径例外：看板与 ai_schema 给的是既成事实，照抄不重算。
   receivedFen Int? @map("received_fen")
-  /// 未收金额，单位分。与上同理留空，不按合同减已收自行推算。
+  /// 未收尾款，单位分。**派生列**：合同总金额 − 定金 − 预付款 − 已收尾款。
+  /// 允许为负：超收、重复记账、退款未记账都会算出负数，截断成 0 会把问题藏起来。
   unpaidFen   Int? @map("unpaid_fen")
 
   /// 金额来源：board-evidence（高）/ ai_schema-sanitized（低）/ cleared / none。

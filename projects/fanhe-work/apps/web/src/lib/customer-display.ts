@@ -2,6 +2,7 @@ import {
   CUSTOMER_STAGE_META,
   ORDER_STAGE_DEFS,
   compareStage,
+  type CustomerAmounts,
   type CustomerStage,
   type CustomerStepDto,
   type RegionScope,
@@ -50,6 +51,67 @@ export function formatWan(fen: number | null): string {
   // 保留一位小数就够：汇总卡上的数字精确到百元没有意义，而多两位会让卡片宽度跳动。
   return `${wan.toFixed(1)} 万`
 }
+
+/**
+ * 订单结算的七个格子，按界面上的显示顺序排。
+ *
+ * 做成表而不是在 JSX 里手写七段：七个格子里有五个能改、两个只读，顺序与标签
+ * 一旦分散在两处（渲染一处、校验一处），迟早会出现「界面上叫已收尾款、保存时写到
+ * 已收」这种错位，而它在界面上看不出来。
+ *
+ * 顺序照业务口径：先说收了几笔（定金、预付款、已收尾款），再看还欠多少（未收尾款），
+ * 然后是手续费，最后两个总额。把总额放前面的话，人第一眼看到的是自己最不需要
+ * 核对的那两个数字。
+ */
+export type OrderAmountFieldKey =
+  'deposit' | 'prepay' | 'finalReceived' | 'unpaid' | 'fee' | 'contract' | 'received'
+
+export type OrderAmountField = {
+  key: OrderAmountFieldKey
+  label: string
+  field: keyof CustomerAmounts
+  /** 能不能人工更正。派生两项为 false。 */
+  editable: boolean
+  /** 派生项的口径说明，直接显示在数字下面。 */
+  formula?: string
+}
+
+export const ORDER_AMOUNT_FIELDS: readonly OrderAmountField[] = [
+  { key: 'deposit', label: '定金', field: 'depositFen', editable: true },
+  { key: 'prepay', label: '预付款', field: 'prepayFen', editable: true },
+  { key: 'finalReceived', label: '已收尾款', field: 'finalReceivedFen', editable: true },
+  {
+    key: 'unpaid',
+    label: '未收尾款',
+    field: 'unpaidFen',
+    editable: false,
+    formula: '合同总金额 − 定金 − 预付款 − 已收尾款',
+  },
+  { key: 'fee', label: '手续费', field: 'feeFen', editable: true },
+  { key: 'contract', label: '合同总金额', field: 'contractFen', editable: true },
+  {
+    key: 'received',
+    label: '实收金额',
+    field: 'receivedFen',
+    editable: false,
+    formula: '定金 + 预付款 + 已收尾款 − 手续费',
+  },
+]
+
+/**
+ * 金额是否为「异常」。目前只有一种：未收尾款为负。
+ *
+ * 负数意味着收的钱超过合同额（多收、重复记账、退款没记）。这不是显示格式问题，
+ * 是要有人去对账的信号，因此界面给它一个醒目的样式，而不是取绝对值糊过去。
+ */
+export function isAmountAnomaly(field: OrderAmountField, value: number | null): boolean {
+  return field.key === 'unpaid' && value !== null && value < 0
+}
+
+/** 可人工更正的五项，更正表单按这个顺序铺。派生两项不在其中。 */
+export const EDITABLE_AMOUNT_FIELDS: readonly OrderAmountField[] = ORDER_AMOUNT_FIELDS.filter(
+  (field) => field.editable,
+)
 
 export type YuanParseResult =
   { ok: true; fen: number } | { ok: false; reason: 'empty' | 'invalid' | 'negative' | 'too-large' }

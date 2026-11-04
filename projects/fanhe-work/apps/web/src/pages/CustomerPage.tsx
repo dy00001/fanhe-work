@@ -2,15 +2,19 @@ import {
   CUSTOMER_STAGES,
   NAV_CODES,
   PERMISSIONS,
+  computeOrderSettlement,
   navPath,
   type AssignableUserDto,
   type CustomerAssignmentDto,
   type CustomerDetailDto,
+  type CustomerListItemDto,
   type CustomerListResponse,
   type CustomerOrderDto,
+  type CustomerOwnerDto,
   type CustomerStage,
   type NavItem,
   type RegionScope,
+  type UpdateOrderAmountsRequest,
 } from '@fanhe/shared'
 import { UsersRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -40,6 +44,8 @@ import {
 import { Input } from '../components/ui/input'
 import { ApiError } from '../lib/api'
 import {
+  EDITABLE_AMOUNT_FIELDS,
+  ORDER_AMOUNT_FIELDS,
   activityOf,
   assignmentParts,
   fillStageBuckets,
@@ -47,6 +53,7 @@ import {
   formatDateTime,
   formatFen,
   formatWan,
+  isAmountAnomaly,
   orderProgress,
   parseYuanToFen,
   scopeLabel,
@@ -54,6 +61,7 @@ import {
   stageLabel,
   stageTone,
   toneClass,
+  type OrderAmountFieldKey,
   type StageTone,
 } from '../lib/customer-display'
 import {
@@ -70,10 +78,13 @@ import {
   assignCustomer,
   createCustomer,
   createCustomerOrder,
+  deleteCustomer,
+  deleteCustomerOrder,
   loadAssignableUsers,
   loadCustomer,
   loadCustomers,
   setCustomerStage,
+  updateCustomerOrderAmounts,
   updateCustomerStep,
 } from '../lib/customers'
 import { useNow } from '../lib/use-now'
@@ -104,6 +115,11 @@ import { useNow } from '../lib/use-now'
 export function CustomerPage({ item }: { item: NavItem }) {
   const { can } = useAuth()
   const canWrite = can(PERMISSIONS.CUSTOMER_RECORD_WRITE)
+  /*
+   * 删除客户要两个权限点，与服务端的两道守卫一一对应。只判写权限的话，设计师会
+   * 看到一个点下去必然 400/403 的按钮 —— 那比没有按钮更糟，因为它看起来像功能坏了。
+   */
+  const canDeleteCustomer = canWrite && can(PERMISSIONS.CUSTOMER_SCOPE_WRITE)
   const isProgress = item.code === NAV_CODES.CUSTOMER_PROGRESS
 
   const [params, setParams] = useSearchParams()
@@ -116,7 +132,16 @@ export function CustomerPage({ item }: { item: NavItem }) {
   const [refreshToken, setRefreshToken] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [poolOpen, setPoolOpen] = useState(false)
+
+  /**
+   * 归属下拉的成员档，保留最后一次非空结果。
+   *
+   * 加载中的那一帧 `data` 是 null，直接渲染 `data?.owners ?? []` 会让下拉先收缩
+   * 再展开；而「选项自己变少了」在使用者眼里就是数据出了问题。
+   */
+  const [owners, setOwners] = useState<CustomerOwnerDto[]>([])
 
   /*
    * 公共池归类要同时有「复核」与「转派」两个权限点。只判前者的话，点进去会看到
@@ -126,7 +151,7 @@ export function CustomerPage({ item }: { item: NavItem }) {
     can(PERMISSIONS.CUSTOMER_IMPORT_REVIEW) && can(PERMISSIONS.CUSTOMER_SCOPE_WRITE)
 
   const mode = isProgress ? 'list' : 'summary'
-  const { scope, stage, q, pendingReview } = filters
+  const { scope, stage, q, pendingReview, owner } = filters
   // 请求参数走 `rangeQuery` 而不是 `toISOString()`：后者是完整 ISO，接口的 pattern
   // 直接拒收，且末尾的 Z 是 UTC，东八区会整体错一天。取成两个字符串而不是每次现
   // 构造对象，是因为它们要进 effect 的依赖列表，对象引用每次都新，会让请求白跑。
@@ -160,12 +185,16 @@ export function CustomerPage({ item }: { item: NavItem }) {
       scope,
       stage,
       pendingReview,
+      owner,
       ...(fromParam === '' ? {} : { from: fromParam }),
       ...(toParam === '' ? {} : { to: toParam }),
       mode,
     })
       .then((data) => {
-        if (!cancelled) setResult({ key: requestKey, data, error: null, at: Date.now() })
+        if (cancelled) return
+        setResult({ key: requestKey, data, error: null, at: Date.now() })
+        // 只在拿到非空名单时覆盖：空数组是「这批人恰好都没归属」，不是「公司没人」。
+        if (data.owners.length > 0) setOwners(data.owners)
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -176,7 +205,7 @@ export function CustomerPage({ item }: { item: NavItem }) {
     return () => {
       cancelled = true
     }
-  }, [requestKey, q, scope, stage, pendingReview, fromParam, toParam, mode])
+  }, [requestKey, q, scope, stage, pendingReview, owner, fromParam, toParam, mode])
 
   const loading = result.key !== requestKey
   const data = loading ? null : result.data
@@ -204,7 +233,7 @@ export function CustomerPage({ item }: { item: NavItem }) {
     <div className="flex flex-col gap-5">
       <ModuleHeader item={item} />
 
-      <CustomerFilterBar filters={filters} onChange={applyFilters} now={now} />
+      <CustomerFilterBar filters={filters} onChange={applyFilters} now={now} owners={owners} />
 
       {/*
         范围提示必须存在。列表被静默缩小之后，用户的第一反应是「数据丢了」——
@@ -276,6 +305,11 @@ export function CustomerPage({ item }: { item: NavItem }) {
                   公共池归类
                 </Button>
               ) : null}
+              {canDeleteCustomer ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => setDeleting(true)}>
+                  删除客户
+                </Button>
+              ) : null}
               {canWrite ? (
                 <Button type="button" size="sm" onClick={() => setCreating(true)}>
                   录入客户
@@ -305,6 +339,18 @@ export function CustomerPage({ item }: { item: NavItem }) {
             setCreating(false)
             reload()
             setSelectedId(customer.id)
+          }}
+        />
+      ) : null}
+
+      {deleting ? (
+        <DeleteCustomerDialog
+          onClose={() => setDeleting(false)}
+          onDeleted={(deleted) => {
+            setDeleting(false)
+            // 正在看的那位被删掉时把详情一起关掉：留着它会立刻请求一个 404。
+            if (selectedId === deleted.id) setSelectedId(null)
+            reload()
           }}
         />
       ) : null}
@@ -531,6 +577,163 @@ function CreateCustomerDialog({
 }
 
 /**
+ * 删除客户。
+ *
+ * **选择与确认分成两步。** 点一下行就删，和「点了行、看清是谁、再按确认」是两种
+ * 完全不同的风险：客户档案是硬删除，订单、十四环节、归类记录一起消失，事后只能
+ * 从审计里知道删了谁，找不回来。
+ *
+ * 名单自己查，不复用页面上的列表：页面列表带着当前筛选，想删的那个人可能正好被
+ * 筛掉；而「看不到就删不了」会被理解成功能坏了。
+ */
+function DeleteCustomerDialog({
+  onClose,
+  onDeleted,
+}: {
+  onClose: () => void
+  onDeleted: (deleted: { id: string; displayName: string }) => void
+}) {
+  const [keyword, setKeyword] = useState('')
+  const [rows, setRows] = useState<CustomerListItemDto[] | null>(null)
+  const [selected, setSelected] = useState<CustomerListItemDto | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    /*
+     * 输入即查，250 毫秒防抖。每敲一个字符发一次请求既没有必要，也会让结果列表在
+     * 打字过程中反复重排 —— 而「正在变的那一屏」最容易点错人。
+     */
+    const timer = setTimeout(() => {
+      loadCustomers({
+        ...(keyword.trim() === '' ? {} : { q: keyword.trim() }),
+        mode: 'list',
+        limit: 20,
+      })
+        .then((data) => {
+          if (cancelled) return
+          setRows(data.items)
+          setError(null)
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(describeFailure(caught))
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [keyword])
+
+  const submit = async () => {
+    if (selected === null) return
+    setBusy(true)
+    setError(null)
+    try {
+      onDeleted(await deleteCustomer(selected.id))
+    } catch (caught) {
+      setError(describeFailure(caught))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>删除客户</DialogTitle>
+          <DialogDescription>
+            删除会连同这位客户的订单、十四环节进度与归类记录一起清掉，无法恢复。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="delete-customer-search" className="text-xs text-muted-foreground">
+            搜索客户
+          </label>
+          <Input
+            id="delete-customer-search"
+            value={keyword}
+            onChange={(event) => {
+              setKeyword(event.target.value)
+              // 结果会被新关键词替换，之前选中的那一行可能已经不在列表里了。
+              setSelected(null)
+            }}
+            placeholder="姓名、昵称或显示名"
+          />
+        </div>
+
+        <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
+          {rows === null ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">正在加载…</p>
+          ) : rows.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">
+              没有匹配的客户（只能删除你权限范围内的客户）
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {rows.map((row) => {
+                const active = selected?.id === row.id
+                return (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(row)}
+                      className={
+                        active
+                          ? 'flex w-full items-center gap-3 bg-destructive/10 px-3 py-2 text-left'
+                          : 'flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/60'
+                      }
+                    >
+                      <span className="font-medium text-foreground">{row.displayName}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {row.region} · {row.orderCount} 单
+                      </span>
+                      {active ? (
+                        <span className="ml-auto text-xs text-destructive">已选中</span>
+                      ) : null}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+
+        {selected === null ? null : (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+            <p className="text-sm text-foreground">
+              将删除「{selected.displayName}」及其 {selected.orderCount}{' '}
+              张订单、全部环节进度与归类记录。
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              这一步不可恢复。审计日志会留下「谁在什么时候删了谁」，但不保留档案内容。
+            </p>
+          </div>
+        )}
+
+        {error === null ? null : <p className="text-sm text-destructive">{error}</p>}
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+            取消
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={() => void submit()}
+            disabled={busy || selected === null}
+          >
+            {busy ? '删除中…' : selected === null ? '先选择客户' : '确认删除'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
  * 客户详情：档案 + 订单 + 十四环节。
  *
  * 自己拉数据而不是由列表传进来：列表行只有汇总字段（订单数、合同额），详情的
@@ -549,6 +752,13 @@ function CustomerDetailDialog({
   const { can } = useAuth()
   const canOrder = can(PERMISSIONS.CUSTOMER_ORDER_WRITE)
   const canAssign = can(PERMISSIONS.CUSTOMER_SCOPE_WRITE)
+  /**
+   * 金额编辑的门槛 = 看得到金额 + 有订单写权限。
+   *
+   * 服务端还会再判一次（没有 `customer.finance.read` 直接 `field_not_allowed`）。
+   * 这里判是为了不显示一个点下去必然失败的按钮，不是为了替代服务端。
+   */
+  const canFinance = can(PERMISSIONS.CUSTOMER_FINANCE_READ) && canOrder
 
   // 与列表同一条做法：结果记住「是哪一位客户的」，加载态由 id 比较得出，
   // 不在 effect 体里同步清空状态（那会多渲染一轮，且 lint 直接判成缺陷）。
@@ -599,8 +809,11 @@ function CustomerDetailDialog({
    *
    * 写接口回的都是**整条客户详情**，所以这里直接替换，不猜「改完之后应该长什么样」。
    * 同时通知外层刷新列表：阶段与合同额在列表行上也有一份，不同步会让两处对不上。
+   *
+   * 返回是否成功。金额更正与删除订单的编辑区要**在成功之后**才收起 —— 失败时收起
+   * 表单等于把刚填的五个数字一起丢掉，而错误提示还在上面，用户得从头再填一遍。
    */
-  const apply = async (action: () => Promise<CustomerDetailDto>) => {
+  const apply = async (action: () => Promise<CustomerDetailDto>): Promise<boolean> => {
     setBusy(true)
     setError(null)
     try {
@@ -609,8 +822,10 @@ function CustomerDetailDialog({
       setLoaded((previous) => ({ ...previous, id: customerId, customer: updated, error: null }))
       setStage(updated.stage)
       onChanged()
+      return true
     } catch (caught) {
       setError(describeFailure(caught))
+      return false
     } finally {
       setBusy(false)
     }
@@ -753,10 +968,15 @@ function CustomerDetailDialog({
                     key={order.id}
                     order={order}
                     canEdit={canOrder}
+                    canEditFinance={canFinance}
                     busy={busy}
                     onToggleStep={(idx, patch) =>
                       void apply(() => updateCustomerStep(customer.id, order.id, idx, patch))
                     }
+                    onSaveAmounts={(patch) =>
+                      apply(() => updateCustomerOrderAmounts(customer.id, order.id, patch))
+                    }
+                    onDelete={() => apply(() => deleteCustomerOrder(customer.id, order.id))}
                   />
                 ))
               )}
@@ -856,19 +1076,133 @@ function NewOrderButton({
   )
 }
 
+/** 金额输入框的空草稿。七个键都留空，等于「七项都未录入」。 */
+const EMPTY_AMOUNT_DRAFT: Record<OrderAmountFieldKey, string> = {
+  deposit: '',
+  prepay: '',
+  finalReceived: '',
+  unpaid: '',
+  fee: '',
+  contract: '',
+  received: '',
+}
+
+/**
+ * 分 → 输入框里的元。
+ *
+ * 不用 `formatFen`：那个带「元」字与千分位，粘回输入框会解析失败。这里保留两位
+ * 有效小数，去掉无意义的尾零（16800000 分显示成 `168000`，不是 `168000.00`）。
+ */
+function fenToInput(fen: number | null): string {
+  if (fen === null) return ''
+  const text = (fen / 100).toFixed(2)
+  if (text.endsWith('.00')) return text.slice(0, -3)
+  return text.replace(/0$/, '')
+}
+
+/**
+ * 输入框文本 → 分。空串是 `null`（未录入），格式错时 `ok: false`。
+ *
+ * 返回值统一带 `fen` 字段（失败时为 null），这样调用处取 `.fen` 不必先做类型收窄 ——
+ * 七个框逐个收窄会把渲染函数写成一串 if。
+ */
+function parseAmountInput(text: string): { ok: boolean; fen: number | null } {
+  if (text.trim() === '') return { ok: true, fen: null }
+  const parsed = parseYuanToFen(text)
+  return parsed.ok ? { ok: true, fen: parsed.fen } : { ok: false, fen: null }
+}
+
 function OrderCard({
   order,
   canEdit,
+  canEditFinance,
   busy,
   onToggleStep,
+  onSaveAmounts,
+  onDelete,
 }: {
   order: CustomerOrderDto
   canEdit: boolean
+  canEditFinance: boolean
   busy: boolean
   onToggleStep: (idx: number, patch: { done: boolean }) => void
+  onSaveAmounts: (patch: UpdateOrderAmountsRequest) => Promise<boolean>
+  onDelete: () => Promise<boolean>
 }) {
   const progress = orderProgress(order.steps)
   const sections = splitStepSections(order.steps)
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<Record<OrderAmountFieldKey, string>>(EMPTY_AMOUNT_DRAFT)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const openEditor = () => {
+    setDraft(
+      order.amounts === null
+        ? EMPTY_AMOUNT_DRAFT
+        : {
+            deposit: fenToInput(order.amounts.depositFen),
+            prepay: fenToInput(order.amounts.prepayFen),
+            finalReceived: fenToInput(order.amounts.finalReceivedFen),
+            unpaid: fenToInput(order.amounts.unpaidFen),
+            fee: fenToInput(order.amounts.feeFen),
+            contract: fenToInput(order.amounts.contractFen),
+            received: fenToInput(order.amounts.receivedFen),
+          },
+    )
+    setFormError(null)
+    setEditing(true)
+  }
+
+  /*
+   * 输入过程中的即时预览。
+   *
+   * 用的是**与服务端同一个契约函数** `computeOrderSettlement`，不是这里另写一份
+   * 减法。另写一份的结果是「编辑时预览 12 万，保存后变成 11.8 万」，而两次数字
+   * 都长得对，没人能说出差在哪。
+   */
+  const parse = parseAmountInput
+
+  const draftNumbers = {
+    contract: parse(draft.contract),
+    deposit: parse(draft.deposit),
+    prepay: parse(draft.prepay),
+    finalReceived: parse(draft.finalReceived),
+    fee: parse(draft.fee),
+  }
+  const draftOk = Object.values(draftNumbers).every((parsed) => parsed.ok)
+  const preview = draftOk
+    ? computeOrderSettlement({
+        contractFen: draftNumbers.contract.fen,
+        depositFen: draftNumbers.deposit.fen,
+        prepayFen: draftNumbers.prepay.fen,
+        finalReceivedFen: draftNumbers.finalReceived.fen,
+        feeFen: draftNumbers.fee.fen,
+      })
+    : null
+
+  const save = async () => {
+    if (!draftOk) {
+      setFormError('金额格式不正确：只能填数字，最多两位小数')
+      return
+    }
+    if (draftNumbers.contract.fen !== null && draftNumbers.contract.fen > 10_000_000_000) {
+      setFormError('合同总金额过大，请核对单位（元）')
+      return
+    }
+    const patch: UpdateOrderAmountsRequest = {
+      contractFen: draftNumbers.contract.fen,
+      depositFen: draftNumbers.deposit.fen,
+      prepayFen: draftNumbers.prepay.fen,
+      finalReceivedFen: draftNumbers.finalReceived.fen,
+      feeFen: draftNumbers.fee.fen,
+    }
+    if (await onSaveAmounts(patch)) {
+      setEditing(false)
+      setFormError(null)
+    }
+  }
 
   return (
     <div className="rounded-xl border border-border p-4">
@@ -885,7 +1219,47 @@ function OrderCard({
         <span className="ml-auto text-xs text-muted-foreground">
           完成 {progress.done}/{progress.total} 环（{progress.percent}%）
         </span>
+        {canEdit ? (
+          confirmingDelete ? (
+            <span className="flex items-center gap-1">
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => void onDelete().then((ok) => setConfirmingDelete(!ok))}
+              >
+                确认删除
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(false)}
+              >
+                取消
+              </Button>
+            </span>
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => setConfirmingDelete(true)}
+            >
+              删除订单
+            </Button>
+          )
+        ) : null}
       </div>
+
+      {confirmingDelete ? (
+        <p className="mt-2 rounded-lg bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          确认删除 {order.code} 后，这一单的十四环节进度与金额一并消失，客户级合同额汇总会重算。
+          这一步不可恢复。
+        </p>
+      ) : null}
 
       {/* 进度条用宽度百分比表达，不用 <progress>：后者的外观由浏览器决定，
           亮暗两套令牌管不到它。 */}
@@ -896,17 +1270,109 @@ function OrderCard({
       {order.amounts === null ? (
         <p className="mt-2 text-xs text-muted-foreground">金额不可见（需要「查看客户金额」权限）</p>
       ) : (
-        <p className="mt-2 text-sm text-foreground">
-          合同 {formatFen(order.amounts.contractFen)} · 已收 {formatFen(order.amounts.receivedFen)}{' '}
-          · 未收 {formatFen(order.amounts.unpaidFen)}
-          {order.amountSource === null ? null : (
-            <span className="ml-2 text-xs text-muted-foreground-weak">
-              来源 {order.amountSource}
-              {order.amountEvidenceDate === null ? '' : ` · ${order.amountEvidenceDate}`}
-            </span>
-          )}
-        </p>
+        <div className="mt-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {ORDER_AMOUNT_FIELDS.map((field) => {
+              const value = order.amounts?.[field.field] ?? null
+              return (
+                <div key={field.key} className="rounded-lg bg-muted/40 px-2.5 py-1.5">
+                  <p className="text-[11px] text-muted-foreground">
+                    {field.label}
+                    {field.editable ? null : (
+                      <span className="ml-1 text-[10px] text-muted-foreground-weak">自动</span>
+                    )}
+                  </p>
+                  <p
+                    className={
+                      isAmountAnomaly(field, value)
+                        ? 'text-sm font-medium text-destructive tabular-nums'
+                        : 'text-sm font-medium text-foreground tabular-nums'
+                    }
+                  >
+                    {formatFen(value)}
+                  </p>
+                  {field.formula === undefined ? null : (
+                    <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground-weak">
+                      {field.formula}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {canEditFinance && !editing ? (
+              <Button type="button" size="xs" variant="outline" onClick={openEditor}>
+                更正金额
+              </Button>
+            ) : null}
+            {order.amountSource === null ? null : (
+              <span className="text-xs text-muted-foreground-weak">
+                来源 {order.amountSource}
+                {order.amountEvidenceDate === null ? '' : ` · ${order.amountEvidenceDate}`}
+              </span>
+            )}
+          </div>
+        </div>
       )}
+
+      {editing ? (
+        <div className="mt-3 rounded-lg border border-border p-3">
+          <p className="text-xs text-muted-foreground">
+            金额单位是元。留空表示「还没录」，与填 0
+            是两件事。未收尾款与实收金额由公式算出，不用手填。
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            {EDITABLE_AMOUNT_FIELDS.map((field) => (
+              <label key={field.key} className="flex flex-col gap-1">
+                <span className="text-[11px] text-muted-foreground">{field.label}（元）</span>
+                <Input
+                  value={draft[field.key]}
+                  inputMode="decimal"
+                  placeholder="未录入"
+                  onChange={(event) => {
+                    setFormError(null)
+                    setDraft((previous) => ({ ...previous, [field.key]: event.target.value }))
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">
+              未收尾款{' '}
+              <span className="font-medium text-foreground tabular-nums">
+                {preview === null ? '待填完' : formatFen(preview.unpaidFen)}
+              </span>
+            </span>
+            <span className="text-muted-foreground">
+              实收金额{' '}
+              <span className="font-medium text-foreground tabular-nums">
+                {preview === null ? '待填完' : formatFen(preview.receivedFen)}
+              </span>
+            </span>
+          </div>
+
+          {formError === null ? null : <p className="mt-2 text-sm text-destructive">{formError}</p>}
+
+          <div className="mt-3 flex items-center gap-2">
+            <Button type="button" size="sm" disabled={busy} onClick={() => void save()}>
+              {busy ? '保存中…' : '保存并重算'}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setEditing(false)}
+            >
+              取消
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-3 flex flex-col gap-3">
         {sections.map((section) => {

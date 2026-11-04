@@ -54,10 +54,13 @@ const { login } = await import('../src/auth/login.js')
 const {
   createCustomer,
   createOrder,
+  deleteCustomer,
+  deleteOrder,
   getCustomer,
   listCustomers,
   setStage,
   updateCustomer,
+  updateOrderAmounts,
   updateStep,
 } = await import('../src/customer/customers.js')
 const { SYSTEM_VIEWER } = await import('../src/customer/scope.js')
@@ -79,6 +82,10 @@ describe('客户档案与订单', { skip: databaseUrl === null ? '数据库不�
 
   after(async () => {
     await prisma.customer.deleteMany({ where: { chatroom: { startsWith: PREFIX } } })
+    // 归属筛选要真实账号（`customers.designer_id` 有外键），它们也带同一个前缀。
+    // 客户先删：`designer_id` 是 SetNull，顺序反了只会把归属静默置空，不会报错，
+    // 但那会让「删干净了」变成一句看不出问题的话。
+    await prisma.user.deleteMany({ where: { username: { startsWith: PREFIX } } })
   })
 
   /** 建一个测试客户，返回 id。名称带随机后缀，避免同一进程里重名撞唯一约束。 */
@@ -96,6 +103,30 @@ describe('客户档案与订单', { skip: databaseUrl === null ? '数据库不�
     })
     assert.equal(result.ok, true, `建客户失败：${result.ok ? '' : result.reason}`)
     return result.ok ? result.data : null
+  }
+
+  /**
+   * 建一个测试账号，返回 id。
+   *
+   * 归属筛选测的是「按人筛客户」，而 `customers.designer_id` 是指向 `users` 的外键，
+   * 拿一个编出来的 uuid 写进去会直接撞约束。角色取自库里已有的那几条（`db:seed`
+   * 建的），不在这里新建角色：角色的权限矩阵是另一块，混进来只会让这条测试的
+   * 失败原因变得需要解释。
+   */
+  async function seedUser(suffix: string, roleCode: string, displayName: string) {
+    const role = await prisma.role.findFirst({ where: { code: roleCode }, select: { id: true } })
+    assert.ok(role, `角色 ${roleCode} 不在库里，先跑 db:seed`)
+    const user = await prisma.user.create({
+      data: {
+        username: `${PREFIX}user_${suffix}_${randomUUID().slice(0, 8)}`,
+        // 测试账号从不登录，口令哈希只占位。写真哈希会拖慢每条用例。
+        passwordHash: 'not-a-real-hash',
+        displayName,
+        roleId: role.id,
+      },
+      select: { id: true },
+    })
+    return user.id
   }
 
   test('显示名由地区 + 裁掉重复姓的短名组成', async () => {
@@ -186,7 +217,14 @@ describe('客户档案与订单', { skip: databaseUrl === null ? '数据库不�
   test('看得到金额时原样返回，包括已收 0 元', async () => {
     const customer = await seedCustomer('fin-visible')
     assert.ok(customer)
-    await createOrder(customer.id, { contractFen: 500_000, receivedFen: 0 }, SYSTEM_VIEWER)
+    /*
+     * 「已收 0 元」现在用**已收尾款填 0** 表达。
+     *
+     * `receivedFen` 已经从输入项变成派生项（定金 + 预付款 + 已收尾款 − 手续费），
+     * 传它不再有意义；而「录了 0」这个事实仍然要能被表达 —— 空串是未录入，
+     * 0 是签了合同钱还没到，两者在账上是不同状态。
+     */
+    await createOrder(customer.id, { contractFen: 500_000, finalReceivedFen: 0 }, SYSTEM_VIEWER)
 
     const detail = await getCustomer(customer.id, SYSTEM_VIEWER)
     assert.ok(detail.ok)
@@ -199,6 +237,8 @@ describe('客户档案与订单', { skip: databaseUrl === null ? '数据库不�
     assert.equal(amounts.contractFen, 500_000)
     // 已收 0 是事实（合同签了钱没到），不能被写成 null 让它看起来像没录。
     assert.equal(amounts.receivedFen, 0)
+    // 未收尾款按公式算：50 万 − 0 − 0 − 0。
+    assert.equal(amounts.unpaidFen, 500_000)
   })
 
   test('看不到金额时整个 amounts 为 null，其余字段照常', async () => {
@@ -450,6 +490,185 @@ describe('客户档案与订单', { skip: databaseUrl === null ? '数据库不�
     const result = await listCustomers({ q: '盘点客户', mode: 'summary', viewer: SYSTEM_VIEWER })
     assert.equal(result.total, 3)
     assert.equal(result.summary.kpi.inProgress, 1)
+  })
+
+  /*
+   * 结算与删除。这几条的错法都属于「数字还在，但已经不是那个数」：
+   * 改了定金实收没跟着变、删了订单合同额汇总还挂着那一单、删了客户订单还留在库里。
+   */
+
+  test('更正金额后未收尾款与实收金额按公式重算', async () => {
+    const customer = await seedCustomer('settle')
+    assert.ok(customer)
+    const created = await createOrder(
+      customer.id,
+      { contractFen: 1_000_000, depositFen: 100_000 },
+      SYSTEM_VIEWER,
+    )
+    assert.ok(created.ok, `建单失败：${created.ok ? '' : created.reason}`)
+    const order = created.data.orders[0]
+    assert.ok(order)
+    // 新建即按公式算：实收 = 定金 10 万，未收 = 100 − 10 = 90 万。
+    assert.equal(order.amounts?.receivedFen, 100_000)
+    assert.equal(order.amounts?.unpaidFen, 900_000)
+
+    const updated = await updateOrderAmounts(
+      customer.id,
+      order.id,
+      { prepayFen: 200_000, finalReceivedFen: 300_000, feeFen: 5_000 },
+      SYSTEM_VIEWER,
+    )
+    assert.ok(updated.ok, `更正失败：${updated.ok ? '' : updated.reason}`)
+    const amounts = updated.data.orders[0]?.amounts
+    assert.ok(amounts != null)
+    // 实收 = 10 + 20 + 30 万 − 5 千 = 595000 分。
+    assert.equal(amounts.receivedFen, 595_000)
+    // 未收 = 100 − 10 − 20 − 30 万 = 400000 分。
+    assert.equal(amounts.unpaidFen, 400_000)
+    // 手改过的数字把来源改成 manual：留 board-evidence 会让「这笔钱核对过」失效。
+    assert.equal(updated.data.orders[0]?.amountSource, 'manual')
+
+    /*
+     * `null` 必须能把一项清回「未录入」。写成 `input.x ?? current.x` 的话这里会
+     * 保持 300000，而界面上那个框已经空了 —— 那种「保存成功但数字没变」最难解释。
+     */
+    const cleared = await updateOrderAmounts(
+      customer.id,
+      order.id,
+      { finalReceivedFen: null },
+      SYSTEM_VIEWER,
+    )
+    assert.ok(cleared.ok)
+    assert.equal(cleared.data.orders[0]?.amounts?.receivedFen, 295_000)
+    assert.equal(cleared.data.orders[0]?.amounts?.unpaidFen, 700_000)
+  })
+
+  test('没有金额权限时不能更正金额', async () => {
+    const customer = await seedCustomer('settle-denied')
+    assert.ok(customer)
+    const created = await createOrder(customer.id, { contractFen: 100_000 }, SYSTEM_VIEWER)
+    assert.ok(created.ok)
+    const orderId = created.data.orders[0]?.id
+    assert.ok(orderId)
+
+    const rejected = await updateOrderAmounts(
+      customer.id,
+      orderId,
+      { feeFen: 100 },
+      NO_FINANCE_VIEWER,
+    )
+    assert.equal(rejected.ok, false)
+    // 400 而不是 403：外层还要区分「字段超范围」与「行级越权」，两者的处理不同。
+    assert.equal(rejected.ok ? '' : rejected.reason, 'field_not_allowed')
+  })
+
+  test('删除订单后客户详情不再含该单，合同额汇总重算', async () => {
+    const customer = await seedCustomer('del-order')
+    assert.ok(customer)
+    await createOrder(customer.id, { contractFen: 100_000 }, SYSTEM_VIEWER)
+    const second = await createOrder(customer.id, { contractFen: 250_000 }, SYSTEM_VIEWER)
+    assert.ok(second.ok)
+    assert.equal(second.data.contractTotalFen, 350_000)
+
+    const orderId = second.data.orders[1]?.id
+    assert.ok(orderId)
+    const removed = await deleteOrder(customer.id, orderId, SYSTEM_VIEWER)
+    assert.ok(removed.ok, `删单失败：${removed.ok ? '' : removed.reason}`)
+    assert.equal(removed.data.orders.length, 1)
+    // 汇总必须跟着减，否则看板上的合同额里还含着一张已经不存在的单。
+    assert.equal(removed.data.contractTotalFen, 100_000)
+    assert.equal(await prisma.customerOrder.count({ where: { id: orderId } }), 0)
+  })
+
+  test('删除客户要转派权限，删完详情与订单都查不到', async () => {
+    const customer = await seedCustomer('del-customer')
+    assert.ok(customer)
+    await createOrder(customer.id, { contractFen: 100_000 }, SYSTEM_VIEWER)
+
+    // 有档案写权限但没有转派权限的账号不能删客户：路由挂了两个守卫，服务层再判一次。
+    const denied = await deleteCustomer(customer.id, { ...SYSTEM_VIEWER, canAssign: false })
+    assert.equal(denied.ok, false)
+    assert.equal(denied.ok ? '' : denied.reason, 'field_not_allowed')
+    assert.ok((await getCustomer(customer.id, SYSTEM_VIEWER)).ok, '被拒之后客户必须还在')
+
+    const removed = await deleteCustomer(customer.id, SYSTEM_VIEWER)
+    assert.ok(removed.ok, `删客户失败：${removed.ok ? '' : removed.reason}`)
+    assert.equal(removed.data.id, customer.id)
+
+    assert.equal((await getCustomer(customer.id, SYSTEM_VIEWER)).ok, false)
+    // 订单与环节随级联删除，不能留下指向已删客户的孤儿行。
+    assert.equal(await prisma.customerOrder.count({ where: { customerId: customer.id } }), 0)
+  })
+
+  /*
+   * 归属筛选。这一条守的是「筛了归属之后，七处统计一起变」——只在列表上过滤的话，
+   * 列表显示 1 位、KPI 显示全公司的数，两个数字放在一屏里才互相矛盾。
+   */
+
+  test('归属筛选：成员档、未分配与我负责的，三档互斥且覆盖全部', async () => {
+    const designerId = await seedUser('designer', ROLE_CODES.DESIGNER, '张三')
+    const salesId = await seedUser('sales', ROLE_CODES.SALES, '李四')
+
+    const mine = await seedCustomer('own-designer', { realName: '归属筛测' })
+    const theirs = await seedCustomer('own-sales', { realName: '归属筛测' })
+    const pool = await seedCustomer('own-pool', { realName: '归属筛测' })
+    assert.ok(mine && theirs && pool)
+
+    await prisma.customer.update({ where: { id: mine.id }, data: { designerId } })
+    await prisma.customer.update({ where: { id: theirs.id }, data: { salesId } })
+    // pool 两栏都空 —— `createCustomer` 在全局范围账号下就是这么建的。
+
+    const byDesigner = await listCustomers({
+      q: '归属筛测',
+      owner: `designer:${designerId}`,
+      viewer: SYSTEM_VIEWER,
+    })
+    assert.equal(byDesigner.total, 1)
+    assert.equal(byDesigner.items[0]?.id, mine.id)
+
+    const unassigned = await listCustomers({
+      q: '归属筛测',
+      owner: 'unassigned',
+      viewer: SYSTEM_VIEWER,
+    })
+    assert.equal(unassigned.total, 1, '「未分配」要求两栏都为空')
+    assert.equal(unassigned.items[0]?.id, pool.id)
+
+    const asDesigner = await listCustomers({
+      q: '归属筛测',
+      owner: 'mine',
+      viewer: { ...SYSTEM_VIEWER, userId: designerId },
+    })
+    assert.equal(asDesigner.total, 1)
+    assert.equal(asDesigner.items[0]?.id, mine.id)
+
+    const asSales = await listCustomers({
+      q: '归属筛测',
+      owner: 'mine',
+      viewer: { ...SYSTEM_VIEWER, userId: salesId },
+    })
+    assert.equal(asSales.total, 1)
+    assert.equal(asSales.items[0]?.id, theirs.id)
+
+    /*
+     * 归总统计随筛选联动。人数与金额都来自同一个 where，因此这里只断言人数即可；
+     * 但它们必须**都**是 1 —— 有一条按全库算，这个断言就红。
+     */
+    assert.equal(asSales.summary.kpi.inProgress, 1)
+    const scopeTotal =
+      asSales.summary.byScope.domestic +
+      asSales.summary.byScope.overseas +
+      asSales.summary.byScope['special-region']
+    assert.equal(scopeTotal, 1, '地区分布与列表必须是同一批人')
+
+    // 三档相加正好等于总数：任何一档多算或漏算，这里对不上。
+    const all = await listCustomers({ q: '归属筛测', viewer: SYSTEM_VIEWER })
+    assert.equal(byDesigner.total + unassigned.total + asSales.total, all.total)
+
+    // 下拉的成员档只含有客户的人，且两个角色分开列。
+    const options = all.owners.map((owner) => `${owner.role}:${owner.name}`)
+    assert.ok(options.includes('designer:张三'), `缺少设计师档：${options.join(',')}`)
+    assert.ok(options.includes('sales:李四'), `缺少销售档：${options.join(',')}`)
   })
 
   test('活跃度分桶：24 格对齐整点，窗口外的时间不并入首尾格', () => {

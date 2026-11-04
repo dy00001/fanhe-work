@@ -33,11 +33,73 @@ export const CUSTOMER_LIMITS = {
   PAGE_MAX: 200,
 } as const
 
-/** 金额三元组，单位一律为分。`null` 表示未录入，**不是** 0。 */
+/**
+ * 一张订单的金额，单位一律为分。`null` 表示未录入，**不是** 0。
+ *
+ * 七个字段分两类，改动前必须分清：
+ *
+ *   - **手填五项**：`contractFen`（合同总金额）、`depositFen`（定金）、
+ *     `prepayFen`（预付款）、`finalReceivedFen`（已收尾款）、`feeFen`（手续费）。
+ *     只有这五项能被人更正。
+ *   - **派生两项**：`unpaidFen`（未收尾款）、`receivedFen`（实收金额）。
+ *     由 `computeOrderSettlement` 从手填五项算出，界面上只读。
+ *
+ * 派生值**同时落库**（不是只在响应里算）：客户级合同额汇总、导出的表格与将来
+ * 的财务报表都读列，只算不存会让「界面上对、导出里错」这种偏差无处查。
+ * 写入路径必须经 `computeOrderSettlement`，不允许调用方直接传这两个值。
+ */
 export type CustomerAmounts = {
   contractFen: number | null
+  depositFen: number | null
+  prepayFen: number | null
+  finalReceivedFen: number | null
+  feeFen: number | null
+  /** 实收金额 = 定金 + 预付款 + 已收尾款 − 手续费。派生。 */
+  receivedFen: number | null
+  /** 未收尾款 = 合同总金额 − 定金 − 预付款 − 已收尾款。派生。 */
+  unpaidFen: number | null
+}
+
+/** 参与结算的手填五项。派生两项不在其中，避免「把算出来的值再当输入」。 */
+export type OrderSettlementInput = {
+  contractFen: number | null
+  depositFen: number | null
+  prepayFen: number | null
+  finalReceivedFen: number | null
+  feeFen: number | null
+}
+
+/**
+ * 从手填五项算出派生两项。
+ *
+ * 两条规则，各有一处必须留意的边界：
+ *
+ *   1. **未收尾款以合同为锚。** 合同没录时它是 `null`（未知），不按 0 算 ——
+ *      按 0 算会得出「欠款 = −定金」这种荒谬的负数，而界面上只看数字看不出是
+ *      没录合同。
+ *   2. **实收金额在五项全空时是 `null`。** 只要有一项录过，空项就当 0 参与求和：
+ *      录了「已收尾款 5 万」而没有定金，实收就是 5 万，不能整块显示成未录入。
+ *
+ * 未收尾款允许为负。超收是真实现象（多收、重复记账、退款未记账），截断成 0 会
+ * 把它藏起来；负数在界面上有醒目样式，比静默归零诚实。
+ */
+export function computeOrderSettlement(input: OrderSettlementInput): {
   receivedFen: number | null
   unpaidFen: number | null
+} {
+  const { contractFen, depositFen, prepayFen, finalReceivedFen, feeFen } = input
+  const parts = [depositFen, prepayFen, finalReceivedFen]
+  const anyReceived = parts.some((value) => value !== null) || feeFen !== null
+
+  const receivedFen = anyReceived
+    ? (depositFen ?? 0) + (prepayFen ?? 0) + (finalReceivedFen ?? 0) - (feeFen ?? 0)
+    : null
+  const unpaidFen =
+    contractFen === null
+      ? null
+      : contractFen - (depositFen ?? 0) - (prepayFen ?? 0) - (finalReceivedFen ?? 0)
+
+  return { receivedFen, unpaidFen }
 }
 
 /** 一个环节的对外形状。 */ export type CustomerStepDto = {
@@ -90,6 +152,62 @@ export type CustomerAssignmentDto = {
   salesName: string | null
   /** `null` 表示当前账号不是这位客户的负责人（全局范围账号多数是这种）。 */
   myRole: CustomerRole | null
+}
+
+// ---------------------------------------------------------------------------
+// 归属筛选
+// ---------------------------------------------------------------------------
+
+/** 「我负责的」与「未分配」两个固定档的地址取值。成员档写作 `designer:<id>`。 */
+export const CUSTOMER_OWNER_MINE = 'mine'
+export const CUSTOMER_OWNER_UNASSIGNED = 'unassigned'
+
+/**
+ * 归属筛选的一个取值。
+ *
+ * 三个固定档加一个成员档，**不做「只看设计师」这类角色档**：角色档在语义上是
+ * 「这一栏有没有人」，而筛选的实际意图总是「看某个人手上的客户」或「看没人认领的」。
+ * 多一个角色档只会让下拉变长而不解决任何问题。
+ */
+export type OwnerFilter =
+  | { kind: 'all' }
+  | { kind: 'mine' }
+  | { kind: 'unassigned' }
+  | { kind: 'member'; role: CustomerRole; userId: string }
+
+/** 成员档的地址写法。角色必须进值里：同一个人可能既是某客户的设计师、又是另一位客户的销售。 */
+export function ownerFilterValue(role: CustomerRole, userId: string): string {
+  return `${role}:${userId}`
+}
+
+/**
+ * 解析地址里的归属取值。
+ *
+ * 非法值一律回到「全部」而不是报错：它只会出现在手改过的地址里，而让整页回一个
+ * 400 比忽略一个陌生参数更糟。界面上的表现是筛选标签消失、列表显示全部客户。
+ */
+export function parseOwnerFilter(value: string | null | undefined): OwnerFilter {
+  if (value === null || value === undefined || value === '') return { kind: 'all' }
+  if (value === CUSTOMER_OWNER_MINE) return { kind: 'mine' }
+  if (value === CUSTOMER_OWNER_UNASSIGNED) return { kind: 'unassigned' }
+  const match = /^(designer|sales):(.{1,64})$/.exec(value)
+  if (match === null) return { kind: 'all' }
+  const [, role, userId] = match
+  if (role === undefined || userId === undefined) return { kind: 'all' }
+  return { kind: 'member', role: role as CustomerRole, userId }
+}
+
+/**
+ * 一个可被选为归属筛选目标的成员。
+ *
+ * 由服务端在列表响应里下发，**只含「在当前账号可见范围内至少负责一位客户」的人**。
+ * 让前端自己拉账号列表的坏处有两个：那份名单要 `customer.scope.write`（设计师没有），
+ * 且会列出根本没有客户的人，选中之后列表空空如也。
+ */
+export type CustomerOwnerDto = {
+  id: string
+  name: string
+  role: CustomerRole
 }
 
 /** 列表行。刻意不含电话与聊天原文：列表只用来找人和看进度。 */
@@ -233,9 +351,24 @@ export type CustomerListResponse = {
    * 「当前显示你负责的 N 位客户」—— 列表被静默缩小后，用户的第一反应是数据丢了。
    */
   scopeKind: 'all' | 'own'
+  /**
+   * 归属筛选的可选项。与 `items` 不同，它**只受可见范围约束，不受其余筛选影响**：
+   * 选项随筛选变化的话，选完一个人之后下一个人就从下拉里消失了，而使用者无法理解
+   * 为什么选项会自己变少。
+   */
+  owners: CustomerOwnerDto[]
 }
 
 export type CustomerDetailResponse = { customer: CustomerDetailDto }
+
+/**
+ * 删除客户的响应。
+ *
+ * 不回整条详情（那条记录已经不存在了），只回够界面把那一行摘掉的两项。前端据
+ * `displayName` 弹一句「已删除 XX」—— 没有名字的「删除成功」在批量作业之后
+ * 无法确认自己删掉的是哪一位。
+ */
+export type DeleteCustomerResponse = { deleted: { id: string; displayName: string } }
 
 /**
  * 裁剪一张订单的金额。
@@ -249,8 +382,14 @@ export function maskOrderAmounts<T extends CustomerAmounts>(
   canReadFinance: boolean,
 ): CustomerAmounts | null {
   if (!canReadFinance) return null
+  // 逐字段列出而不是 `{ ...amounts }`：以后给金额对象加内部调试字段时，展开会把它
+  // 一起发给前端。这里只放契约里声明过的七个。
   return {
     contractFen: amounts.contractFen,
+    depositFen: amounts.depositFen,
+    prepayFen: amounts.prepayFen,
+    finalReceivedFen: amounts.finalReceivedFen,
+    feeFen: amounts.feeFen,
     receivedFen: amounts.receivedFen,
     unpaidFen: amounts.unpaidFen,
   }
@@ -302,11 +441,38 @@ export type UpdateCustomerRequest = {
  * 金额单位是分，且**必须是非负整数**。这条不是苛求精度，而是挡住「按元填了金额」
  * 这类最常见的错：168000 元填成 168000 分，汇总凭空少两个数量级，而界面上那个
  * 数字看起来完全正常。
+ *
+ * `receivedFen` / `unpaidFen` 是派生值，**只留给导入路径做历史回填**：导入的数据
+ * 来自看板与 ai_schema，那两个数字是既成事实，不能按新公式重算。人工录入时不要传，
+ * 服务端会按手填五项算出来。
  */
 export type CreateCustomerOrderRequest = {
   contractFen?: number | undefined
+  depositFen?: number | undefined
+  prepayFen?: number | undefined
+  finalReceivedFen?: number | undefined
+  feeFen?: number | undefined
+  /** 导入专用。人工录入传了也会被结算结果覆盖。 */
   receivedFen?: number | undefined
+  /** 导入专用。同上。 */
   unpaidFen?: number | undefined
+}
+
+/**
+ * 更正订单金额。
+ *
+ * 只接受手填五项。`null` 表示清空成「未录入」，`undefined`（不传）表示保持原值 ——
+ * 这两种在界面上对应「清掉这个数字」与「我没动它」，混成一个会让清空变成不可能。
+ *
+ * **不接收 `receivedFen` / `unpaidFen`。** 它们是公式的结果，允许外部传入等于允许
+ * 界面与服务端各自算一套，而两套不一致时的表现是「改完定金，实收没跟着变」。
+ */
+export type UpdateOrderAmountsRequest = {
+  contractFen?: number | null | undefined
+  depositFen?: number | null | undefined
+  prepayFen?: number | null | undefined
+  finalReceivedFen?: number | null | undefined
+  feeFen?: number | null | undefined
 }
 
 /** 更新一个环节。`done: true` 会连带把 `reached` 置真，反之不然。 */

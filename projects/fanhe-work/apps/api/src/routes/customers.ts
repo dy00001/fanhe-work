@@ -7,6 +7,7 @@ import {
   type CustomerListResponse,
   type CustomerStage,
   type AssignableUsersResponse,
+  type DeleteCustomerResponse,
   type PoolListResponse,
   type ReviewPoolSuggestionRequest,
   type AssignCustomerRequest,
@@ -19,16 +20,20 @@ import {
   assignCustomer,
   createCustomer,
   createOrder,
+  deleteCustomer,
+  deleteOrder,
   getCustomer,
   listCustomers,
   setStage,
   updateCustomer,
+  updateOrderAmounts,
   updateStep,
   type CreateCustomerInput,
   type CreateOrderInput,
   type CustomerFailureReason,
   type SetStageInput,
   type UpdateCustomerInput,
+  type UpdateOrderAmountsInput,
   type UpdateStepInput,
 } from '../customer/customers.js'
 import {
@@ -136,6 +141,14 @@ const LIST_QUERY_SCHEMA = {
     stage: { type: 'string', enum: [...CUSTOMER_STAGES] },
     review: { type: 'string', enum: ['pending', 'confirmed', 'rejected'] },
     q: { type: 'string', maxLength: CUSTOMER_LIMITS.SEARCH_MAX },
+    /*
+     * 归属筛选。**刻意不写 enum / pattern。** 取值只有四种形态（`mine`、
+     * `unassigned`、`designer:<uuid>`、`sales:<uuid>`），但地址栏是可以手改的，
+     * 一个拼错的 `dseigner:` 若命中 schema 会得到一张 400 错误页 —— 对使用者来说
+     * 页面整个坏了，而实际意图只是「筛选没生效」。这里放行，由 `parseOwnerFilter`
+     * 回落到「全部」并把标签清掉。
+     */
+    owner: { type: 'string', maxLength: 80 },
     from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2})?$' },
     to: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2})?$' },
     mode: { type: 'string', enum: ['list', 'summary'] },
@@ -149,6 +162,7 @@ type ListQuery = {
   stage?: string
   review?: string
   q?: string
+  owner?: string
   from?: string
   to?: string
   mode?: string
@@ -195,6 +209,16 @@ const STEP_PARAMS_SCHEMA = {
     id: { type: 'string', minLength: 1, maxLength: 64 },
     orderId: { type: 'string', minLength: 1, maxLength: 64 },
     idx: { type: 'integer', minimum: 1, maximum: 14 },
+  },
+} as const
+
+const ORDER_PARAMS_SCHEMA = {
+  type: 'object',
+  required: ['id', 'orderId'],
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', minLength: 1, maxLength: 64 },
+    orderId: { type: 'string', minLength: 1, maxLength: 64 },
   },
 } as const
 
@@ -249,8 +273,34 @@ const CREATE_ORDER_BODY_SCHEMA = {
     // 而是「这个数字不可能是一位一位敲进去的」—— 多按几个零是最常见的手误，
     // 而它会让汇总金额凭空多出两个数量级。
     contractFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+    depositFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+    prepayFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+    finalReceivedFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+    feeFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+    // 派生两项这里保留，只给导入脚本用。人工录入传了也会被结算结果覆盖，
+    // 理由见 `CreateCustomerOrderRequest` 的注释。
     receivedFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
     unpaidFen: { type: 'integer', minimum: 0, maximum: 10_000_000_000 },
+  },
+} as const
+
+/**
+ * 更正金额的请求体。
+ *
+ * 五项都可选，但至少给一项。**`null` 是合法的值**（表示清空这一项），因此类型写成
+ * `['integer', 'null']` 而不是给个 default —— AJV 里 `type: 'integer'` 遇到 null
+ * 会直接拒，于是「把填错的数字删掉」变成一个做不到的操作。
+ */
+const UPDATE_AMOUNTS_BODY_SCHEMA = {
+  type: 'object',
+  minProperties: 1,
+  additionalProperties: false,
+  properties: {
+    contractFen: { type: ['integer', 'null'], minimum: 0, maximum: 10_000_000_000 },
+    depositFen: { type: ['integer', 'null'], minimum: 0, maximum: 10_000_000_000 },
+    prepayFen: { type: ['integer', 'null'], minimum: 0, maximum: 10_000_000_000 },
+    finalReceivedFen: { type: ['integer', 'null'], minimum: 0, maximum: 10_000_000_000 },
+    feeFen: { type: ['integer', 'null'], minimum: 0, maximum: 10_000_000_000 },
   },
 } as const
 
@@ -366,6 +416,7 @@ export function registerCustomerRoutes(app: FastifyInstance): void {
         stage: request.query.stage,
         pendingReview: request.query.review === 'pending',
         q: request.query.q,
+        owner: request.query.owner,
         from: from ?? undefined,
         to: to ?? undefined,
         mode: request.query.mode === 'summary' ? 'summary' : 'list',
@@ -432,6 +483,37 @@ export function registerCustomerRoutes(app: FastifyInstance): void {
   )
 
   /**
+   * 删除客户。
+   *
+   * **两个权限点都要**（`record.write` 与 `scope.write`），与公共池复核同一个理由：
+   * 删除会级联清掉订单、十四环节与归类记录，是不可逆的。把它并进日常写权限，
+   * 等于让「录入客户」旁边那个按钮只凭一个日常权限就能抹掉一整条档案。
+   *
+   * 服务层还会自己再判一次 `canAssign`：路由的守卫只在经由 HTTP 时生效，
+   * service 被脚本或别的路径复用时那道守卫根本不存在。
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/api/customers/:id',
+    {
+      preHandler: [
+        requirePermission(PERMISSIONS.CUSTOMER_RECORD_WRITE),
+        requirePermission(PERMISSIONS.CUSTOMER_SCOPE_WRITE),
+      ],
+      schema: { params: ID_PARAMS_SCHEMA },
+    },
+    async (request, reply) => {
+      const viewer = requireViewer(request, reply)
+      if (viewer === null) return reply
+
+      const result = await deleteCustomer(request.params.id, viewer)
+      if (!result.ok) return sendFailure(reply, result.reason)
+
+      const body: DeleteCustomerResponse = { deleted: result.data }
+      return reply.code(200).send(body)
+    },
+  )
+
+  /**
    * 新建订单。
    *
    * 挂在 `customer.order.write` 而不是 `customer.record.write`：建单是推进业务，
@@ -453,6 +535,64 @@ export function registerCustomerRoutes(app: FastifyInstance): void {
 
       const body: CustomerDetailResponse = { customer: result.data }
       return reply.code(201).send(body)
+    },
+  )
+
+  /**
+   * 更正一张订单的金额。
+   *
+   * 用 PATCH：界面上是「改其中几个框」，没动的项不传。PUT 要求提交整组五个数字，
+   * 少传一个就会被当成清空 —— 而清空金额与不改金额在账上是两件事。
+   *
+   * 权限用 `customer.order.write` 而不是 `finance.read`：后者管「看得见看不见」，
+   * 是读侧的事。写侧沿用推进订单的那个点，再在服务层补一道 `canReadFinance`，
+   * 于是「没有金额权限的人」既看不到也改不了。
+   */
+  app.patch<{ Params: { id: string; orderId: string }; Body: UpdateOrderAmountsInput }>(
+    '/api/customers/:id/orders/:orderId/amounts',
+    {
+      preHandler: requirePermission(PERMISSIONS.CUSTOMER_ORDER_WRITE),
+      schema: { params: ORDER_PARAMS_SCHEMA, body: UPDATE_AMOUNTS_BODY_SCHEMA },
+    },
+    async (request, reply) => {
+      const viewer = requireViewer(request, reply)
+      if (viewer === null) return reply
+
+      const result = await updateOrderAmounts(
+        request.params.id,
+        request.params.orderId,
+        request.body,
+        viewer,
+      )
+      if (!result.ok) return sendFailure(reply, result.reason)
+
+      const body: CustomerDetailResponse = { customer: result.data }
+      return reply.code(200).send(body)
+    },
+  )
+
+  /**
+   * 删除一张订单。
+   *
+   * 与删除客户不同，这里只要求 `customer.order.write`：删自己推进中的一张单是
+   * 日常纠错（重复建单、建错了客户），而它的影响面限于这一单，客户档案与其余订单
+   * 都还在。整条档案的删除才需要更高的门槛。
+   */
+  app.delete<{ Params: { id: string; orderId: string } }>(
+    '/api/customers/:id/orders/:orderId',
+    {
+      preHandler: requirePermission(PERMISSIONS.CUSTOMER_ORDER_WRITE),
+      schema: { params: ORDER_PARAMS_SCHEMA },
+    },
+    async (request, reply) => {
+      const viewer = requireViewer(request, reply)
+      if (viewer === null) return reply
+
+      const result = await deleteOrder(request.params.id, request.params.orderId, viewer)
+      if (!result.ok) return sendFailure(reply, result.reason)
+
+      const body: CustomerDetailResponse = { customer: result.data }
+      return reply.code(200).send(body)
     },
   )
 

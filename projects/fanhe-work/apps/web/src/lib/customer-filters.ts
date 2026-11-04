@@ -1,4 +1,10 @@
-import { activityWindow } from '@fanhe/shared'
+import {
+  CUSTOMER_OWNER_MINE,
+  CUSTOMER_OWNER_UNASSIGNED,
+  activityWindow,
+  parseOwnerFilter,
+  type CustomerOwnerDto,
+} from '@fanhe/shared'
 
 /**
  * 客户平台两个栏目的筛选层。
@@ -361,15 +367,46 @@ export type CustomerFilters = {
   stage: string
   q: string
   pendingReview: boolean
+  /**
+   * 归属筛选。空串表示不筛；固定档 `mine` / `unassigned`；成员档
+   * `designer:<id>` / `sales:<id>`。
+   *
+   * **必须随地址栏一起走。** 只存在组件里的话，从看板点进进度页筛选就丢了，
+   * 而丢掉之后列表显示的是另一批客户，界面上没有任何提示。
+   */
+  owner: string
 }
 
-export type CustomerFilterKey = 'range' | 'scope' | 'stage' | 'q' | 'review'
+export type CustomerFilterKey = 'range' | 'scope' | 'stage' | 'q' | 'review' | 'owner'
 
 export const SCOPE_OPTIONS = [
   { value: 'domestic', label: '国内' },
   { value: 'overseas', label: '海外' },
   { value: 'special-region', label: '港澳台' },
 ] as const
+
+/** 归属下拉的两个固定档。成员档由列表响应里的 `owners` 动态拼在后面。 */
+export const OWNER_FIXED_OPTIONS = [
+  { value: CUSTOMER_OWNER_MINE, label: '我负责的' },
+  { value: CUSTOMER_OWNER_UNASSIGNED, label: '未分配（公共池）' },
+] as const
+
+/**
+ * 归属取值的显示文案。
+ *
+ * 成员档的姓名从 `owners` 里查。查不到时给一句「指定设计师」而不是把 UUID 印在
+ * 界面上 —— 名单是异步到达的，第一帧必然查不到，那个瞬间不该闪出一串十六进制。
+ */
+export function ownerLabel(value: string, owners: readonly CustomerOwnerDto[]): string | null {
+  if (value === '') return null
+  if (value === CUSTOMER_OWNER_MINE) return '我负责的'
+  if (value === CUSTOMER_OWNER_UNASSIGNED) return '未分配'
+  const filter = parseOwnerFilter(value)
+  if (filter.kind !== 'member') return null
+  const roleLabel = filter.role === 'designer' ? '设计师' : '销售'
+  const owner = owners.find((item) => item.id === filter.userId && item.role === filter.role)
+  return owner === undefined ? `指定${roleLabel}` : `${roleLabel}·${owner.name}`
+}
 
 export function filtersFromParams(params: URLSearchParams, now: Date): CustomerFilters {
   return {
@@ -381,6 +418,8 @@ export function filtersFromParams(params: URLSearchParams, now: Date): CustomerF
     stage: params.get('stage') ?? '',
     q: params.get('q') ?? '',
     pendingReview: params.get('review') === 'pending',
+    // 地址里用短键 `o`：与 `p` 同一套习惯，一屏五个筛选都写全名会让链接长得没法读。
+    owner: params.get('o') ?? '',
   }
 }
 
@@ -400,6 +439,7 @@ export function filtersToParams(filters: CustomerFilters): URLSearchParams {
   if (filters.stage !== '') params.set('stage', filters.stage)
   if (filters.q !== '') params.set('q', filters.q)
   if (filters.pendingReview) params.set('review', 'pending')
+  if (filters.owner !== '') params.set('o', filters.owner)
   return params
 }
 
@@ -419,6 +459,8 @@ export function clearFilter(filters: CustomerFilters, key: CustomerFilterKey): C
       return { ...filters, q: '' }
     case 'review':
       return { ...filters, pendingReview: false }
+    case 'owner':
+      return { ...filters, owner: '' }
   }
 }
 
@@ -430,6 +472,7 @@ export function activeFilterCount(filters: CustomerFilters): number {
   if (filters.stage !== '') count += 1
   if (filters.q !== '') count += 1
   if (filters.pendingReview) count += 1
+  if (filters.owner !== '') count += 1
   return count
 }
 
@@ -442,5 +485,6 @@ export function filtersKey(filters: CustomerFilters): string {
     filters.stage,
     filters.q,
     String(filters.pendingReview),
+    filters.owner,
   ].join('\u0000')
 }

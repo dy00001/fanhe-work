@@ -5,12 +5,14 @@ import {
   activityWindow,
   bucketHourlyActivity,
   buildInitialSteps,
+  computeOrderSettlement,
   customerDisplayName,
   customerShortName,
   isStageRegression,
   maskContractTotal,
   maskOrderAmounts,
   normalizeRegion,
+  parseOwnerFilter,
   regionScopeOf,
   type CreateCustomerOrderRequest,
   type CreateCustomerRequest,
@@ -19,6 +21,8 @@ import {
   type CustomerListItemDto,
   type CustomerListResponse,
   type CustomerOrderDto,
+  type CustomerOwnerDto,
+  type CustomerRole,
   type CustomerStage,
   type CustomerSummary,
   type AssignCustomerRequest,
@@ -26,6 +30,7 @@ import {
   type SetCustomerStageRequest,
   type UpdateCustomerRequest,
   type UpdateCustomerStepRequest,
+  type UpdateOrderAmountsRequest,
 } from '@fanhe/shared'
 
 import { recordAudit } from '../audit/audit.js'
@@ -93,6 +98,15 @@ export type CustomerListFilter = {
   region?: string | undefined
   scope?: string | undefined
   stage?: string | undefined
+  /**
+   * 归属筛选。取值见 `parseOwnerFilter`：`mine` / `unassigned` / `designer:<id>` /
+   * `sales:<id>`，空即不过滤。
+   *
+   * **必须走 `buildCustomerWhere`**：KPI、两张环形图、活跃度折线与清单七处共用那一个
+   * where。只在清单上过滤的表现是「列表只剩我的客户，看板还是全公司的数字」——
+   * 每个数字单独看都对，放在一屏里才互相矛盾，而那种矛盾没有任何报错。
+   */
+  owner?: string | undefined
   /** 只看待复核。`true` 时限定 `reviewStatus = pending`。 */
   pendingReview?: boolean | undefined
   q?: string | undefined
@@ -167,6 +181,10 @@ const DETAIL_SELECT = {
       stage: true,
       stageSource: true,
       contractFen: true,
+      depositFen: true,
+      prepayFen: true,
+      finalReceivedFen: true,
+      feeFen: true,
       receivedFen: true,
       unpaidFen: true,
       amountSource: true,
@@ -268,6 +286,10 @@ function toOrder(
     stage: string
     stageSource: string
     contractFen: number | null
+    depositFen: number | null
+    prepayFen: number | null
+    finalReceivedFen: number | null
+    feeFen: number | null
     receivedFen: number | null
     unpaidFen: number | null
     amountSource: string | null
@@ -288,6 +310,10 @@ function toOrder(
 ): CustomerOrderDto {
   const amounts: CustomerAmounts = {
     contractFen: row.contractFen,
+    depositFen: row.depositFen,
+    prepayFen: row.prepayFen,
+    finalReceivedFen: row.finalReceivedFen,
+    feeFen: row.feeFen,
     receivedFen: row.receivedFen,
     unpaidFen: row.unpaidFen,
   }
@@ -344,6 +370,26 @@ export function buildCustomerWhere(filter: CustomerListFilter): Prisma.CustomerW
   if (filter.region) where.region = filter.region
   if (filter.scope) where.regionScope = filter.scope
   if (filter.stage) where.stage = filter.stage
+
+  /*
+   * 归属筛选同样进 `AND` 数组，理由与检索那条一样：「我负责的」本身是一个 `OR`
+   * （设计师是我或销售是我），直接赋给 `where.OR` 会把检索的 OR 覆盖掉。
+   *
+   * 「未分配」要求**两栏都为空**，不是「任一为空」。设计师有了、销售没定，这位客户
+   * 其实已经有人跟了；按「任一为空」筛，它会同时出现在「未分配」和「张三的客户」
+   * 两个视图里，而这两个视图的客户数相加会超过总数。
+   */
+  const owner = parseOwnerFilter(filter.owner)
+  if (owner.kind === 'mine') {
+    and.push({
+      OR: [{ designerId: filter.viewer.userId }, { salesId: filter.viewer.userId }],
+    })
+  } else if (owner.kind === 'unassigned') {
+    and.push({ designerId: null, salesId: null })
+  } else if (owner.kind === 'member') {
+    and.push(owner.role === 'designer' ? { designerId: owner.userId } : { salesId: owner.userId })
+  }
+
   if (filter.pendingReview) where.reviewStatus = 'pending'
   if (filter.q) {
     // 检索四项：显示名、短名、真名。用 `mode: 'insensitive'` 是因为英文昵称
@@ -381,6 +427,65 @@ function timeWindowFilter(from: Date | undefined, to: Date | undefined): { gte?:
 }
 
 /**
+ * 归属筛选的可选项。
+ *
+ * **只受可见范围约束，不受其余筛选影响。** 用当前筛选算的话，选完「张三」之后
+ * 下拉里就只剩张三一个人，换人还得先清空筛选 —— 选项会自己变少这件事在使用者
+ * 眼里是 bug。
+ *
+ * 数据来源是**客户行上的归属列**，不是账号表：账号表里那些从未被指派过客户的
+ * 人出现在下拉里，选中之后列表空空如也。为此先 groupBy 出实际出现过的 id，
+ * 再回查姓名。
+ */
+async function listOwners(viewer: CustomerViewer): Promise<CustomerOwnerDto[]> {
+  const scopeOnly: Prisma.CustomerWhereInput =
+    viewer.scope.kind === 'own' ? { AND: [scopeWhere(viewer.scope)] } : {}
+
+  const [designerGroups, salesGroups] = await Promise.all([
+    prisma.customer.groupBy({ by: ['designerId'], where: scopeOnly, _count: { _all: true } }),
+    prisma.customer.groupBy({ by: ['salesId'], where: scopeOnly, _count: { _all: true } }),
+  ])
+
+  const designerIds = designerGroups
+    .map((group) => group.designerId)
+    .filter((id): id is string => id !== null)
+  const salesIds = salesGroups
+    .map((group) => group.salesId)
+    .filter((id): id is string => id !== null)
+  const ids = [...new Set([...designerIds, ...salesIds])]
+  if (ids.length === 0) return []
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, displayName: true },
+  })
+  const nameOf = new Map(users.map((user) => [user.id, user.displayName]))
+
+  /*
+   * 同一个人可能两条都出现（既是某些客户的设计师，又是另一些客户的销售），
+   * 因此这里按角色分别产出，而不是按人去重 —— 两种身份的筛选结果不同。
+   */
+  const options: CustomerOwnerDto[] = []
+  for (const role of ['designer', 'sales'] as CustomerRole[]) {
+    const source = role === 'designer' ? designerIds : salesIds
+    for (const id of new Set(source)) {
+      const name = nameOf.get(id)
+      // 账号被硬删除后客户行上的 id 仍在（外键是 SetNull，但那要数据库执行过删除），
+      // 查不到姓名时跳过：下拉里出现一个空名字的选项，点下去只会得到一片空白。
+      if (name === undefined) continue
+      options.push({ id, name, role })
+    }
+  }
+
+  // 先按角色成组，组内按姓名排。中文用 `localeCompare` 而不是字符码，否则「张」
+  // 会排在「安」前面。
+  return options.sort((left, right) => {
+    if (left.role !== right.role) return left.role === 'designer' ? -1 : 1
+    return left.name.localeCompare(right.name, 'zh-CN')
+  })
+}
+
+/**
  * 列表 + 汇总。
  *
  * **汇总不受筛选条件影响的部分要分开看**：`byStage` 与 `byScope` 都按**当前筛选**
@@ -411,7 +516,7 @@ export async function listCustomers(filter: CustomerListFilter): Promise<Custome
       }) as unknown as Promise<ListRow[]>)
     : Promise.resolve([])
 
-  const [rows, total, stageGroups, scopeGroups, amountGroups, newInWindow, activityRows] =
+  const [rows, total, stageGroups, scopeGroups, amountGroups, newInWindow, activityRows, owners] =
     await Promise.all([
       rowsPromise,
       prisma.customer.count({ where }),
@@ -433,6 +538,7 @@ export async function listCustomers(filter: CustomerListFilter): Promise<Custome
         where: { AND: [where, { lastMessageAt: { gte: window.start, lt: window.end } }] },
         select: { lastMessageAt: true },
       }),
+      listOwners(filter.viewer),
     ])
 
   const byScope: Record<RegionScope, number> = { 'special-region': 0, overseas: 0, domestic: 0 }
@@ -487,6 +593,7 @@ export async function listCustomers(filter: CustomerListFilter): Promise<Custome
      * （账号级单独授予），二是两处算法漂移时的表现是提示消失，而不是报错。
      */
     scopeKind: filter.viewer.scope.kind,
+    owners,
   }
 }
 
@@ -880,7 +987,15 @@ export type OrderImportDetail = {
 export function normalizeOrderAmounts(
   input: CreateOrderInput,
 ): { ok: false; reason: CustomerFailureReason } | null {
-  for (const value of [input.contractFen, input.receivedFen, input.unpaidFen]) {
+  for (const value of [
+    input.contractFen,
+    input.depositFen,
+    input.prepayFen,
+    input.finalReceivedFen,
+    input.feeFen,
+    input.receivedFen,
+    input.unpaidFen,
+  ]) {
     if (value === undefined || value === null) continue
     if (!Number.isInteger(value) || value < 0) return { ok: false, reason: 'invalid_amount' }
   }
@@ -908,6 +1023,23 @@ export async function createOrder(
 
   const amountInvalid = normalizeOrderAmounts(input)
   if (amountInvalid !== null) return amountInvalid
+
+  /*
+   * 派生两项按公式算，除非这是导入路径且它自己带了历史数字。
+   *
+   * `detail !== undefined` 表示调用来自导入脚本，那时 `receivedFen` / `unpaidFen`
+   * 是看板与 ai_schema 里的既成事实，重算等于用今天的公式改写昨天的账。人工录入
+   * 没有 `detail`，一律走公式 —— 「新建订单时合同填了 10 万，未收却显示未录入」
+   * 是最容易被当成 bug 报上来的一种表现。
+   */
+  const settlement = computeOrderSettlement({
+    contractFen: input.contractFen ?? null,
+    depositFen: input.depositFen ?? null,
+    prepayFen: input.prepayFen ?? null,
+    finalReceivedFen: input.finalReceivedFen ?? null,
+    feeFen: input.feeFen ?? null,
+  })
+  const useSettlement = detail === undefined
 
   const lastSeq = await prisma.customerOrder.aggregate({
     where: { customerId },
@@ -972,8 +1104,12 @@ export async function createOrder(
       stage: detail?.stage ?? customer.stage,
       stageSource: detail?.stageSource ?? 'manual',
       contractFen: input.contractFen ?? null,
-      receivedFen: input.receivedFen ?? null,
-      unpaidFen: input.unpaidFen ?? null,
+      depositFen: input.depositFen ?? null,
+      prepayFen: input.prepayFen ?? null,
+      finalReceivedFen: input.finalReceivedFen ?? null,
+      feeFen: input.feeFen ?? null,
+      receivedFen: useSettlement ? settlement.receivedFen : (input.receivedFen ?? null),
+      unpaidFen: useSettlement ? settlement.unpaidFen : (input.unpaidFen ?? null),
       amountSource:
         detail?.amountSource ??
         (input.contractFen === undefined || input.contractFen === null ? 'none' : 'manual'),
@@ -1106,6 +1242,207 @@ export async function setStage(
   }
 
   return getCustomer(customerId, viewer)
+}
+
+/**
+ * 更正订单金额。
+ *
+ * 只收手填五项，派生两项由 `computeOrderSettlement` 算完一起落库。三条规则：
+ *
+ *   1. **金额属于财务信息。** 没有 `customer.finance.read` 的账号连看都看不到，
+ *      自然也谈不上改 —— 这里直接拒成 `field_not_allowed`（400），与档案字段超范围
+ *      同一个口径。
+ *   2. **先判客户归属，再判订单归属。** `orderId` 会出现在详情响应里，猜到并不难；
+ *      只判订单会让 A 改掉 B 的客户名下的账。
+ *   3. **不接收派生值。** 前端算的那一份只用于输入过程中的预览，最终以服务端为准。
+ *
+ * `undefined` 保持原值、`null` 清空，两者必须分开：界面上「没动这个框」与「把这个
+ * 框清掉」是两个动作，混成一个就再也清不空一个填错的数字。
+ */
+export type UpdateOrderAmountsInput = UpdateOrderAmountsRequest
+
+export async function updateOrderAmounts(
+  customerId: string,
+  orderId: string,
+  input: UpdateOrderAmountsInput,
+  viewer: CustomerViewer,
+): Promise<CustomerResult<CustomerDetailDto>> {
+  if (!viewer.canReadFinance) return { ok: false, reason: 'field_not_allowed' }
+  if ((await findScopedCustomer(customerId, viewer)) === null) {
+    return { ok: false, reason: 'not_found' }
+  }
+
+  const order = await prisma.customerOrder.findUnique({
+    where: { id: orderId },
+    select: {
+      customerId: true,
+      contractFen: true,
+      depositFen: true,
+      prepayFen: true,
+      finalReceivedFen: true,
+      feeFen: true,
+    },
+  })
+  if (order === null || order.customerId !== customerId) return { ok: false, reason: 'not_found' }
+
+  for (const value of [
+    input.contractFen,
+    input.depositFen,
+    input.prepayFen,
+    input.finalReceivedFen,
+    input.feeFen,
+  ]) {
+    if (value === undefined || value === null) continue
+    if (!Number.isInteger(value) || value < 0) return { ok: false, reason: 'invalid_amount' }
+  }
+
+  // `undefined` 表示「这次不动这一项」。写成 `input.x ?? order.x` 会把显式清空
+  // （null）也当成「不动」，于是填错的数字永远删不掉。
+  const pick = (next: number | null | undefined, current: number | null): number | null =>
+    next === undefined ? current : next
+
+  const merged = {
+    contractFen: pick(input.contractFen, order.contractFen),
+    depositFen: pick(input.depositFen, order.depositFen),
+    prepayFen: pick(input.prepayFen, order.prepayFen),
+    finalReceivedFen: pick(input.finalReceivedFen, order.finalReceivedFen),
+    feeFen: pick(input.feeFen, order.feeFen),
+  }
+  const settlement = computeOrderSettlement(merged)
+
+  await prisma.customerOrder.update({
+    where: { id: orderId },
+    data: {
+      ...merged,
+      ...settlement,
+      // 人工动过的数字把来源改成 manual。留着原来的 `board-evidence` 会让「这笔钱
+      // 是从看板核对出来的」这条证据失效 —— 它已经被人改过了。
+      amountSource: 'manual',
+      amountConfidence: 'high',
+    },
+  })
+
+  // 合同总金额是客户级汇总的来源，改了合同就必须重算，否则看板上的合同额合计
+  // 停在旧值，而列表与详情各自显示新值，三个数字互相打架。
+  await recomputeContractTotal(customerId)
+  return getCustomer(customerId, viewer)
+}
+
+/**
+ * 删除一张订单。
+ *
+ * 硬删除，十四环节随级联消失。审计里留下编号与金额 —— 审计表不级联，删完之后
+ * 「那一单原本记了什么」只有这条记录能回答。
+ *
+ * 删完必须重算客户级合同额：`contractTotalFen` 是聚合派生列，不重算会让看板上的
+ * 合同额合计继续包含一张已经不存在的订单。
+ */
+export async function deleteOrder(
+  customerId: string,
+  orderId: string,
+  viewer: CustomerViewer,
+): Promise<CustomerResult<CustomerDetailDto>> {
+  if ((await findScopedCustomer(customerId, viewer)) === null) {
+    return { ok: false, reason: 'not_found' }
+  }
+
+  const order = await prisma.customerOrder.findUnique({
+    where: { id: orderId },
+    select: {
+      customerId: true,
+      code: true,
+      seq: true,
+      contractFen: true,
+      depositFen: true,
+      prepayFen: true,
+      finalReceivedFen: true,
+      feeFen: true,
+      receivedFen: true,
+      unpaidFen: true,
+      steps: { select: { done: true } },
+    },
+  })
+  if (order === null || order.customerId !== customerId) return { ok: false, reason: 'not_found' }
+
+  await prisma.customerOrder.delete({ where: { id: orderId } })
+  await recomputeContractTotal(customerId)
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.CUSTOMER_ORDER_DELETE,
+    actor: actorOf(viewer),
+    target: { type: 'customer', id: customerId },
+    detail: {
+      orderId,
+      code: order.code,
+      seq: order.seq,
+      contractFen: order.contractFen,
+      depositFen: order.depositFen,
+      prepayFen: order.prepayFen,
+      finalReceivedFen: order.finalReceivedFen,
+      feeFen: order.feeFen,
+      receivedFen: order.receivedFen,
+      unpaidFen: order.unpaidFen,
+      stepsDone: order.steps.filter((step) => step.done).length,
+    },
+  })
+
+  return getCustomer(customerId, viewer)
+}
+
+/** 删除客户的返回。删完没有详情可回，只需要够界面把那一行摘掉。 */
+export type DeletedCustomer = { id: string; displayName: string }
+
+/**
+ * 删除一位客户。
+ *
+ * 三条约束，每条都对应一次「删错了就找不回来」：
+ *
+ *   1. **要 `customer.scope.write`。** 改档案（`record.write`）是日常动作，设计师
+ *      每天都在用；整条删除会连带删掉订单、十四环节与归类记录，把它并进日常写权限
+ *      等于让最容易误点的那个按钮没有额外的门槛。这一条与服务层的
+ *      `assignCustomer` 同源：只有能把客户在人与人之间转移的账号，才能让它消失。
+ *   2. **先判归属范围。** 不可见与不存在同形返回 404，与其余写路径一致。
+ *   3. **删前写审计。** 删除会级联清掉所有子表，审计表是唯一不跟着消失的痕迹。
+ */
+export async function deleteCustomer(
+  customerId: string,
+  viewer: CustomerViewer,
+): Promise<CustomerResult<DeletedCustomer>> {
+  if (!viewer.canAssign) return { ok: false, reason: 'field_not_allowed' }
+  if (!UUID_PATTERN.test(customerId)) return { ok: false, reason: 'not_found' }
+
+  const row = await prisma.customer.findFirst({
+    where: { id: customerId, ...scopeWhere(viewer.scope) },
+    select: {
+      id: true,
+      displayName: true,
+      region: true,
+      designerId: true,
+      salesId: true,
+      _count: { select: { orders: true } },
+    },
+  })
+  if (row === null) {
+    await recordDeniedAccess(customerId, viewer)
+    return { ok: false, reason: 'not_found' }
+  }
+
+  await prisma.customer.delete({ where: { id: customerId } })
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.CUSTOMER_DELETE,
+    actor: actorOf(viewer),
+    target: { type: 'customer', id: customerId },
+    detail: {
+      displayName: row.displayName,
+      region: row.region,
+      designerId: row.designerId,
+      salesId: row.salesId,
+      orders: row._count.orders,
+    },
+  })
+
+  return { ok: true, data: { id: row.id, displayName: row.displayName } }
 }
 
 /**

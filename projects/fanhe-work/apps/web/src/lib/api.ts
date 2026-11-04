@@ -83,6 +83,7 @@ import type {
   CreateCustomerRequest,
   CustomerDetailResponse,
   CustomerListResponse,
+  DeleteCustomerResponse,
   PoolListResponse,
   PoolSuggestionDto,
   ReviewPoolSuggestionRequest,
@@ -93,6 +94,7 @@ import type {
   SetupStatusResponse,
   UpdateCustomerRequest,
   UpdateCustomerStepRequest,
+  UpdateOrderAmountsRequest,
   UpdateEventRequest,
   UpdateLaunchProfileRequest,
   UpdateManagedUserRequest,
@@ -1161,6 +1163,8 @@ export type CustomerListQuery = {
   /** 只看待复核（`reviewStatus = pending`）。 */
   pendingReview?: boolean | undefined
   q?: string | undefined
+  /** 归属筛选：`mine` / `unassigned` / `designer:<id>` / `sales:<id>`。 */
+  owner?: string | undefined
   /** 时间筛选起点（含），ISO 时刻。 */
   from?: string | undefined
   /** 时间筛选终点（不含），ISO 时刻。 */
@@ -1180,6 +1184,7 @@ export function customersRequest(
   if (query.stage !== undefined && query.stage !== '') search.set('stage', query.stage)
   if (query.pendingReview === true) search.set('review', 'pending')
   if (query.q !== undefined && query.q !== '') search.set('q', query.q)
+  if (query.owner !== undefined && query.owner !== '') search.set('owner', query.owner)
   // 服务端按本地时区解析日期串，因此这里一律送完整 ISO 时刻，把时区判断留在前端
   // 一处（`filtersToQuery`），服务端不必再猜。
   if (query.from !== undefined && query.from !== '') search.set('from', query.from)
@@ -1234,6 +1239,44 @@ export function createCustomerOrderRequest(
     body: input,
     accessToken,
   })
+}
+
+/** 删除客户。订单、环节与归类记录随级联消失，界面必须先做二次确认。 */
+export function deleteCustomerRequest(
+  accessToken: string,
+  id: string,
+): Promise<DeleteCustomerResponse> {
+  return request<DeleteCustomerResponse>(`/api/customers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    accessToken,
+  })
+}
+
+/** 删除一张订单。返回整条客户详情：合同额汇总跟着变了。 */
+export function deleteCustomerOrderRequest(
+  accessToken: string,
+  id: string,
+  orderId: string,
+): Promise<CustomerDetailResponse> {
+  const path = `/api/customers/${encodeURIComponent(id)}/orders/${encodeURIComponent(orderId)}`
+  return request<CustomerDetailResponse>(path, { method: 'DELETE', accessToken })
+}
+
+/**
+ * 更正订单金额。
+ *
+ * **只送手填五项。** 派生两项由服务端算，前端在输入过程中的即时预览用的是同一个
+ * 契约函数（`computeOrderSettlement`），两处算法同源，不会出现「预览一个数、
+ * 保存后变另一个数」。
+ */
+export function updateCustomerOrderAmountsRequest(
+  accessToken: string,
+  id: string,
+  orderId: string,
+  input: UpdateOrderAmountsRequest,
+): Promise<CustomerDetailResponse> {
+  const path = `/api/customers/${encodeURIComponent(id)}/orders/${encodeURIComponent(orderId)}/amounts`
+  return request<CustomerDetailResponse>(path, { method: 'PATCH', body: input, accessToken })
 }
 
 export function updateCustomerStepRequest(

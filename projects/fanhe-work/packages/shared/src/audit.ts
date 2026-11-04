@@ -46,6 +46,15 @@ export const AUDIT_ACTIONS = {
   CUSTOMER_ACCESS_DENIED: 'customer.access.denied',
   /** 公共池归类结果的人工复核：接受 / 调整 / 驳回。detail 记判定与理由。 */
   CUSTOMER_POOL_REVIEW: 'customer.pool.review',
+  /**
+   * 删除客户。detail 记删除前的显示名、归属与订单数。
+   *
+   * 客户删除是硬删除，订单、十四环节与归类建议随级联消失。审计表不级联，
+   * 因此这条记录是事后唯一能回答「那个客户去哪了」的证据。
+   */
+  CUSTOMER_DELETE: 'customer.delete',
+  /** 删除订单。detail 记编号、金额与环节完成数。客户与其余订单不受影响。 */
+  CUSTOMER_ORDER_DELETE: 'customer.order.delete',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
