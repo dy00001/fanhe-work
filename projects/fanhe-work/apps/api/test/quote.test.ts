@@ -139,6 +139,21 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
   /** 本轮建的用户 id。清理按 id 精确删，不用前缀 —— 前缀是本文件与别的测试共用的。 */
   const createdUserIds: string[] = []
 
+  /**
+   * 本轮建的一次性主类 code。
+   *
+   * **清理必须按这个数组删，不能按条目 code 前缀。** 用 `POST /api/quote/items`
+   * 新增的产品，其主键由服务端按五元组算成 `<source>-<digest>`（如
+   * `csutsfh-1afd7061128c2318`），不带 `zz_test_` 前缀；而 `after()` 里那条
+   * `code: { startsWith: TEST_DATA_PREFIX }` 只能圈到手工 seed 的行。
+   *
+   * 2026-11-04 之前这里一直漏着：主类行按**名字**前缀删掉了，条目按**主键**
+   * 前缀删不掉，于是每跑一轮就留下一条「主类已不存在、条目还在」的孤儿。查价
+   * 左栏照常列出它的分类，维护台的页签却永远匹配不上，界面上没有任何入口能改。
+   * 当天清查时库里有 41 条这样的残留。
+   */
+  const createdSourceCodes: string[] = []
+
   async function createUser(
     roleCode: RoleCode,
     displayName: string,
@@ -290,8 +305,40 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
       where: { imageKey: { startsWith: TEST_DATA_PREFIX } },
     })
     await prisma.quoteItem.deleteMany({ where: { code: { startsWith: TEST_DATA_PREFIX } } })
-    // 本轮新建的分类行与主类行。分类表没有外键约束，条目删掉之后这些行会一直留着，
-    // 下次打开维护台就会多出几个空分类。
+
+    /**
+     * 一次性主类下的东西。
+     *
+     * 顺序被外键钉死了：条目与分类必须先于主类消失（`quote_items.source` /
+     * `quote_categories.source` → `quote_sources.code`，ON DELETE RESTRICT）。
+     * 反过来的话数据库直接报错，`after()` 抛出去会让整个文件的用例显示成失败，
+     * 而真正的错因藏在最后一行。
+     *
+     * 条目必须按**主类 code 查出来再删**，不能按条目 code 前缀：新增产品的键是
+     * `<source>-<digest>`，不带 `zz_test_` 前缀。
+     */
+    if (createdSourceCodes.length > 0) {
+      const fixtureItems = await prisma.quoteItem.findMany({
+        where: { source: { in: createdSourceCodes } },
+        select: { code: true },
+      })
+      const fixtureCodes = fixtureItems.map((row) => row.code)
+      if (fixtureCodes.length > 0) {
+        await prisma.quoteRevision.deleteMany({ where: { itemCode: { in: fixtureCodes } } })
+        await prisma.quoteItemImage.deleteMany({ where: { imageKey: { in: fixtureCodes } } })
+        await prisma.quoteItem.deleteMany({ where: { code: { in: fixtureCodes } } })
+      }
+      // 分类操作会写 `cat:<source>` 的审计行，与条目不是同一批 code。
+      await prisma.quoteRevision.deleteMany({
+        where: { itemCode: { in: createdSourceCodes.map((code) => `cat:${code}`) } },
+      })
+      await prisma.quoteCategory.deleteMany({ where: { source: { in: createdSourceCodes } } })
+      await prisma.quoteSourceRow.deleteMany({ where: { code: { in: createdSourceCodes } } })
+    }
+
+    // 本轮新建的分类行与主类行（按名字前缀兜底，覆盖 fixture 之前就存在的残留）。
+    // 分类表没有外键约束，条目删掉之后这些行会一直留着，下次打开维护台就会多出
+    // 几个空分类。
     await prisma.quoteCategory.deleteMany({ where: { name: { startsWith: TEST_DATA_PREFIX } } })
     await prisma.quoteSourceRow.deleteMany({ where: { name: { startsWith: TEST_DATA_PREFIX } } })
     await purgeManualItems()
@@ -1069,6 +1116,8 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     })
     assert.equal(created.statusCode, 200, created.body)
     const code = (created.json() as { code: string }).code
+    // 记下来给 `after()`：这一条用例新增的产品键是 `<code>-<digest>`，按前缀清不掉。
+    createdSourceCodes.push(code)
 
     const added = await app.inject({
       method: 'POST',
@@ -1563,6 +1612,8 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     for (const row of stale) {
       await prisma.quoteItem.deleteMany({ where: { source: row.code } })
       await prisma.quoteItemImage.deleteMany({ where: { imageKey: { startsWith: row.code } } })
+      // 分类行也要先删：外键是 RESTRICT，留着它主类删不掉。
+      await prisma.quoteCategory.deleteMany({ where: { source: row.code } })
       await prisma.quoteSourceRow.delete({ where: { code: row.code } })
     }
     const created = await app.inject({
@@ -1573,6 +1624,7 @@ describe('报价查价', { skip: reachable ? false : '数据库不可达，跳�
     })
     assert.equal(created.statusCode, 200, created.body)
     const source = (created.json() as { code: string }).code
+    createdSourceCodes.push(source)
 
     const codes = ['a', 'b', 'c'].map((suffix) => `${TEST_DATA_PREFIX}ord_${suffix}`)
     // 条目号递增：排序的兜底键是 `ledger_no`，三个同号的条目会让「相对次序」变成

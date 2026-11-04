@@ -791,3 +791,30 @@ function extractNumber(text: string): number | null {
 function toFen(yuan: number): number {
   return Math.round(yuan * 100)
 }
+
+/**
+ * 从分类聚合结果里剔掉主类表不认得的来源。
+ *
+ * ## 为什么需要一个专门的函数
+ *
+ * 查价左栏的分类来自 `quote_items` 的 `groupBy(source, category)`，维护台顶部那排
+ * 页签来自 `quote_sources`。这是两个真值，对不上时就会出现「分类出现在筛选栏、
+ * 点进任何页签都找不到」的黑洞：分类照常显示、条目照常能搜到，但改名 / 合并 /
+ * 删除三个入口全都够不到。2026-11-04 现场查出 41 条这种残留，源头是集成测试
+ * 直接删主类行、没删条目。
+ *
+ * 数据库侧现在有外键兜底（`quote_items.source` → `quote_sources.code`），这个函数
+ * 是第二道：读路径不该把「库里有不一致」直接渲染成界面上一个改不掉的入口。
+ *
+ * ## 主类表为空时原样返回
+ *
+ * 那个状态说明迁移还没跑、或主类表被清空。此时按「全部不认得」过滤会让整个筛选栏
+ * 变成空的，比多列几个孤儿严重得多。宁可多显示，也不显示成空库。
+ */
+export function filterKnownCategorySources<T extends { source: string }>(
+  rows: readonly T[],
+  knownCodes: ReadonlySet<string>,
+): readonly T[] {
+  if (knownCodes.size === 0) return rows
+  return rows.filter((row) => knownCodes.has(row.source))
+}

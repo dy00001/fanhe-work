@@ -1472,6 +1472,14 @@ model QuoteSourceRow {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  /// 反向关系。**外键是 2026-11-04 补的**，此前 `quote_items.source` 只是一列
+  /// 字符串，删主类与写条目各走各的路径 —— 主类没了、条目还在，就成了「查价页
+  /// 能筛到、维护台任何页签都够不到」的孤儿（那次查明库里有 41 条这样的残留）。
+  /// `onDelete: Restrict` 让数据库直接拦住「删主类但还有条目」这件事，不依赖
+  /// 每一个调用点都记得先查计数。
+  items      QuoteItem[]
+  categories QuoteCategory[]
+
   @@index([sortOrder])
   @@map("quote_sources")
 }
@@ -1494,6 +1502,11 @@ model QuoteCategory {
 
   /// sale / craft / hardware。与 `quote_items.source` 同一个取值域。
   source String @db.VarChar(16)
+
+  /// 指向主类的真身。与 `quote_items.sourceRef` 同一把外键：分类行同样不该挂在
+  /// 一个已经不存在的主类上（那次残留里 `quote_categories` 之所以干净，只是因为
+  /// 测试把它按名字前缀一起删了，属于运气）。
+  sourceRef QuoteSourceRow @relation(fields: [source], references: [code], onDelete: Restrict, onUpdate: Restrict)
 
   name String @db.VarChar(80)
 
@@ -1518,6 +1531,12 @@ model QuoteItem {
   /// sale / craft / hardware。存字符串不存枚举，与 stage、dim_type 同一个理由：
   /// 契约是唯一来源，加一个来源只改代码不写迁移。
   source String @db.VarChar(16)
+
+  /// 外键指向主类。**这一行是 2026-11-04 补的**：在此之前 `source` 只是一列字符串，
+  /// 删主类与写条目各走各的路径，于是能出现「主类没了、条目还在」的孤儿 —— 查价
+  /// 左栏照常列出它的分类，维护台的页签却只渲染主类表里的那几个，两边对不上，
+  /// 界面上没有任何入口能改它。`Restrict` 把这件事交给数据库拦。
+  sourceRef QuoteSourceRow @relation(fields: [source], references: [code], onDelete: Restrict, onUpdate: Restrict)
 
   category String @db.VarChar(80)
   name     String @db.VarChar(200)

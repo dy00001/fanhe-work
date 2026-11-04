@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 
 import {
   QUOTE_LIMITS,
+  filterKnownCategorySources,
   parsePriceInput,
   type CreateQuoteItemRequest,
   type QuoteDatasetDto,
@@ -393,11 +394,24 @@ export async function listCategories(): Promise<
 
   const orderOf = new Map(persisted.map((row) => [`${row.source}\u001f${row.name}`, row.sortOrder]))
   // 来源的先后从主类表来，不再写死 `['sale','craft','hardware']`：新建的主类不该
-  // 永远排在内置三类之后。表里查不到的（历史遗留的孤儿 source）排最后。
+  // 永远排在内置三类之后。
   const rankOf = new Map(sources.map((row) => [row.code, row.sortOrder]))
   const sourceRank = (source: string): number => rankOf.get(source) ?? Number.MAX_SAFE_INTEGER
 
-  return rows
+  /**
+   * 只列出主类表里认得的来源。
+   *
+   * 这条过滤是 2026-11-04 补的。此前这里直接信任 `quote_items.source`：只要条目
+   * 还在，分类就会被列进筛选栏，哪怕它所属的主类已经从 `quote_sources` 删掉了。
+   * 而维护台的页签只渲染主类表里的行，两边一对不上，那些分类就变成「查价页看得
+   * 见、任何地方都改不了」的黑洞（当时库里有 41 条这样的残留）。
+   *
+   * 判据收在 `filterKnownCategorySources` 里，纯函数、有单测。数据库侧现在也有
+   * 外键兜底，正常情况下这里一条都过滤不到。
+   */
+  const visible = filterKnownCategorySources(rows, new Set(sources.map((row) => row.code)))
+
+  return visible
     .map((row) => ({
       source: row.source as QuoteSource,
       name: row.category,
