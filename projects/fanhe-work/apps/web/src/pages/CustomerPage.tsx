@@ -4,6 +4,7 @@ import {
   PERMISSIONS,
   computeOrderSettlement,
   navPath,
+  summarizeOrderAmounts,
   type AssignableUserDto,
   type CustomerAssignmentDto,
   type CustomerDetailDto,
@@ -963,22 +964,25 @@ function CustomerDetailDialog({
                   还没有订单。合同额挂在订单上，录入订单后才能记金额。
                 </p>
               ) : (
-                customer.orders.map((order) => (
-                  <OrderCard
-                    key={order.id}
-                    order={order}
-                    canEdit={canOrder}
-                    canEditFinance={canFinance}
-                    busy={busy}
-                    onToggleStep={(idx, patch) =>
-                      void apply(() => updateCustomerStep(customer.id, order.id, idx, patch))
-                    }
-                    onSaveAmounts={(patch) =>
-                      apply(() => updateCustomerOrderAmounts(customer.id, order.id, patch))
-                    }
-                    onDelete={() => apply(() => deleteCustomerOrder(customer.id, order.id))}
-                  />
-                ))
+                <>
+                  <OrderAmountTotals orders={customer.orders} />
+                  {customer.orders.map((order) => (
+                    <OrderCard
+                      key={order.id}
+                      order={order}
+                      canEdit={canOrder}
+                      canEditFinance={canFinance}
+                      busy={busy}
+                      onToggleStep={(idx, patch) =>
+                        void apply(() => updateCustomerStep(customer.id, order.id, idx, patch))
+                      }
+                      onSaveAmounts={(patch) =>
+                        apply(() => updateCustomerOrderAmounts(customer.id, order.id, patch))
+                      }
+                      onDelete={() => apply(() => deleteCustomerOrder(customer.id, order.id))}
+                    />
+                  ))}
+                </>
               )}
             </div>
           </div>
@@ -1110,6 +1114,69 @@ function parseAmountInput(text: string): { ok: boolean; fen: number | null } {
   if (text.trim() === '') return { ok: true, fen: null }
   const parsed = parseYuanToFen(text)
   return parsed.ok ? { ok: true, fen: parsed.fen } : { ok: false, fen: null }
+}
+
+/**
+ * 客户级订单金额合计。
+ *
+ * **一单时不出现**：那张订单卡片上的七格就是它自己的合计，再列一遍只是把同样的
+ * 数字印两次。两单起才有「合计」这件事可看。
+ *
+ * 七个格子复用 `ORDER_AMOUNT_FIELDS`，与每张订单卡同序同标签。这里另起一份字段
+ * 表的话，某天改了一处标签而另一处没跟上，用户会以为合计行的「实收金额」和明细
+ * 里的「实收金额」不是同一个东西。
+ */
+function OrderAmountTotals({ orders }: { orders: readonly CustomerOrderDto[] }) {
+  // 全部订单的金额都不可见时，这块没有任何能显示的数，整块不渲染。
+  const summary = summarizeOrderAmounts(orders.map((order) => order.amounts))
+  if (orders.length < 2 || summary.orderCount === 0) return null
+
+  const hints: string[] = []
+  if (summary.hiddenCount > 0) {
+    hints.push(`另有 ${summary.hiddenCount} 单金额不可见，未计入合计`)
+  }
+  if (summary.missingContractCount > 0) {
+    hints.push(`${summary.missingContractCount} 单未录合同，其未收尾款未计入`)
+  }
+
+  return (
+    <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <p className="text-sm font-medium text-foreground">{summary.orderCount} 单合计</p>
+        <span className="text-xs text-muted-foreground">逐单相加，不做跨单冲抵</span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {ORDER_AMOUNT_FIELDS.map((field) => {
+          const value = summary.amounts[field.field]
+          return (
+            <div key={field.key} className="rounded-lg bg-background/70 px-2.5 py-1.5">
+              <p className="text-[11px] text-muted-foreground">
+                {field.label}
+                {field.editable ? null : (
+                  <span className="ml-1 text-[10px] text-muted-foreground-weak">自动</span>
+                )}
+              </p>
+              <p
+                className={
+                  isAmountAnomaly(field, value)
+                    ? 'text-sm font-medium text-destructive tabular-nums'
+                    : 'text-sm font-medium text-foreground tabular-nums'
+                }
+              >
+                {formatFen(value)}
+              </p>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* 缺的数要说出来。总和里少了一单却显示得像个完整的总数，比不显示更危险。 */}
+      {hints.length === 0 ? null : (
+        <p className="mt-2 text-xs text-muted-foreground-weak">{hints.join('；')}</p>
+      )}
+    </div>
+  )
 }
 
 function OrderCard({

@@ -102,6 +102,76 @@ export function computeOrderSettlement(input: OrderSettlementInput): {
   return { receivedFen, unpaidFen }
 }
 
+/**
+ * 一位客户名下所有订单的金额合计。
+ *
+ * `amounts` 是七项各自的合计。各字段独立累加，**不先合手填五项再重算派生两项** ——
+ * 那一步看似等价，实则在「有一单没录合同」时会算错：合同缺失的单拿不到未收尾款，
+ * 但它的定金、预付款照旧被减掉，汇总出一个比实际更小的欠款，而界面上看不出是哪一
+ * 单拖的。因此派生两项逐单调 `computeOrderSettlement` 后累加，缺合同的单直接跳过
+ * 并记进 `missingContractCount`，让缺的那部分在界面上说得出口。
+ */
+export type CustomerAmountSummary = {
+  amounts: CustomerAmounts
+  /** 金额可见、且已计入合计的订单数。 */
+  orderCount: number
+  /** 金额不可见的订单数。无金额权限时全部订单都在这里，合计为 null。 */
+  hiddenCount: number
+  /** 合同总金额为空的订单数。这些单的未收尾款无法计入合计。 */
+  missingContractCount: number
+}
+
+/** 空合计：七项全 null。`null` 是「没录」，与「合计为 0」不是一件事。 */
+const EMPTY_AMOUNTS: CustomerAmounts = {
+  contractFen: null,
+  depositFen: null,
+  prepayFen: null,
+  finalReceivedFen: null,
+  feeFen: null,
+  receivedFen: null,
+  unpaidFen: null,
+}
+
+/** 累加一格：`null` 表示这一单没录，跳过而不是当 0 加进合计。 */
+function addAmount(total: number | null, value: number | null): number | null {
+  if (value === null) return total
+  return (total ?? 0) + value
+}
+
+export function summarizeOrderAmounts(
+  orders: readonly (CustomerAmounts | null)[],
+): CustomerAmountSummary {
+  const totals: CustomerAmounts = { ...EMPTY_AMOUNTS }
+  let hiddenCount = 0
+  let missingContractCount = 0
+
+  for (const order of orders) {
+    if (order === null) {
+      hiddenCount += 1
+      continue
+    }
+
+    totals.contractFen = addAmount(totals.contractFen, order.contractFen)
+    totals.depositFen = addAmount(totals.depositFen, order.depositFen)
+    totals.prepayFen = addAmount(totals.prepayFen, order.prepayFen)
+    totals.finalReceivedFen = addAmount(totals.finalReceivedFen, order.finalReceivedFen)
+    totals.feeFen = addAmount(totals.feeFen, order.feeFen)
+
+    // 派生两项逐单算：这样「缺合同」的那一单不会把别人的欠款算歪。
+    const settlement = computeOrderSettlement(order)
+    totals.receivedFen = addAmount(totals.receivedFen, settlement.receivedFen)
+    totals.unpaidFen = addAmount(totals.unpaidFen, settlement.unpaidFen)
+    if (order.contractFen === null) missingContractCount += 1
+  }
+
+  return {
+    amounts: totals,
+    orderCount: orders.length - hiddenCount,
+    hiddenCount,
+    missingContractCount,
+  }
+}
+
 /** 一个环节的对外形状。 */ export type CustomerStepDto = {
   idx: number
   name: string

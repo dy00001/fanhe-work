@@ -23,6 +23,7 @@ import {
   maskOrderAmounts,
   ownerFilterValue,
   parseOwnerFilter,
+  summarizeOrderAmounts,
 } from '../dist/index.js'
 
 const AMOUNTS = {
@@ -222,4 +223,112 @@ test('非法归属值回到全部，不抛错也不筛出空表', () => {
   assert.deepEqual(parseOwnerFilter('designer:'), { kind: 'all' })
   // 角色必须是已知的两种，不能被当成任意前缀。
   assert.deepEqual(parseOwnerFilter('owner:abc'), { kind: 'all' })
+})
+
+/*
+ * 客户级金额合计。
+ *
+ * 这里的风险不是算错一个加法，而是「算错了还看不出来」：有一单缺合同时，未收尾款
+ * 会少算一大截，界面上却只是一个偏小的正常数字。
+ */
+
+const ORDER_A = {
+  contractFen: 10_000_000,
+  depositFen: 2_000_000,
+  prepayFen: 1_000_000,
+  finalReceivedFen: 3_000_000,
+  feeFen: 100_000,
+  receivedFen: 5_900_000,
+  unpaidFen: 4_000_000,
+}
+
+const ORDER_B = {
+  contractFen: 5_000_000,
+  depositFen: 1_000_000,
+  prepayFen: null,
+  finalReceivedFen: 2_000_000,
+  feeFen: null,
+  receivedFen: 3_000_000,
+  unpaidFen: 2_000_000,
+}
+
+const BLANK_AMOUNTS = {
+  contractFen: null,
+  depositFen: null,
+  prepayFen: null,
+  finalReceivedFen: null,
+  feeFen: null,
+  receivedFen: null,
+  unpaidFen: null,
+}
+
+test('多单七项各自相加', () => {
+  const summary = summarizeOrderAmounts([ORDER_A, ORDER_B])
+  assert.equal(summary.orderCount, 2)
+  assert.equal(summary.hiddenCount, 0)
+  assert.equal(summary.missingContractCount, 0)
+  assert.deepEqual(summary.amounts, {
+    contractFen: 15_000_000,
+    depositFen: 3_000_000,
+    prepayFen: 1_000_000,
+    finalReceivedFen: 5_000_000,
+    feeFen: 100_000,
+    receivedFen: 8_900_000,
+    unpaidFen: 6_000_000,
+  })
+})
+
+test('没有订单时七项全 null，合计不是 0', () => {
+  // 「一单都没录」和「合计为零」是两件事。折成 0 会让「这客户还没记账」看起来像
+  // 「钱都结清了」。
+  const summary = summarizeOrderAmounts([])
+  assert.equal(summary.orderCount, 0)
+  assert.deepEqual(summary.amounts, BLANK_AMOUNTS)
+})
+
+test('缺合同的那一单不进未收尾款，其余项照算', () => {
+  const noContract = { ...ORDER_B, contractFen: null, unpaidFen: null }
+  const summary = summarizeOrderAmounts([ORDER_A, noContract])
+
+  assert.equal(summary.amounts.contractFen, 10_000_000)
+  // 定金两单都录了，照加。
+  assert.equal(summary.amounts.depositFen, 3_000_000)
+
+  // 未收尾款只算 A 的 400 万。若改成「先合手填五项再调 computeOrderSettlement」，
+  // 会拿 A 的合同减掉两单的收款，得 100 万 —— 少算 300 万，且界面上看不出错。
+  assert.equal(summary.amounts.unpaidFen, 4_000_000)
+  assert.equal(summary.missingContractCount, 1)
+})
+
+test('看不到金额的订单只计数，不进合计', () => {
+  const summary = summarizeOrderAmounts([ORDER_A, null])
+  assert.equal(summary.orderCount, 1)
+  assert.equal(summary.hiddenCount, 1)
+  assert.equal(summary.amounts.contractFen, ORDER_A.contractFen)
+})
+
+test('全空订单计入单数但不改变合计', () => {
+  const summary = summarizeOrderAmounts([ORDER_A, BLANK_AMOUNTS])
+  assert.equal(summary.orderCount, 2)
+  assert.equal(summary.amounts.contractFen, ORDER_A.contractFen)
+  assert.equal(summary.amounts.receivedFen, ORDER_A.receivedFen)
+  // 它确实没录合同，如实报一单，让界面能提示「未收尾款没算全」。
+  assert.equal(summary.missingContractCount, 1)
+})
+
+test('派生两项按手填五项重算，不照抄传入的派生值', () => {
+  // 汇总只信手填五项。若某张单的 received_fen 是历史遗留的错值，跟着它加会把错
+  // 放大到客户级 —— 而客户级数字正是签合同、对账时看的那个。
+  const stale = { ...ORDER_A, receivedFen: 0, unpaidFen: 0 }
+  const summary = summarizeOrderAmounts([stale])
+  assert.equal(summary.amounts.receivedFen, 5_900_000)
+  assert.equal(summary.amounts.unpaidFen, 4_000_000)
+})
+
+test('合计保留负的未收尾款，不截断', () => {
+  // 合同 3 万却收了 6 万，这一单未收尾款是 −300 万。与 A 的 +400 万相抵后净欠
+  // 100 万；若把负数截成 0，合计会报成 400 万。
+  const overpaid = { ...ORDER_A, contractFen: 3_000_000 }
+  const summary = summarizeOrderAmounts([ORDER_A, overpaid])
+  assert.equal(summary.amounts.unpaidFen, 1_000_000)
 })
