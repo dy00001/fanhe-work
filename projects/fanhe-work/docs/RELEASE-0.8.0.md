@@ -92,8 +92,16 @@ iframe 的地址不是 `127.0.0.1:1420`。员工从隧道打开梵禾时，他�
 1. **重建 `api` 与 `web` 两个镜像并 `--force-recreate`。** 前端是构建产物；后端新增两条路由与四个环境变量。
 2. **`.env.compose` 加 `FANHE_ASSISTANT_JWT_SECRET`**，值与网关进程的 `EVOFLOW_WEBUI_SECRET` 逐字一致。没配时接口 503、页面退回共享形态；**配错时表现是"历史又混在一起"，不报错。**
 3. **可选：`FANHE_ASSISTANT_MODEL_BASE_URL` / `FANHE_ASSISTANT_MODEL_NAME`。** 默认 `http://host.docker.internal:3425/v1` 与 `workbuddy/deepseek-v4.1-flash`。容器里不能写 `127.0.0.1`。
-4. **重打并分发安装包。** 已装 0.7.0 的机器下次启动收到更新提示。
-5. **不需要跑迁移，不需要 `db:seed`。** 无 schema 变更，权限点维持 24 行。
+4. **助手本体跑在 Docker 里**（`D:\EvoFlow-deploy`，`docker compose up -d`）。两个容器：`evoflow-gateway`（`127.0.0.1:8001`）与 `evoflow-panel`（`0.0.0.0:1420`），`restart: unless-stopped`，Docker Desktop 一起来就自动就绪。宿主进程模式用 `start-evoflow.cmd --host` 回退，**两边不要同时开**（共用同一份 SQLite）。
+5. **重打并分发安装包。** 已装 0.7.0 的机器下次启动收到更新提示。
+6. **不需要跑迁移，不需要 `db:seed`。** 无 schema 变更，权限点维持 24 行。
+
+### 3.1.1 助手容器里的两处补丁（换机器必做）
+
+| 补丁 | 不加会怎样 |
+| --- | --- |
+| `patches/agents/middlewares/round_trace_middleware.py` 挂载覆盖（`threading.Lock` → `RLock`） | 上游 v1.2.9 在同一线程里二次加锁，**必自锁死**：发消息后界面一直「工作中」、模型请求根本没发出去、也不报错 |
+| `dbguard.py` 启动前体检（`-wal` / `-shm` 失配时备份主库并清理） | 容器内所有查询报 `disk I/O error` → 消息不入库、**工具授权卡片永远不出现**；而宿主侧打开同一个文件完全正常，极易误判成代码 bug |
 
 ### 3.2 会被用户感知的变化
 
@@ -111,7 +119,7 @@ iframe 的地址不是 `127.0.0.1:1420`。员工从隧道打开梵禾时，他�
 | 管理员在助手侧是 org admin | 能看到全部会话，这是助手侧的设计（管理员可审计） |
 | `ai.` 子域名无登录 | 谁拿到地址谁就能用，烧的是模型额度。梵禾的登录保护不到另一个域名。要堵得改成梵禾 nginx 反代 `/assistant/`（同源、复用登录），代价是助手前端要用 `--base=/assistant/` 重建并处理 SPA 回退与 SSE 的 `proxy_buffering` |
 | 助手侧管理权要单独授予 | 设置页的模型 / 联网搜索 / 安全中心 / 连接器走助手自己的 `org_admin_grants`。新加管理员后要跑一次 `sync-admins.mjs`，否则四处全是 403 |
-| 助手侧有两份数据库文件 | 生效的是 `~/.evoflow/profiles/default/data/app/evoflow.db`，`~/.evoflow/data/app/` 是桌面版残留。改错那份的表现是"改了但没生效，两边行数都对" |
+| 助手侧有两份数据库文件 | **实测生效的是 `~/.evoflow/data/app/evoflow.db`**（活跃库，本轮 250+ 条消息都落在这里）；`~/.evoflow/profiles/default/data/app/evoflow.db` 是早期残留（17 条，不再增长）。旧记录写反过，按 `data/app` 那一份排查。两份同时改的表现是"改了但没生效，两边行数都对" |
 | 锁在 `v1.2.9` | 上游日更，锁死收不到安全补丁。留一条季度差量合并的例行工作 |
 | 许可证 | PolyForm Noncommercial 1.0.0。自用合规；分发给团队之外的客户属于商业使用，须先取得书面授权 |
 
