@@ -77,6 +77,10 @@ import type {
   RunLaunchProfileResponse,
   AssignCustomerRequest,
   AssignableUsersResponse,
+  AssistantBriefResponse,
+  AssistantReportRequest,
+  AssistantReportResponse,
+  AssistantTokenResponse,
   ClassifyPoolRequest,
   ClassifyPoolResponse,
   CreateCustomerOrderRequest,
@@ -379,6 +383,61 @@ export function meRequest(accessToken: string): Promise<MeResponse> {
 
 export function setupStatusRequest(): Promise<SetupStatusResponse> {
   return request<SetupStatusResponse>('/api/setup/status', { method: 'GET' })
+}
+
+/**
+ * 取一个 AI 助手的身份令牌。
+ *
+ * 这个令牌只用来告诉内嵌的 EvoFlow「当前登录的是谁」，让它的对话历史按账号隔离。
+ * 它不承载梵禾的权限，也不应该被缓存 —— 服务端已声明 `no-store`，这里同样不存。
+ *
+ * 未配置身份桥时服务端返回 503，调用方应当退回「共享身份」而不是把整个页面判定
+ * 为失败：助手仍然可用，只是所有人都看到同一份历史。
+ */
+export function assistantTokenRequest(accessToken: string): Promise<AssistantTokenResponse> {
+  return request<AssistantTokenResponse>('/api/assistant/token', { method: 'GET', accessToken })
+}
+
+/**
+ * 取三模块的结构化摘要。
+ *
+ * 与 `assistantReportRequest` 分开而不是「生成时顺便返回」：摘要是秒级的，生成要十几秒。
+ * 界面先用它把「这次会统计什么」摆出来，用户看到范围再决定要不要等，比盯着一个转圈
+ * 十几秒好得多。
+ *
+ * `days` 与 `modules` 都由服务端再校验一次，前端传错只会得到 400 或按默认值处理，
+ * 不会越权。
+ */
+export function assistantBriefRequest(
+  accessToken: string,
+  options: { days: number; modules?: readonly string[] },
+): Promise<AssistantBriefResponse> {
+  const query = new URLSearchParams({ days: String(options.days) })
+  if (options.modules !== undefined && options.modules.length > 0) {
+    query.set('modules', options.modules.join(','))
+  }
+  return request<AssistantBriefResponse>(`/api/assistant/brief?${query.toString()}`, {
+    method: 'GET',
+    accessToken,
+  })
+}
+
+/**
+ * 生成汇报。
+ *
+ * **模型不可用时仍然是 200**：响应体里的 `fallbackMarkdown` 是完整的纯数据版，
+ * `source` 为 `fallback`。因此这里不需要 try/catch 去兜「AI 挂了」，只需要看
+ * `source` 决定顶部要不要加一条提示。
+ */
+export function assistantReportRequest(
+  accessToken: string,
+  body: AssistantReportRequest,
+): Promise<AssistantReportResponse> {
+  return request<AssistantReportResponse>('/api/assistant/report', {
+    method: 'POST',
+    accessToken,
+    body,
+  })
 }
 
 /**

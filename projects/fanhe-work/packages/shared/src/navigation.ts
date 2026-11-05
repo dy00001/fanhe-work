@@ -51,6 +51,13 @@ import type { PermissionCode, PermissionModule } from './permissions.js'
 export const NAV_CODES = {
   /** 首页。原「个人工作台」，路由段保持 `workbench` 不变，只改文案。 */
   WORKBENCH: 'workbench',
+  /**
+   * AI 助手。整块嵌入自托管的 EvoFlow（`ai.fanhe.dpdns.org`）。
+   *
+   * 编号与路径段都取 `assistant` 而不是 `evoflow`：地址与身份不该绑定上游产品名，
+   * 否则将来换掉底层引擎时，书签、文档与埋点全要跟着改一遍。
+   */
+  ASSISTANT: 'assistant',
   /** 资产。新增的一级占位入口。 */
   ASSETS: 'assets',
   /** 搜索。新增的一级占位入口，检索能力待后续阶段。 */
@@ -234,6 +241,24 @@ export const NAV_ITEMS: readonly NavItem[] = [
     planned: false,
     slot: false,
     summary: '案例展示、一键启动、工作纪要及事件记录三个板块。',
+  },
+  {
+    code: NAV_CODES.ASSISTANT,
+    label: 'AI 助手',
+    slug: 'assistant',
+    group: null,
+    /**
+     * `module: null` 是刻意的：AI 助手对**所有已认证账号**可见，不设权限门槛。
+     *
+     * 这不是「尚未定义」的暂时状态（占位项的 null 属于那一种）。补一个 `assistant`
+     * 模块的代价是：新增权限点 → `db:seed` → `migrate` 与 `api` 两个镜像都要重建，
+     * 而收益只是把「全员可用」改成「授权后可用」。等真的需要按人限制时再加，
+     * 那时这里的 null 换成模块名即可，与客户段、运维段走过的路径相同。
+     */
+    module: null,
+    planned: false,
+    slot: false,
+    summary: '内嵌自托管的 EvoFlow：多轮对话、技能、知识库与任务编排，全员可用。',
   },
   {
     code: NAV_CODES.ASSETS,

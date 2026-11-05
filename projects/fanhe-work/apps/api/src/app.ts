@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 
 import { registerAuthSupport } from './auth/guard.js'
 import { initPermissionCatalog } from './auth/user-admin.js'
+import { registerAssistantRoutes } from './routes/assistant.js'
+import { registerAssistantDataRoutes } from './routes/assistant-data.js'
 import { registerAuthRoutes } from './routes/auth.js'
 import { registerCaseRoutes } from './routes/cases.js'
 import { registerCustomerRoutes } from './routes/customers.js'
@@ -70,6 +72,10 @@ export function buildApp(options: { logger?: boolean } = {}): FastifyInstance {
   registerQuoteRoutes(app)
   // 版本清单不设门禁（T6-02 需要它在登录之前可用，理由见 version/manifest.ts）。
   registerVersionRoutes(app)
+  // 内嵌 AI 助手的身份桥。只要求登录、不挂权限点，理由见 routes/assistant.ts 顶部。
+  registerAssistantRoutes(app)
+  // 助手的数据桥（三模块摘要与汇报）。准入按角色、字段按权限点，理由见 routes/assistant-data.ts。
+  registerAssistantDataRoutes(app)
 
   return app
 }

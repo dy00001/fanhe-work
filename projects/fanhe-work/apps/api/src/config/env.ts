@@ -194,6 +194,58 @@ export const env = {
   },
 
   /**
+   * 内嵌 AI 助手的身份桥密钥。
+   *
+   * 用来给 EvoFlow 网关签身份令牌，让助手那边的对话历史按梵禾账号隔离。**必须与
+   * 网关进程的 `EVOFLOW_WEBUI_SECRET` 逐字一致**，否则网关验签失败 —— 而失败的
+   * 表现不是报错，是静默退回「共享身份」，所有人都看到同一份历史。
+   *
+   * 与 `jwt.secret` 分开的理由见 `auth/assistant-token.ts`：两者的信任方向不同，
+   * 共用一份会让两边的令牌可以互相顶替。
+   *
+   * **不设默认值、不在启动时强制。** 没配时 `GET /api/assistant/token` 返回 503，
+   * 助手页面退回共享形态，其它功能不受影响 —— 为一个可选的集成挡住登录不合理。
+   */
+  assistant: {
+    get jwtSecret(): string | null {
+      const value = process.env.ASSISTANT_JWT_SECRET
+      return value === undefined || value.trim() === '' ? null : value.trim()
+    },
+
+    /**
+     * 生成数据汇报用的模型端点（OpenAI 兼容的 `/chat/completions`）。
+     *
+     * 默认指向宿主机的模型路由服务。**容器里不能用 `127.0.0.1`** —— 那指向容器
+     * 自己，请求会以 `ECONNREFUSED` 失败，而失败在汇报里只表现为「AI 生成失败，
+     * 已回落为数据版」，很容易被当成模型不稳定而不是地址写错。
+     *
+     * 未配置时不是错误：`POST /api/assistant/report` 仍然工作，只是走纯数据兜底。
+     */
+    get modelBaseUrl(): string {
+      const value = process.env.ASSISTANT_MODEL_BASE_URL
+      return value === undefined || value.trim() === '' ? '' : value.trim().replace(/\/+$/, '')
+    },
+
+    get modelName(): string | null {
+      const value = process.env.ASSISTANT_MODEL_NAME
+      return value === undefined || value.trim() === '' ? null : value.trim()
+    },
+
+    get modelApiKey(): string | null {
+      const value = process.env.ASSISTANT_MODEL_API_KEY
+      return value === undefined || value.trim() === '' ? null : value.trim()
+    },
+
+    /** 单次生成的墙钟上限。模型侧长任务多，给 90 秒；超时后回落为数据版而不是挂住请求。 */
+    get modelTimeoutMs(): number {
+      const raw = process.env.ASSISTANT_MODEL_TIMEOUT_MS
+      const parsed = raw === undefined ? Number.NaN : Number(raw)
+      if (!Number.isInteger(parsed) || parsed < 5000 || parsed > 300000) return 90_000
+      return parsed
+    },
+  },
+
+  /**
    * 案例库的归属账号（用户名）。
    *
    * 案例库是全账号共用一份的素材库，正常情况下归属「持 owner 角色、最早创建的账号」，

@@ -191,6 +191,23 @@ services:
       # 泄漏它的后果是「有人能伪造经营数据」，不是「有人能读经营数据」。
       OPS_INGEST_TOKEN: ${OPS_INGEST_TOKEN:-}
 
+      # AI 助手身份桥的签名密钥（`GET /api/assistant/token`）。**与 EvoFlow 网关
+      # 进程的 `EVOFLOW_WEBUI_SECRET` 必须是同一个值** —— 网关用它验签，签不出来
+      # 或对不上，就只能退回「全站共享一个身份」。
+      #
+      # 与 JWT_SECRET 分开，是因为两者信任方向不同：JWT_SECRET 签的是「谁能进梵禾」，
+      # 这一份签的是「进了梵禾的人在助手那边是谁」。共用一份会让两边的令牌可以
+      # 互相顶替 —— 反过来也成立，所以不能省这一行。
+      #
+      # 不给 `:?` 强制：没配时该接口返回 503，助手页面退回共享形态，其它功能
+      # 完全不受影响。用 `:?` 会让「只想看客户」的部署因为一个可选功能起不来。
+      ASSISTANT_JWT_SECRET: ${FANHE_ASSISTANT_JWT_SECRET:-}
+      # 数据简报用的模型端点。默认值指向宿主机的模型路由服务 —— **不能用 127.0.0.1**，
+      # 那指向容器自己，失败只会表现为「回落为纯数据版」，看起来像模型不稳定。
+      ASSISTANT_MODEL_BASE_URL: ${FANHE_ASSISTANT_MODEL_BASE_URL:-http://host.docker.internal:3425/v1}
+      ASSISTANT_MODEL_NAME: ${FANHE_ASSISTANT_MODEL_NAME:-workbuddy/deepseek-v4.1-flash}
+      ASSISTANT_MODEL_TIMEOUT_MS: ${FANHE_ASSISTANT_MODEL_TIMEOUT_MS:-90000}
+
     ports:
       # 绑回环。**不对局域网暴露** —— T5-04 要对外时走 Tunnel 出站，不靠这里。
       - '127.0.0.1:8787:8787'

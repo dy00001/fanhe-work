@@ -23,8 +23,9 @@
  * UI 二次改造后（与原型对齐）清单为十八项；2026-10-20 运营看板接入后运维分组
  * 由「1 个入口 + 3 个槽位」改为七个具名入口，清单增至二十一项。2026-10-29 客户
  * 信息平台落地，客户分组的两个具名子项从「不设门槛的占位」改为绑 `customer` 模块，
- * 于是有门槛的项从九项增至十一项。本文件把它们钉住：分组头不再可路由、子项路径
- * 是两层的、预留槽位是有编号的真项。
+ * 于是有门槛的项从九项增至十一项。2026-11-05 内嵌 AI 助手接入，首页下面多一项
+ * `assistant`（`module: null`，全员可见），清单增至二十二项、不设门槛的项增至十一项。
+ * 本文件把它们钉住：分组头不再可路由、子项路径是两层的、预留槽位是有编号的真项。
  */
 
 import assert from 'node:assert/strict'
@@ -48,9 +49,10 @@ import {
 
 const codesOf = (items) => items.map((item) => item.code)
 
-/** 清单里全部二十一项，顺序与 `NAV_ITEMS` 的定义一致。 */
+/** 清单里全部二十二项，顺序与 `NAV_ITEMS` 的定义一致。 */
 const ALL_CODES = [
   NAV_CODES.WORKBENCH,
+  NAV_CODES.ASSISTANT,
   NAV_CODES.ASSETS,
   NAV_CODES.SEARCH,
   NAV_CODES.CUSTOMER_OVERVIEW,
@@ -76,6 +78,7 @@ const ALL_CODES = [
 /** 清单里每一项的路径，顺序与 `NAV_ITEMS` 一致。层级由 group + slug 拼出。 */
 const ALL_PATHS = [
   '/workbench',
+  '/assistant',
   '/assets',
   '/search',
   '/customer/overview',
@@ -124,10 +127,12 @@ const OPS_CODES = [
 const CUSTOMER_CODES = [NAV_CODES.CUSTOMER_OVERVIEW, NAV_CODES.CUSTOMER_PROGRESS]
 
 /**
- * 不设权限门槛的十项（`module === null`），对已认证用户一律可见。
+ * 不设权限门槛的十一项（`module === null`），对已认证用户一律可见。
  *
  * 带门槛的共十一项：首页 `personal`、系统设置 `system`、运营看板七项 `ops`、
- * 客户平台两项 `customer`。**这个减法要减全**：只减了 ops 而漏掉 customer 时，
+ * 客户平台两项 `customer`。AI 助手落在这个集合里（`module: null`），与「资产」
+ * 「搜索」等占位项同组 —— 它对所有已认证账号开放是刻意的，理由见 `navigation.ts`。
+ * **这个减法要减全**：只减了 ops 而漏掉 customer 时，
  * `UNGATED_CODES` 会包含两个其实有门槛的项，而下面那条「一律可见」的断言会在
  * member 身上立刻变红 —— 好在它红在推导这一步，不是红在别处。
  */
@@ -139,7 +144,7 @@ const UNGATED_CODES = ALL_CODES.filter(
     !CUSTOMER_CODES.includes(code),
 )
 
-/** 除系统设置、七个运营入口与两个客户入口外的十一项。member 与 viewer 的可见范围就是它。 */
+/** 除系统设置、七个运营入口与两个客户入口外的十二项。member 与 viewer 的可见范围就是它。 */
 const WITHOUT_GATED_MODULES = ALL_CODES.filter(
   (code) =>
     code !== NAV_CODES.SYSTEM_SETTINGS &&
@@ -147,21 +152,21 @@ const WITHOUT_GATED_MODULES = ALL_CODES.filter(
     !CUSTOMER_CODES.includes(code),
 )
 
-test('导航清单为二十一项，编号唯一且顺序稳定', () => {
-  assert.equal(NAV_ITEMS.length, 21)
+test('导航清单为二十二项，编号唯一且顺序稳定', () => {
+  assert.equal(NAV_ITEMS.length, 22)
   assert.deepEqual(codesOf(NAV_ITEMS), ALL_CODES)
-  assert.equal(new Set(ALL_CODES).size, 21)
+  assert.equal(new Set(ALL_CODES).size, 22)
 })
 
-test('owner 可见全部二十一项', () => {
+test('owner 可见全部二十二项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.owner)), ALL_CODES)
 })
 
-test('admin 可见全部二十一项：personal 全权 + system 三项 + ops 四项 + customer 五项', () => {
+test('admin 可见全部二十二项：personal 全权 + system 三项 + ops 四项 + customer 五项', () => {
   assert.deepEqual(codesOf(filterNavigation(ROLE_PERMISSIONS.admin)), ALL_CODES)
 })
 
-test('member 看不到系统设置、七个运营入口与两个客户入口，其余十一项可见', () => {
+test('member 看不到系统设置、七个运营入口与两个客户入口，其余十二项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.member))
   assert.deepEqual(visible, WITHOUT_GATED_MODULES)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
@@ -176,7 +181,7 @@ test('member 看不到系统设置、七个运营入口与两个客户入口，�
   }
 })
 
-test('viewer 看不到系统设置、七个运营入口与两个客户入口，其余十一项可见', () => {
+test('viewer 看不到系统设置、七个运营入口与两个客户入口，其余十二项可见', () => {
   const visible = codesOf(filterNavigation(ROLE_PERMISSIONS.viewer))
   assert.deepEqual(visible, WITHOUT_GATED_MODULES)
   assert.ok(!visible.includes(NAV_CODES.SYSTEM_SETTINGS))
@@ -237,7 +242,7 @@ test('首页对四种角色都可见', () => {
   }
 })
 
-test('尚无权限点可绑的十项对已认证用户一律可见', () => {
+test('尚无权限点可绑的十一项对已认证用户一律可见', () => {
   for (const role of ['owner', 'admin', 'member', 'viewer']) {
     const visible = codesOf(filterNavigation(ROLE_PERMISSIONS[role]))
     for (const code of UNGATED_CODES) {
@@ -246,7 +251,7 @@ test('尚无权限点可绑的十项对已认证用户一律可见', () => {
   }
 })
 
-test('没有权限点时只剩不设门槛的十项', () => {
+test('没有权限点时只剩不设门槛的十一项', () => {
   // 当前四个内置角色都持有 personal 段权限，走不到这一支；断言它存在，是为了
   // 钉住「module 为 null 即不设门槛」这条规则本身。
   assert.deepEqual(codesOf(filterNavigation([])), UNGATED_CODES)
@@ -375,8 +380,8 @@ test('顶层项 group 为 null；子项的 group 必须指向一个真实存在�
     if (item.group === null) continue
     assert.ok(groupCodes.has(item.group), `${item.code} 的 group=${item.group} 不存在`)
   }
-  // 顶层项（含系统设置）共四项。
-  assert.equal(NAV_ITEMS.filter((item) => item.group === null).length, 4)
+  // 顶层项（含系统设置）共五项：首页、AI 助手、资产、搜索、系统设置。
+  assert.equal(NAV_ITEMS.filter((item) => item.group === null).length, 5)
 })
 
 test('预留槽位共八项：客户 2、设计 3、其他 3，运维已无槽位', () => {
@@ -406,12 +411,13 @@ test('底部图标行只有系统设置一项，且它不出现在主列表里',
 
 test('buildNavSections 把顶层项与分组收成两段，顺序与原型一致', () => {
   const sections = buildNavSections(NAV_ITEMS)
-  // 顶层三项 + 四个分组 = 七段。
-  assert.equal(sections.length, 7)
+  // 顶层四项 + 四个分组 = 八段。
+  assert.equal(sections.length, 8)
   assert.deepEqual(
     sections.map((section) => (section.kind === 'group' ? section.group.code : section.item.code)),
     [
       NAV_CODES.WORKBENCH,
+      NAV_CODES.ASSISTANT,
       NAV_CODES.ASSETS,
       NAV_CODES.SEARCH,
       'customer',
@@ -486,7 +492,8 @@ test('member 的可见清单聚合后只剩三个分组（运维分组整组隐�
   // 分组头不可路由，一个空分组点了只会展开一片空白，因此整组不渲染。
   const sections = buildNavSections(filterNavigation(ROLE_PERMISSIONS.member))
   assert.equal(sections.filter((section) => section.kind === 'group').length, 3)
-  assert.equal(sections.filter((section) => section.kind === 'item').length, 3)
+  // 顶层可见四项：首页、AI 助手、资产、搜索。
+  assert.equal(sections.filter((section) => section.kind === 'item').length, 4)
   assert.ok(
     !sections.some((section) => section.kind === 'group' && section.group.code === 'ops'),
     '运维信息平台对 member 不应出现空分组',

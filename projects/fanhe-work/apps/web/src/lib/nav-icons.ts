@@ -14,6 +14,7 @@ import {
   Package,
   Search,
   Settings,
+  Sparkles,
   TrendingUp,
   Users,
   Waves,
@@ -44,6 +45,9 @@ import {
  */
 export const NAV_ICONS: Record<NavCode, LucideIcon> = {
   workbench: LayoutGrid,
+  // AI 助手用 `Sparkles`：它不是一个数据视图，而是一个「生成」入口，与其余
+  // 「数据看板」类图标区分开，避免在侧栏里被误读成又一个报表页。
+  assistant: Sparkles,
   assets: Folder,
   search: Search,
   'customer-overview': ChartPie,

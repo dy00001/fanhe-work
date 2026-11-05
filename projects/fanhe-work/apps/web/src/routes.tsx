@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router'
 
 import { useVisibleNavItems } from './auth/useVisibleNavItems'
 import { AppShell } from './components/AppShell'
+import { AssistantPage } from './pages/AssistantPage'
 import { CustomerPage } from './pages/CustomerPage'
 import { NoAccessPage } from './pages/NoAccessPage'
 import { OpsDashboardPage } from './pages/OpsDashboardPage'
@@ -162,6 +163,13 @@ function ModuleRoute({ code }: { code: NavCode }) {
   if (target.planned) return <PlaceholderPage item={target} />
 
   if (target.code === NAV_CODES.WORKBENCH) return <WorkbenchPage item={target} />
+
+  // AI 助手：整块 iframe 嵌入自托管的 EvoFlow，对全部已认证账号可见。
+  //
+  // 放在 `planned` 判断之后：这一项的 `module` 是 null（全员可见）但 `planned` 为假，
+  // 若把这段挪到前面，占位分支就再也拦不住它，将来谁把 `planned` 改回真也照样渲染
+  // 出 iframe。顺序在这里是约束，不是风格。
+  if (target.code === NAV_CODES.ASSISTANT) return <AssistantPage item={target} />
 
   // 运营看板（千牛 / 生意参谋）的七个入口共用同一个页面。
   //

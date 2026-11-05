@@ -10,6 +10,7 @@
  */
 
 export * from './account.js'
+export * from './assistant.js'
 export * from './audit.js'
 export * from './auth.js'
 export * from './case-library.js'
